@@ -2,9 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/frontend/utils/supabase/admin';
 import { generateRequisitionExcelWorkbook, RequisitionItemData } from '@/backend/lib/excel/requisitionExcelGenerator';
 import { PricingAndAliasService, normalizeText } from '@/backend/lib/procurement/pricingAndAliasService';
-import { EmailService } from '@/backend/services/EmailService';
-import { EmailRecipientResolver } from '@/backend/services/EmailRecipientResolver';
-import { WhatsAppEventProcessor } from '@/backend/services/WhatsAppEventProcessor';
 
 const MONTH_NAMES = [
     'January', 'February', 'March', 'April', 'May', 'June',
@@ -513,67 +510,9 @@ export async function POST(request: NextRequest) {
             })();
         }
 
-        // Non-blocking background dispatch of Omnichannel notifications (WhatsApp + Email)
+        // Dispatch Omnichannel notification via event_outbox (automatically delivers Email & WhatsApp via /api/webhooks/process-event)
         (async () => {
             try {
-                // 1. WhatsApp notification via WhatsAppEventProcessor
-                await WhatsAppEventProcessor.handleRequisitionUploaded({
-                    requisition_id: finalRecord.id,
-                    property_id: propertyId,
-                    organization_id: organizationId,
-                    floor_tag: floorTag,
-                    requisition_month: requisitionMonth,
-                    requisition_year: requisitionYear,
-                    file_name: uploadedFileName,
-                    file_url: publicUrl,
-                    total_amount: totalEstimatedAmount,
-                    total_estimated_amount: totalEstimatedAmount,
-                    items_count: requestedItemsCount > 0 ? requestedItemsCount : rawItems.length,
-                    is_over_budget: isOverBudget,
-                    budget_limit: allocatedBudgetLimit,
-                    over_budget_amount: overBudgetAmount,
-                    uploaded_by: userId,
-                    status: 'submitted'
-                });
-
-                // 2. Email notification via EmailRecipientResolver & EmailService
-                const monthName = MONTH_NAMES[requisitionMonth - 1] || 'Month';
-                const propertyName = finalRecord?.property?.name || 'Site Property';
-                const floorDisplay = floorTag && floorTag !== 'All Floors' ? ` (${floorTag})` : '';
-                const propertyDisplay = `${propertyName}${floorDisplay}`;
-                const uploaderName = finalRecord?.uploader?.full_name || finalRecord?.uploader?.email || 'Site Admin';
-
-                const contextualEmails: string[] = [];
-                if (finalRecord?.uploader?.email) contextualEmails.push(finalRecord.uploader.email);
-
-                const emailResolution = await EmailRecipientResolver.resolveRecipients({
-                    organizationId,
-                    propertyId,
-                    featureKey: 'monthly_requisition_uploaded',
-                    contextualEmails
-                });
-
-                if (emailResolution.enabled && emailResolution.emails.length > 0) {
-                    await EmailService.sendGenericNotificationEmail({
-                        emailTo: emailResolution.emails.join(', '),
-                        subject: `[Requisition Submitted] ${propertyDisplay} (${monthName} ${requisitionYear})`,
-                        title: `Monthly Requisition Submitted 📋`,
-                        htmlBody: `
-                            <p>Hello,</p>
-                            <p>A new monthly requisition sheet has been submitted for <b>${propertyDisplay}</b> (${monthName} ${requisitionYear}) by <b>${uploaderName}</b>.</p>
-                            <ul>
-                                <li><b>Property:</b> ${propertyDisplay}</li>
-                                <li><b>Month / Year:</b> ${monthName} ${requisitionYear}</li>
-                                <li><b>Requested Items:</b> ${requestedItemsCount > 0 ? requestedItemsCount : rawItems.length} items</li>
-                                <li><b>Total Estimated Amount:</b> ₹${Number(totalEstimatedAmount).toLocaleString('en-IN')}${isOverBudget ? ` <span style="color:red;font-weight:bold;">(⚠️ Over Budget by +₹${overBudgetAmount.toLocaleString('en-IN')})</span>` : ''}</li>
-                                ${publicUrl ? `<li><b>Requisition Sheet:</b> <a href="${publicUrl}" target="_blank">Download Excel Sheet</a></li>` : ''}
-                            </ul>
-                            <p>Procurement team can now review the requisition, attach vendor quotes, and route for approval.</p>
-                        `
-                    });
-                }
-
-                // 3. Keep event_outbox in sync for audit / webhooks
                 await adminSupabase.from('event_outbox').insert({
                     event_type: 'REQUISITION_UPLOADED',
                     entity_id: finalRecord.id,

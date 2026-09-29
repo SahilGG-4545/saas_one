@@ -522,7 +522,7 @@ export const EventProcessor = {
     },
 
     async handleRequisitionUploadedEvent(payload: any) {
-        const { organization_id, property_id, requisition_month, requisition_year, file_name, uploaded_by } = payload;
+        const { organization_id, property_id, requisition_month, requisition_year, file_name, uploaded_by, floor_tag } = payload;
 
         const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
         const monthName = months[requisition_month - 1] || `Month ${requisition_month}`;
@@ -550,11 +550,14 @@ export const EventProcessor = {
             return;
         }
 
+        const floorDisplay = floor_tag && floor_tag !== 'All Floors' ? ` (${floor_tag})` : '';
+        const propertyDisplayName = `${property?.name || 'Property'}${floorDisplay}`;
+
         console.log(`[EventProcessor] Sending requisition uploaded alert to ${emails.length} recipient(s): ${emails.join(', ')}`);
 
         await EmailService.sendRequisitionUploadedEmail({
             emailTo: emails,
-            propertyName: property?.name || 'Property',
+            propertyName: propertyDisplayName,
             monthName,
             year: requisition_year,
             fileName: file_name,
