@@ -34,10 +34,46 @@ const ALIAS_MAP: Record<string, string> = {
     visitor_management: 'visitor_approval_requested',
     visitor_approval_requested: 'visitor_approval_requested',
     visitor_approved: 'visitor_approved',
-    visitor_rejected: 'visitor_rejected'
+    visitor_rejected: 'visitor_rejected',
+    hr_grievance_created: 'hr_ticket_created',
+    hr_ticket_created: 'hr_ticket_created',
+    hr_ticket_created_submitter_v2: 'hr_ticket_created',
+    hr_ticket_submitted_v2: 'hr_ticket_created',
+    hr_ticket_created_submitter: 'hr_ticket_created',
+    hr_grievance_created_emp: 'hr_ticket_created',
+    hr_grievance_assigned: 'hr_ticket_assigned',
+    hr_grievance_assigned_mgr: 'hr_ticket_assigned',
+    hr_ticket_assigned: 'hr_ticket_assigned',
+    hr_ticket_assigned_handler_v2: 'hr_ticket_assigned',
+    hr_ticket_assigned_v2: 'hr_ticket_assigned',
+    hr_ticket_assigned_handler: 'hr_ticket_assigned',
+    hr_confidential_director_alert: 'hr_ticket_assigned',
+    hr_grievance_escalated: 'hr_ticket_escalated_handler',
+    hr_grievance_level_escalated: 'hr_ticket_escalated_handler',
+    hr_ticket_escalated_handler: 'hr_ticket_escalated_handler',
+    hr_grievance_sla_warning: 'hr_ticket_sla_reminder',
+    hr_ticket_sla_warning: 'hr_ticket_sla_reminder',
+    hr_ticket_sla_reminder: 'hr_ticket_sla_reminder',
+    hr_grievance_sla_breached: 'hr_ticket_sla_reminder',
+    hr_grievance_resolved: 'hr_ticket_status_updated',
+    hr_grievance_status_resolved: 'hr_ticket_status_updated',
+    hr_ticket_resolved_ack: 'hr_ticket_status_updated',
+    hr_ticket_acknowledged_closed: 'hr_ticket_status_updated',
+    hr_ticket_status_updated: 'hr_ticket_status_updated',
+    hr_grievance_comment_added: 'hr_ticket_comment_added',
+    hr_ticket_comment_added: 'hr_ticket_comment_added'
 };
 
 export const DEFAULT_EMAIL_SERVICE_CONFIG: Record<string, FeatureEmailConfig> = {
+    // HR Events
+    hr_ticket_created: { enabled: true, roles: ['hr', 'hr_head'], user_ids: [], notify_requester: true, notify_assignee: true },
+    hr_ticket_assigned: { enabled: true, roles: ['hr', 'hr_head'], user_ids: [], notify_assignee: true },
+    hr_ticket_escalated_handler: { enabled: true, roles: [], user_ids: [], notify_assignee: true },
+    hr_ticket_sla_reminder: { enabled: true, roles: ['hr', 'hr_head'], user_ids: [], notify_assignee: true },
+    hr_ticket_status_updated: { enabled: true, roles: [], user_ids: [], notify_requester: true },
+    hr_confidential_director_alert: { enabled: true, roles: [], user_ids: [], notify_assignee: true },
+    hr_ticket_comment_added: { enabled: true, roles: [], user_ids: [], notify_requester: true, notify_assignee: true },
+
     vendor_revenue_recorded: { enabled: true, roles: ['property_admin', 'org_super_admin', 'accounts'], user_ids: [], notify_requester: true },
     vendor_revenue_reminder: { enabled: true, roles: ['property_admin'], user_ids: [], notify_assignee: true, notify_requester: true },
     ticket_created: { enabled: true, roles: ['property_admin', 'staff'], user_ids: [], notify_assignee: true, notify_requester: true },
@@ -90,6 +126,12 @@ export interface ResolveRecipientsOptions {
     propertyId?: string | null;
     featureKey: string;
     contextualEmails?: (string | null | undefined)[];
+    contextualRecipients?: {
+        assigneeEmail?: string | null;
+        requesterEmail?: string | null;
+        approverEmail?: string | null;
+        extraEmails?: string[];
+    };
 }
 
 export interface ResolvedRecipientsResult {
@@ -199,13 +241,24 @@ export const EmailRecipientResolver = {
             }
         });
 
-        // Include contextual emails only if contextual notify is enabled
-        if (featureConfig.notify_requester !== false || featureConfig.notify_assignee !== false || featureConfig.notify_approver !== false) {
-            contextualEmails.forEach(e => {
-                if (e && typeof e === 'string' && e.trim()) {
-                    recipientEmails.add(e.trim().toLowerCase());
-                }
-            });
+        // Include contextual emails strictly according to each individual flag in the Omnichannel matrix
+        if (options.contextualRecipients) {
+            const { assigneeEmail, requesterEmail, approverEmail, extraEmails } = options.contextualRecipients;
+            if (featureConfig.notify_assignee && assigneeEmail) recipientEmails.add(assigneeEmail.trim().toLowerCase());
+            if (featureConfig.notify_requester && requesterEmail) recipientEmails.add(requesterEmail.trim().toLowerCase());
+            if (featureConfig.notify_approver && approverEmail) recipientEmails.add(approverEmail.trim().toLowerCase());
+            if ((featureConfig.notify_assignee || featureConfig.notify_requester) && extraEmails) {
+                extraEmails.forEach(e => { if (e?.trim()) recipientEmails.add(e.trim().toLowerCase()); });
+            }
+        } else if (contextualEmails && contextualEmails.length > 0) {
+            // Fallback for legacy calls passing an un-tagged array
+            if (featureConfig.notify_requester !== false || featureConfig.notify_assignee !== false || featureConfig.notify_approver !== false) {
+                contextualEmails.forEach(e => {
+                    if (e && typeof e === 'string' && e.trim()) {
+                        recipientEmails.add(e.trim().toLowerCase());
+                    }
+                });
+            }
         }
 
         // 2. Parallel Database Lookups

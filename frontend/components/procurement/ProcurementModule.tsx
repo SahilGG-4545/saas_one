@@ -71,9 +71,9 @@ export default function ProcurementModule({
     properties?: any[];
 }) {
     const params = useParams();
-    const orgId = propOrgId || (params?.orgId as string) || '';
-    const propertyId = (params?.propertyId as string) || '';
     const { user, membership } = useAuth();
+    const orgId = propOrgId || (params?.orgId as string) || membership?.org_id || '';
+    const propertyId = (params?.propertyId as string) || '';
     
     const [activeTab, setActiveTab] = useState<TabType>('orders');
     const [properties, setProperties] = useState<any[]>(propProperties || []);
@@ -81,8 +81,11 @@ export default function ProcurementModule({
     const [counts, setCounts] = useState({ orders: 0, pending_quotation: 0 });
     const isMountedRef = useRef(false);
 
-    // Robust Role Hierarchy
-    const userRole = (membership?.org_role || (user?.user_metadata?.role as string) || '').toLowerCase();
+    // Robust Role Hierarchy - check both organization role and property memberships
+    const hasPropertyAdminMembership = Boolean(
+        membership?.properties?.some((p: any) => p.role === 'property_admin' || p.role === 'property_manager')
+    );
+    const userRole = (membership?.org_role || (user?.user_metadata?.role as string) || (hasPropertyAdminMembership ? 'property_admin' : '')).toLowerCase();
     const isMasterAdmin = Boolean(membership?.is_master_admin || userRole === 'master_admin');
     const isSuperAdmin = isMasterAdmin || userRole === 'org_super_admin' || userRole === 'owner' || propIsAdmin === true;
     const isProcurementUser = isSuperAdmin || userRole.includes('procurement') || userRole === 'org_admin';
@@ -160,8 +163,9 @@ export default function ProcurementModule({
     useEffect(() => {
         if (typeof window !== 'undefined') {
             const urlParams = new URLSearchParams(window.location.search);
-            const tabParam = urlParams.get('procurement_tab') || urlParams.get('subtab');
-            const linkableTabs = ['orders', 'urgency-tracker', 'payment-tracker', 'requisitions', 'catalog', 'po-generator', 'settings'];
+            let tabParam = urlParams.get('procurement_tab') || urlParams.get('subtab') || urlParams.get('tab');
+            if (tabParam === 'monthly-requisitions') tabParam = 'requisitions';
+            const linkableTabs = ['orders', 'urgency-tracker', 'payment-tracker', 'requisitions', 'monthly-feedback', 'catalog', 'po-generator', 'settings'];
             if (SHOW_LEGACY_PER_PROPERTY_CONTROLS) linkableTabs.push('site-budgets', 'site-pricing');
             if (tabParam && linkableTabs.includes(tabParam)) {
                 setActiveTab(tabParam as TabType);
@@ -254,8 +258,8 @@ export default function ProcurementModule({
                     <MonthlyRequisitionsTab 
                         user={user} 
                         organizationId={orgId} 
-                        propertyId={propertyId} 
-                        userRole={userRole || 'property_admin'}
+                        propertyId={propertyId || (hasPropertyAdminMembership ? membership?.properties?.[0]?.id : undefined)} 
+                        userRole={hasPropertyAdminMembership ? 'property_admin' : (userRole || 'property_admin')}
                         onNavigateToBudgets={() => setActiveTab('site-budgets')}
                     />
                 )}

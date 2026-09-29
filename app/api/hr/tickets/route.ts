@@ -9,17 +9,17 @@ const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
 
 function getReporteesRecursive(
-    mgrObj: { userId?: string; id?: string; code?: string; name?: string; email?: string },
+    mgrObj: { userId?: string; id?: string; code?: string; name?: string; profileName?: string; email?: string },
     allEmps: any[],
     visited = new Set<string>()
 ): any[] {
     if (!mgrObj) return [];
     const mgrUserId = mgrObj.userId || mgrObj.id || '';
     const mgrCode = (mgrObj.code || '').toLowerCase().trim();
-    const mgrName = (mgrObj.name || '').toLowerCase().trim();
+    const mgrNames = Array.from(new Set([mgrObj.name, mgrObj.profileName].filter(Boolean).map(n => (n || '').toLowerCase().trim())));
     const mgrEmail = (mgrObj.email || '').toLowerCase().trim();
 
-    const visitKey = mgrUserId || mgrCode || mgrName || mgrEmail;
+    const visitKey = mgrUserId || mgrCode || mgrNames.join('|') || mgrEmail;
     if (!visitKey || visited.has(visitKey)) return [];
     const nextVisited = new Set(visited);
     nextVisited.add(visitKey);
@@ -35,7 +35,7 @@ function getReporteesRecursive(
 
         const matchUserId = Boolean(mgrUserId && rId && (rId === mgrUserId || (rCode && rCode === mgrUserId)));
         const matchCode = Boolean(mgrCode && ((rCode && rCode === mgrCode) || (rId && rId === mgrCode)));
-        const matchName = Boolean(mgrName && rStr && (rStr === mgrName || rStr.includes(mgrName) || mgrName.includes(rStr)));
+        const matchName = Boolean(mgrNames.some(mName => mName && rStr && (rStr === mName || rStr.includes(mName) || mName.includes(rStr))));
         const matchEmail = Boolean(mgrEmail && (rCode === mgrEmail || rName === mgrEmail));
 
         return Boolean(matchUserId || matchCode || matchName || matchEmail);
@@ -116,6 +116,9 @@ export async function GET(request: Request) {
         // 2. HR & HR-related roles: Sees ALL tickets across org EXCEPT anonymous tickets
         // 3. Property Admin, Ops Super Admin, and all other roles: Sees ONLY tickets assigned to them,
         //    assigned to their direct & indirect sub-reportees, or raised by them.
+        //
+        // Boolean guards use `not.is.true`, never `neq.true`: is_anonymous / is_confidential can be NULL
+        // on older rows, and `NULL <> true` evaluates to NULL in SQL, which silently drops the ticket.
         const normalizedRole = (role || '').toLowerCase();
         const orgSuperAdminRoles = ['org_super_admin', 'master_admin', 'super_admin'];
         const hrRoles = ['hr', 'hr_head', 'hr_manager', 'hr_ops'];
@@ -160,12 +163,12 @@ export async function GET(request: Request) {
             // Anonymous tickets are NEVER visible to HR.
             // Confidential tickets are strictly hidden from HR unless explicitly assigned to that HR user as per admin config.
             const hrConditions = [
-                'and(is_anonymous.neq.true,is_confidential.neq.true,ticket_type.not.in.(anonymous_feedback,confidential_feedback,confidential))'
+                'and(is_anonymous.not.is.true,is_confidential.not.is.true,ticket_type.not.in.(anonymous_feedback,confidential_feedback,confidential))'
             ];
             if (userId) {
                 hrConditions.push(`assigned_to_user_id.eq.${userId}`);
                 hrConditions.push(`assigned_history.cs.["${userId}"]`);
-                hrConditions.push(`and(is_anonymous.neq.true,raised_by_user_id.eq.${userId})`);
+                hrConditions.push(`and(is_anonymous.not.is.true,raised_by_user_id.eq.${userId})`);
             }
             query = query.or(hrConditions.join(','));
         } else if (userId) {
@@ -173,11 +176,12 @@ export async function GET(request: Request) {
             // Fetch all employee profiles in the organization to recursively compute direct & indirect sub-reportees
             let empQuery = supabaseAdmin
                 .from('employee_profiles')
-                .select('id, user_id, employee_code, first_name, last_name, email, reporting_manager_id, reporting_manager_code, reporting_manager_name');
+                .select('id, user_id, employee_code, first_name, last_name, email, reporting_manager_id, reporting_manager_code');
             if (orgId) {
                 empQuery = empQuery.or(`organization_id.eq.${orgId},organization_id.is.null`);
             }
-            const { data: allEmps } = await empQuery;
+            const { data: allEmps, error: empErr } = await empQuery;
+            if (empErr) console.error('[HR Tickets API] employee_profiles lookup failed; team scope will be empty:', empErr.message);
 
             const { data: uProfile } = await supabaseAdmin
                 .from('users')
@@ -187,7 +191,9 @@ export async function GET(request: Request) {
 
             const myProfile = (allEmps || []).find(e => e.user_id === userId || (uProfile?.email && e.email && e.email.toLowerCase() === uProfile.email.toLowerCase()));
 
-            const myName = (uProfile?.full_name || `${myProfile?.first_name || ''} ${myProfile?.last_name || ''}`).trim();
+            const profileName = `${myProfile?.first_name || ''} ${myProfile?.last_name || ''}`.trim();
+            const userFullName = (uProfile?.full_name || '').trim();
+            const myName = userFullName || profileName;
             const myEmail = uProfile?.email || myProfile?.email;
 
             // Fetch property memberships for this user (if any) to also include property-level tickets
@@ -203,7 +209,8 @@ export async function GET(request: Request) {
                 userId,
                 id: myProfile?.id,
                 code: myProfile?.employee_code,
-                name: myName,
+                name: userFullName,
+                profileName,
                 email: myEmail
             }, allEmps || []);
 
@@ -222,53 +229,59 @@ export async function GET(request: Request) {
 
             const filterConditions: string[] = [
                 `assigned_to_user_id.eq.${userId}`,
-                `and(is_anonymous.neq.true,is_confidential.neq.true,ticket_type.not.in.(anonymous_feedback,confidential_feedback,confidential),manager_user_id.eq.${userId})`,
+                `and(is_anonymous.not.is.true,is_confidential.not.is.true,ticket_type.not.in.(anonymous_feedback,confidential_feedback,confidential),manager_user_id.eq.${userId})`,
                 `assigned_history.cs.["${userId}"]`,
-                `and(is_anonymous.neq.true,raised_by_user_id.eq.${userId})`,
-                `and(is_anonymous.neq.true,is_confidential.neq.true,ticket_type.not.in.(anonymous_feedback,confidential_feedback,confidential),employee_snapshot->>manager_user_id.eq.${userId})`
+                `and(is_anonymous.not.is.true,raised_by_user_id.eq.${userId})`,
+                `and(is_anonymous.not.is.true,is_confidential.not.is.true,ticket_type.not.in.(anonymous_feedback,confidential_feedback,confidential),employee_snapshot->>manager_user_id.eq.${userId})`
             ];
 
             if (myProfile?.id) {
                 filterConditions.push(`assigned_to_user_id.eq.${myProfile.id}`);
-                filterConditions.push(`and(is_anonymous.neq.true,is_confidential.neq.true,ticket_type.not.in.(anonymous_feedback,confidential_feedback,confidential),manager_user_id.eq.${myProfile.id})`);
+                filterConditions.push(`and(is_anonymous.not.is.true,is_confidential.not.is.true,ticket_type.not.in.(anonymous_feedback,confidential_feedback,confidential),manager_user_id.eq.${myProfile.id})`);
                 filterConditions.push(`assigned_history.cs.["${myProfile.id}"]`);
-                filterConditions.push(`and(is_anonymous.neq.true,raised_by_user_id.eq.${myProfile.id})`);
-                filterConditions.push(`and(is_anonymous.neq.true,is_confidential.neq.true,ticket_type.not.in.(anonymous_feedback,confidential_feedback,confidential),employee_snapshot->>manager_user_id.eq.${myProfile.id})`);
+                filterConditions.push(`and(is_anonymous.not.is.true,raised_by_user_id.eq.${myProfile.id})`);
+                filterConditions.push(`and(is_anonymous.not.is.true,is_confidential.not.is.true,ticket_type.not.in.(anonymous_feedback,confidential_feedback,confidential),employee_snapshot->>manager_user_id.eq.${myProfile.id})`);
             }
 
             if (myProfile?.employee_code) {
-                filterConditions.push(`and(is_anonymous.neq.true,is_confidential.neq.true,ticket_type.not.in.(anonymous_feedback,confidential_feedback,confidential),employee_snapshot->>code.eq.${myProfile.employee_code})`);
-                filterConditions.push(`and(is_anonymous.neq.true,is_confidential.neq.true,ticket_type.not.in.(anonymous_feedback,confidential_feedback,confidential),employee_snapshot->>manager_code.eq.${myProfile.employee_code})`);
+                filterConditions.push(`and(is_anonymous.not.is.true,is_confidential.not.is.true,ticket_type.not.in.(anonymous_feedback,confidential_feedback,confidential),employee_snapshot->>code.eq.${myProfile.employee_code})`);
+                filterConditions.push(`and(is_anonymous.not.is.true,is_confidential.not.is.true,ticket_type.not.in.(anonymous_feedback,confidential_feedback,confidential),employee_snapshot->>manager_code.eq.${myProfile.employee_code})`);
             }
 
-            if (myName && myName.trim()) {
-                const cleanName = myName.trim().replace(/[,()]/g, ' ');
-                filterConditions.push(`and(is_anonymous.neq.true,is_confidential.neq.true,ticket_type.not.in.(anonymous_feedback,confidential_feedback,confidential),employee_snapshot->>manager_name.ilike.*${cleanName}*)`);
+            if (userFullName) {
+                const cleanName = userFullName.replace(/[,()]/g, ' ').trim();
+                filterConditions.push(`and(is_anonymous.not.is.true,is_confidential.not.is.true,ticket_type.not.in.(anonymous_feedback,confidential_feedback,confidential),employee_snapshot->>manager_name.ilike.*${cleanName}*)`);
+            }
+
+            if (profileName && profileName !== userFullName) {
+                const cleanProfileName = profileName.replace(/[,()]/g, ' ').trim();
+                filterConditions.push(`and(is_anonymous.not.is.true,is_confidential.not.is.true,ticket_type.not.in.(anonymous_feedback,confidential_feedback,confidential),employee_snapshot->>manager_name.ilike.*${cleanProfileName}*)`);
+                filterConditions.push(`and(is_anonymous.not.is.true,is_confidential.not.is.true,ticket_type.not.in.(anonymous_feedback,confidential_feedback,confidential),employee_snapshot->>manager_code.ilike.*${cleanProfileName}*)`);
             }
 
             if (allTeamIds.length > 0) {
                 // Team workload: tickets assigned to, managed by, or raised by direct and indirect reportees (strictly excluding anonymous and confidential)
-                filterConditions.push(`and(is_anonymous.neq.true,is_confidential.neq.true,ticket_type.not.in.(anonymous_feedback,confidential_feedback,confidential),assigned_to_user_id.in.(${allTeamIds.slice(0, 80).join(',')}))`);
-                filterConditions.push(`and(is_anonymous.neq.true,is_confidential.neq.true,ticket_type.not.in.(anonymous_feedback,confidential_feedback,confidential),manager_user_id.in.(${allTeamIds.slice(0, 80).join(',')}))`);
-                filterConditions.push(`and(is_anonymous.neq.true,is_confidential.neq.true,ticket_type.not.in.(anonymous_feedback,confidential_feedback,confidential),raised_by_user_id.in.(${allTeamIds.slice(0, 80).join(',')}))`);
+                filterConditions.push(`and(is_anonymous.not.is.true,is_confidential.not.is.true,ticket_type.not.in.(anonymous_feedback,confidential_feedback,confidential),assigned_to_user_id.in.(${allTeamIds.slice(0, 80).join(',')}))`);
+                filterConditions.push(`and(is_anonymous.not.is.true,is_confidential.not.is.true,ticket_type.not.in.(anonymous_feedback,confidential_feedback,confidential),manager_user_id.in.(${allTeamIds.slice(0, 80).join(',')}))`);
+                filterConditions.push(`and(is_anonymous.not.is.true,is_confidential.not.is.true,ticket_type.not.in.(anonymous_feedback,confidential_feedback,confidential),raised_by_user_id.in.(${allTeamIds.slice(0, 80).join(',')}))`);
             }
 
             if (teamCodes.length > 0) {
-                filterConditions.push(`and(is_anonymous.neq.true,is_confidential.neq.true,ticket_type.not.in.(anonymous_feedback,confidential_feedback,confidential),employee_snapshot->>code.in.(${teamCodes.slice(0, 80).join(',')}))`);
+                filterConditions.push(`and(is_anonymous.not.is.true,is_confidential.not.is.true,ticket_type.not.in.(anonymous_feedback,confidential_feedback,confidential),employee_snapshot->>code.in.(${teamCodes.slice(0, 80).join(',')}))`);
             }
 
             if (propIds.length > 0) {
-                filterConditions.push(`and(is_anonymous.neq.true,is_confidential.neq.true,ticket_type.not.in.(anonymous_feedback,confidential_feedback,confidential),employee_snapshot->>property_id.in.(${propIds.join(',')}))`);
+                filterConditions.push(`and(is_anonymous.not.is.true,is_confidential.not.is.true,ticket_type.not.in.(anonymous_feedback,confidential_feedback,confidential),employee_snapshot->>property_id.in.(${propIds.join(',')}))`);
             }
             for (const pName of propNames) {
                 if (pName && pName.trim()) {
                     const cleanName = pName.replace(/[,()]/g, ' ').trim();
-                    filterConditions.push(`and(is_anonymous.neq.true,is_confidential.neq.true,ticket_type.not.in.(anonymous_feedback,confidential_feedback,confidential),employee_snapshot->>location.ilike.*${cleanName}*)`);
+                    filterConditions.push(`and(is_anonymous.not.is.true,is_confidential.not.is.true,ticket_type.not.in.(anonymous_feedback,confidential_feedback,confidential),employee_snapshot->>location.ilike.*${cleanName}*)`);
                 }
             }
 
             if (auditTicketIds.length > 0) {
-                filterConditions.push(`and(is_anonymous.neq.true,is_confidential.neq.true,ticket_type.not.in.(anonymous_feedback,confidential_feedback,confidential),id.in.(${Array.from(new Set(auditTicketIds)).join(',')}))`);
+                filterConditions.push(`and(is_anonymous.not.is.true,is_confidential.not.is.true,ticket_type.not.in.(anonymous_feedback,confidential_feedback,confidential),id.in.(${Array.from(new Set(auditTicketIds)).join(',')}))`);
             }
 
             query = query.or(filterConditions.join(','));
@@ -285,6 +298,7 @@ export async function GET(request: Request) {
 
         // Load organization escalation config to dynamically attach current level owners for tickets
         let flowAssigneesConfig: any = {};
+        let manualEscalationConfig: any = {};
         try {
             const targetOrgId = orgId || '211e1330-ad83-446d-941f-dcea48396798';
             let orgSettingsQuery = supabaseAdmin
@@ -304,6 +318,7 @@ export async function GET(request: Request) {
             while (flowAssigneesConfig && flowAssigneesConfig.flow_assignees) {
                 flowAssigneesConfig = flowAssigneesConfig.flow_assignees;
             }
+            manualEscalationConfig = configObj.manual_escalation || {};
         } catch (e) {
             console.warn('Could not read hr_escalation_config in tickets list:', e);
         }
@@ -371,7 +386,7 @@ export async function GET(request: Request) {
             });
         }
 
-        // Mask identity for anonymous tickets & attach dynamic current_level_owner
+        // Mask identity for anonymous tickets & attach dynamic current_level_owner & manual_escalation_enabled
         const sanitized = accessibleData.map(t => {
             const tType = t.ticket_type || t.category?.ticket_type || 'grievance';
             const curLvl = t.current_level || 1;
@@ -385,9 +400,17 @@ export async function GET(request: Request) {
             }
 
             const assignedEmp = t.assigned_to_user_id ? assignedProfileMap.get(t.assigned_to_user_id) : null;
+            const normType = tType.includes('query') ? 'hr_query' : tType.includes('grievance') ? 'grievance' : tType;
+            const isManualEscalationOn = Boolean(
+                manualEscalationConfig?.[normType] === true ||
+                manualEscalationConfig?.[tType] === true ||
+                (normType === 'grievance' && manualEscalationConfig?.grievance === true) ||
+                (normType === 'hr_query' && manualEscalationConfig?.hr_query === true)
+            );
 
             const item = {
                 ...t,
+                manual_escalation_enabled: isManualEscalationOn,
                 current_level_owner: currentLevelOwner || t.assigned_to?.full_name || 'Manager / HR',
                 assigned_to_details: t.assigned_to ? {
                     id: t.assigned_to_user_id,
@@ -698,8 +721,9 @@ export async function POST(request: Request) {
                 status: 'new',
                 priority,
                 sla_due_at: slaDueAt.toISOString(),
-                is_confidential: is_confidential || category.is_confidential,
-                is_anonymous: is_anonymous || category.is_anonymous
+                // Coerce: categories may carry NULL flags, and a NULL here hides the ticket from list filters
+                is_confidential: Boolean(is_confidential || category.is_confidential),
+                is_anonymous: Boolean(is_anonymous || category.is_anonymous)
             })
             .select()
             .single();

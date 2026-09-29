@@ -206,18 +206,48 @@ const SuperTenantDashboard = () => {
         if (!user) return;
         const load = async () => {
             setIsLoadingProps(true);
-            const { data } = await supabase
-                .from('super_tenant_properties')
-                .select('property_id, organization_id, properties(id, name, code, status, address)')
-                .eq('user_id', user.id)
-                .order('created_at', { ascending: true });
-            if (data) {
-                const props = data as unknown as AssignedProperty[];
-                setAssignedProperties(props);
-                // Default to 'all' instead of first property to match portfolio view
+            try {
+                const [{ data: stData }, { data: pmData }] = await Promise.all([
+                    supabase
+                        .from('super_tenant_properties')
+                        .select('property_id, organization_id, properties(id, name, code, status, address)')
+                        .eq('user_id', user.id)
+                        .order('created_at', { ascending: true }),
+                    supabase
+                        .from('property_memberships')
+                        .select('property_id, properties(id, name, code, status, address)')
+                        .eq('user_id', user.id)
+                        .neq('is_active', false)
+                ]);
+
+                const mergedMap = new Map<string, AssignedProperty>();
+                if (stData) {
+                    (stData as unknown as AssignedProperty[]).forEach(item => {
+                        if (item.property_id && item.properties) {
+                            mergedMap.set(item.property_id, item);
+                        }
+                    });
+                }
+                if (pmData) {
+                    (pmData as any[]).forEach(item => {
+                        if (item.property_id && item.properties && !mergedMap.has(item.property_id)) {
+                            mergedMap.set(item.property_id, {
+                                property_id: item.property_id,
+                                organization_id: (item.properties as any).organization_id || '',
+                                properties: item.properties
+                            });
+                        }
+                    });
+                }
+
+                const propsList = Array.from(mergedMap.values());
+                setAssignedProperties(propsList);
                 setSelectedPropertyId('all');
+            } catch (err) {
+                console.error('[SuperTenantDashboard] Failed to load assigned properties:', err);
+            } finally {
+                setIsLoadingProps(false);
             }
-            setIsLoadingProps(false);
         };
         load();
     }, [user, supabase]);

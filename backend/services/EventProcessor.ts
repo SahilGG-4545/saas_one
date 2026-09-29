@@ -227,7 +227,30 @@ export const EventProcessor = {
 
         const { data: ticket } = await supabaseAdmin.from('tickets').select('*, property:properties(name)').eq('id', ticketId).single();
         const { data: requester } = await supabaseAdmin.from('users').select('id, full_name, email').eq('id', userId).single();
-        const { data: items } = await supabaseAdmin.from('material_request_items').select('*').eq('request_id', requestId);
+        
+        let itemsList: any[] = [];
+        if (Array.isArray(payload.items) && payload.items.length > 0) {
+            itemsList = payload.items;
+        } else if (requestId) {
+            const { data: mr } = await supabaseAdmin.from('material_requests').select('items').eq('id', requestId).maybeSingle();
+            if (mr && Array.isArray(mr.items) && mr.items.length > 0) {
+                itemsList = mr.items;
+            } else {
+                const { data: separateItems } = await supabaseAdmin.from('material_request_items').select('*').eq('request_id', requestId);
+                if (separateItems && separateItems.length > 0) {
+                    itemsList = separateItems;
+                } else {
+                    await new Promise(res => setTimeout(res, 500));
+                    const { data: mrRetry } = await supabaseAdmin.from('material_requests').select('items').eq('id', requestId).maybeSingle();
+                    if (mrRetry && Array.isArray(mrRetry.items) && mrRetry.items.length > 0) {
+                        itemsList = mrRetry.items;
+                    } else {
+                        const { data: sepRetry } = await supabaseAdmin.from('material_request_items').select('*').eq('request_id', requestId);
+                        if (sepRetry) itemsList = sepRetry;
+                    }
+                }
+            }
+        }
 
         if (ticket) {
             console.log(`[EventProcessor] Sending Material Request email for Request ID ${requestId} to: ${emails.join(', ')}`);
@@ -237,7 +260,7 @@ export const EventProcessor = {
                 property: ticket.property,
                 requestedBy: requester,
                 assignedToName: assigneeName || 'Unassigned',
-                items: items || []
+                items: itemsList
             });
         }
     },

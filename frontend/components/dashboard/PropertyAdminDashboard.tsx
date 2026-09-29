@@ -869,13 +869,6 @@ const PropertyAdminDashboard = ({ propertyId: propPropertyId }: PropertyAdminDas
                                 <Coffee className="w-4 h-4" />
                                 Cafeteria Revenue
                             </button>
-                            <button
-                                onClick={() => router.push(`/${property?.organization_id}/crm`)}
-                                className="w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 font-bold text-sm text-text-secondary hover:bg-muted hover:text-text-primary"
-                            >
-                                <TrendingUp className="w-4 h-4" />
-                                CRM
-                            </button>
                         </div>
                     </div>
 

@@ -21,6 +21,7 @@ interface Property {
     id: string;
     name: string;
     location?: string;
+    organization_id?: string;
 }
 
 interface MonthlyRequisition {
@@ -70,15 +71,24 @@ const MONTH_NAMES = [
 ];
 
 export default function MonthlyRequisitionsTab({ user, organizationId, propertyId, userRole, onNavigateToBudgets, onNavigateToFeedback }: MonthlyRequisitionsTabProps) {
-    const supabase = createClient();
+    const supabase = useMemo(() => createClient(), []);
+
+    const [hasPropertyMembershipAdmin, setHasPropertyMembershipAdmin] = useState(false);
+    const [requisitions, setRequisitions] = useState<MonthlyRequisition[]>([]);
+    const [properties, setProperties] = useState<Property[]>([]);
+    const [approverUsers, setApproverUsers] = useState<any[]>([]);
+    const [isLoading, setIsLoading] = useState(true);
+    const [isRefreshing, setIsRefreshing] = useState(false);
+    const [viewMode, setViewMode] = useState<'list' | 'create_sheet'>('list');
 
     const userRoleLower = (userRole || user?.user_metadata?.role || '').toLowerCase();
 
-    // Permissions
+    // Permissions: support both org-level and property-membership-level property_admin
     const isPropertyAdmin =
         userRoleLower.includes('property_admin') ||
         userRoleLower.includes('property_manager') ||
-        userRoleLower === 'property_admin';
+        userRoleLower === 'property_admin' ||
+        hasPropertyMembershipAdmin;
 
     const isProcurementRole =
         userRoleLower.includes('procurement') ||
@@ -91,13 +101,7 @@ export default function MonthlyRequisitionsTab({ user, organizationId, propertyI
         userRoleLower === 'ops_super_admin' ||
         userRoleLower === 'master_admin';
 
-    const canCreateRequisition = isPropertyAdmin || isSuperAdmin || isProcurementRole;
-
-    const [requisitions, setRequisitions] = useState<MonthlyRequisition[]>([]);
-    const [properties, setProperties] = useState<Property[]>([]);
-    const [approverUsers, setApproverUsers] = useState<any[]>([]);
-    const [isLoading, setIsLoading] = useState(true);
-    const [viewMode, setViewMode] = useState<'list' | 'create_sheet'>('list');
+    const canCreateRequisition = isPropertyAdmin || isSuperAdmin || isProcurementRole || properties.length > 0;
 
     // Modals
     const [approverModalReq, setApproverModalReq] = useState<MonthlyRequisition | null>(null);
@@ -207,22 +211,23 @@ export default function MonthlyRequisitionsTab({ user, organizationId, propertyI
             } else if (user?.id) {
                 const { data: memberships } = await supabase
                     .from('property_memberships')
-                    .select('property_id, property:properties(id, name, location)')
+                    .select('property_id, role, property:properties(id, name, location, organization_id)')
                     .eq('user_id', user.id)
                     .eq('is_active', true);
 
                 if (memberships && memberships.length > 0) {
+                    if (memberships.some((m: any) => m.role === 'property_admin' || m.role === 'property_manager' || m.role === 'manager')) {
+                        setHasPropertyMembershipAdmin(true);
+                    }
                     const userProps: Property[] = memberships
                         .map((m: any) => m.property)
                         .filter(Boolean);
                     const uniqueProps = Array.from(new Map(userProps.map(p => [p.id, p])).values());
                     setProperties(uniqueProps);
                     
-                    // Set default selected property: prioritize current route propertyId if user has access to it, otherwise first assigned property
+                    // Set default selected property only if an explicit route propertyId was requested
                     if (propertyId && uniqueProps.some(p => p.id === propertyId)) {
                         setSelectedPropertyFilter(propertyId);
-                    } else if (uniqueProps.length > 0) {
-                        setSelectedPropertyFilter(uniqueProps[0].id);
                     }
                 } else if (propertyId) {
                     const { data: propData } = await supabase
@@ -244,7 +249,7 @@ export default function MonthlyRequisitionsTab({ user, organizationId, propertyI
         } catch (err) {
             console.error('Failed to fetch properties:', err);
         }
-    }, [supabase, organizationId, propertyId, user, isSuperAdmin, isProcurementRole]);
+    }, [supabase, organizationId, propertyId, user?.id, isSuperAdmin, isProcurementRole]);
 
     // Load Approvers (Admins & Directors)
     const fetchApprovers = useCallback(async () => {
@@ -261,21 +266,24 @@ export default function MonthlyRequisitionsTab({ user, organizationId, propertyI
                 const usersList = members.map((m: any) => m.user).filter(Boolean);
                 const uniqueUsers = Array.from(new Map(usersList.map((u: any) => [u.id, u])).values());
                 setApproverUsers(uniqueUsers);
-                if (uniqueUsers.length > 0 && !selectedApproverId) {
-                    setSelectedApproverId(uniqueUsers[0].id);
-                }
+                setSelectedApproverId(prev => prev || uniqueUsers[0]?.id || '');
             }
         } catch (e) {
             console.error('Failed to fetch approvers:', e);
         }
-    }, [supabase, organizationId, selectedApproverId]);
+    }, [supabase, organizationId]);
 
-    // Load Requisitions
-    const fetchRequisitions = useCallback(async () => {
-        setIsLoading(true);
+    // Load Requisitions without jarring skeleton flicker
+    const fetchRequisitions = useCallback(async (showSkeleton: boolean = false) => {
+        if (showSkeleton || requisitions.length === 0) {
+            setIsLoading(true);
+        } else {
+            setIsRefreshing(true);
+        }
         try {
+            const effectiveOrg = organizationId || user?.user_metadata?.organization_id || (properties[0] as any)?.organization_id || '';
             const params = new URLSearchParams();
-            if (organizationId) params.append('organization_id', organizationId);
+            if (effectiveOrg) params.append('organization_id', effectiveOrg);
             
             // Strict scoping for Property Admins so they never see other properties
             if (selectedPropertyFilter !== 'all') {
@@ -303,8 +311,9 @@ export default function MonthlyRequisitionsTab({ user, organizationId, propertyI
             console.error('Error fetching requisitions:', err);
         } finally {
             setIsLoading(false);
+            setIsRefreshing(false);
         }
-    }, [organizationId, selectedPropertyFilter, propertyId, isPropertyAdmin, isSuperAdmin, isProcurementRole, properties, selectedStatusFilter, selectedMonthFilter, selectedYearFilter]);
+    }, [organizationId, user?.user_metadata?.organization_id, selectedPropertyFilter, propertyId, isPropertyAdmin, isSuperAdmin, isProcurementRole, properties.length, selectedStatusFilter, selectedMonthFilter, selectedYearFilter, requisitions.length]);
 
     useEffect(() => {
         fetchProperties();
@@ -442,10 +451,11 @@ export default function MonthlyRequisitionsTab({ user, organizationId, propertyI
     // If in Create Sheet mode, render the full-screen interactive dual-table sheet
     if (viewMode === 'create_sheet') {
         const effectivePropertyId = propertyId || (selectedPropertyFilter !== 'all' ? selectedPropertyFilter : properties[0]?.id);
+        const effectiveOrgId = organizationId || user?.user_metadata?.organization_id || (properties[0] as any)?.organization_id || '';
         return (
             <SiteRequisitionSheet
                 user={user}
-                organizationId={organizationId || ''}
+                organizationId={effectiveOrgId}
                 properties={properties}
                 initialPropertyId={effectivePropertyId}
                 onSubmitted={() => {
@@ -474,11 +484,11 @@ export default function MonthlyRequisitionsTab({ user, organizationId, propertyI
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                     <button
-                        onClick={fetchRequisitions}
+                        onClick={() => fetchRequisitions(false)}
                         className="h-9 w-9 inline-flex items-center justify-center rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors cursor-pointer shrink-0"
                         title="Refresh List"
                     >
-                        <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+                        <RefreshCw className={`w-3.5 h-3.5 ${isLoading || isRefreshing ? 'animate-spin' : ''}`} />
                     </button>
 
                     {(isProcurementRole || isSuperAdmin) && (
@@ -691,7 +701,7 @@ export default function MonthlyRequisitionsTab({ user, organizationId, propertyI
 
             {/* Requisitions List Table & Enhanced Empty State with Drag-and-Drop Dropzone */}
             <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200/80 dark:border-slate-700 shadow-xs overflow-hidden">
-                {isLoading ? (
+                {isLoading && requisitions.length === 0 ? (
                     <div className="p-4 space-y-3 animate-pulse">
                         <div className="h-10 bg-slate-100 dark:bg-slate-700/50 rounded-xl w-full mb-4" />
                         {[1, 2, 3, 4, 5].map((i) => (

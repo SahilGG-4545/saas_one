@@ -1,10 +1,10 @@
-import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { createClient } from '@/frontend/utils/supabase/client';
 import {
     FileSpreadsheet, Download, Save, Send, Plus, Trash2,
     CheckCircle2, AlertCircle, RefreshCw, Layers, Calendar,
     Building2, User, Phone, Sparkles, Loader2, ArrowRight,
-    MapPin, IndianRupee, ShieldAlert, Coffee, X
+    MapPin, IndianRupee, ShieldAlert, Coffee, X, Search
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -69,8 +69,36 @@ export default function SiteRequisitionSheet({
     const [requisitionYear, setRequisitionYear] = useState<number>(new Date().getFullYear());
     const [siteNotes, setSiteNotes] = useState<string>('');
     const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+    const isSubmittingRef = useRef<boolean>(false);
+    const [isDownloading, setIsDownloading] = useState<boolean>(false);
     const [activeTab, setActiveTab] = useState<'all' | 'HK' | 'Beverages' | 'Technical' | 'General'>('all');
+    const [searchQuery, setSearchQuery] = useState<string>('');
     const [isLoadingItems, setIsLoadingItems] = useState<boolean>(false);
+    const [resolvedOrgId, setResolvedOrgId] = useState<string>(organizationId || '');
+
+    // Resolve organization ID from properties prop, user, or DB if missing
+    useEffect(() => {
+        if (organizationId) {
+            setResolvedOrgId(organizationId);
+            return;
+        }
+        const propWithOrg = properties.find((p: any) => (p.id === selectedPropertyId || p.id === initialPropertyId) && (p as any).organization_id);
+        if (propWithOrg && (propWithOrg as any).organization_id) {
+            setResolvedOrgId((propWithOrg as any).organization_id);
+            return;
+        }
+        const targetPid = selectedPropertyId || initialPropertyId;
+        if (targetPid) {
+            supabase
+                .from('properties')
+                .select('organization_id')
+                .eq('id', targetPid)
+                .maybeSingle()
+                .then(({ data }) => {
+                    if (data?.organization_id) setResolvedOrgId(data.organization_id);
+                });
+        }
+    }, [organizationId, selectedPropertyId, initialPropertyId, properties, supabase]);
 
     // Monthly Requisition Budget State
     const [allocatedBudget, setAllocatedBudget] = useState<{
@@ -129,10 +157,11 @@ export default function SiteRequisitionSheet({
     // Fetch active budget for selected property and floor tag
     useEffect(() => {
         const fetchBudget = async () => {
-            if (!organizationId || !selectedPropertyId) return;
+            const org = organizationId || resolvedOrgId;
+            if (!org || !selectedPropertyId) return;
             setIsLoadingBudget(true);
             try {
-                const res = await fetch(`/api/procurement/requisitions/budgets?organization_id=${organizationId}&property_id=${selectedPropertyId}`);
+                const res = await fetch(`/api/procurement/requisitions/budgets?organization_id=${org}&property_id=${selectedPropertyId}`);
                 const data = await res.json();
                 const budgetsList: any[] = data.budgets || [];
 
@@ -164,7 +193,7 @@ export default function SiteRequisitionSheet({
         };
 
         fetchBudget();
-    }, [organizationId, selectedPropertyId, floorTag]);
+    }, [organizationId, resolvedOrgId, selectedPropertyId, floorTag]);
 
     // Load the standard item list for this property.
     //
@@ -179,10 +208,11 @@ export default function SiteRequisitionSheet({
     // docs/MONTHLY_REQUISITION_STANDARD_CATALOG_PLAN.md §6).
     useEffect(() => {
         const fetchSiteData = async () => {
-            if (!organizationId || !selectedPropertyId) return;
+            const org = organizationId || resolvedOrgId;
+            if (!org || !selectedPropertyId) return;
             setIsLoadingItems(true);
             try {
-                const res = await fetch(`/api/procurement/pricing?organization_id=${organizationId}&property_id=${selectedPropertyId}`);
+                const res = await fetch(`/api/procurement/pricing?organization_id=${org}&property_id=${selectedPropertyId}`);
                 const data = await res.json();
                 const siteCatalogList: any[] = Array.isArray(data.items) ? data.items : [];
 
@@ -207,7 +237,7 @@ export default function SiteRequisitionSheet({
             }
         };
         fetchSiteData();
-    }, [organizationId, selectedPropertyId]);
+    }, [organizationId, resolvedOrgId, selectedPropertyId]);
 
     const grandTotalEstimated = useMemo(() => {
         return items.reduce((acc, row) => acc + ((Number(row.requested_qty) || 0) * (Number(row.unit_price) || 0)), 0);
@@ -281,63 +311,91 @@ export default function SiteRequisitionSheet({
     };
 
     const filteredItems = useMemo(() => {
-        if (activeTab === 'all') return items;
+        let base = items;
         if (activeTab === 'HK') {
-            return items.filter(i => {
+            base = items.filter(i => {
                 const cat = (i.category || '').toLowerCase();
                 return cat.includes('hk') || cat.includes('housekeeping') || cat.includes('stationery') || cat.includes('paper') || !cat;
             });
-        }
-        if (activeTab === 'Beverages') {
-            return items.filter(i => {
+        } else if (activeTab === 'Beverages') {
+            base = items.filter(i => {
                 const cat = (i.category || '').toLowerCase();
                 return cat.includes('bev') || cat.includes('pantry') || cat.includes('tea') || cat.includes('coffee') || cat.includes('ccd');
             });
-        }
-        if (activeTab === 'Technical') {
-            return items.filter(i => {
+        } else if (activeTab === 'Technical') {
+            base = items.filter(i => {
                 const cat = (i.category || '').toLowerCase();
                 return cat.includes('tech') || cat.includes('spare') || cat.includes('maint') || cat.includes('elect') || cat.includes('plumb');
             });
-        }
-        if (activeTab === 'General') {
-            return items.filter(i => {
+        } else if (activeTab === 'General') {
+            base = items.filter(i => {
                 const cat = (i.category || '').toLowerCase();
                 return cat.includes('gen') || cat.includes('misc') || cat.includes('other');
             });
         }
-        return items;
-    }, [items, activeTab]);
+
+        const query = searchQuery.trim().toLowerCase();
+        if (!query) return base;
+
+        // Split search terms to support multi-word search (e.g., "tea bag", "harpic 500")
+        const terms = query.split(/\s+/).filter(Boolean);
+        return base.filter(i => {
+            const searchableText = `${i.name || ''} ${i.brand || ''} ${i.details || ''} ${i.category || ''} ${i.unit || ''} ${i.remarks || ''}`.toLowerCase();
+            return terms.every(term => searchableText.includes(term));
+        });
+    }, [items, activeTab, searchQuery]);
 
     const handleDownloadExcelPreview = async () => {
+        if (isDownloading || isSubmitting) return;
+        setIsDownloading(true);
         try {
+            const org = organizationId || resolvedOrgId;
             const res = await fetch('/api/procurement/requisitions', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    organization_id: organizationId,
+                    organization_id: org,
                     property_id: selectedPropertyId,
                     floor_tag: floorTag,
                     requisition_month: requisitionMonth,
                     requisition_year: requisitionYear,
                     user_id: user?.id,
                     site_notes: siteNotes,
-                    items
+                    items,
+                    preview_only: true
                 })
             });
-            const data = await res.json();
-            if (data.requisition?.file_url) {
-                window.open(data.requisition.file_url, '_blank');
-            } else {
-                alert('Could not generate Excel download link.');
+
+            if (!res.ok) {
+                const errData = await res.json().catch(() => null);
+                throw new Error(errData?.error || 'Failed to generate Excel download');
             }
-        } catch (e) {
+
+            const blob = await res.blob();
+            const blobUrl = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = blobUrl;
+            const propName = (selectedProperty?.name || 'Requisition').replace(/\s+/g, '_');
+            const cleanFloor = floorTag.replace(/\s+/g, '_');
+            const monthName = MONTH_NAMES[requisitionMonth - 1] || 'Month';
+            a.download = `${propName}_${cleanFloor}_${monthName}_${requisitionYear}_requisition.xlsx`;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(blobUrl);
+            document.body.removeChild(a);
+        } catch (e: any) {
             console.error('Download error:', e);
-            alert('Failed to generate Excel download.');
+            alert(`Failed to generate Excel download: ${e?.message || 'Network error'}`);
+        } finally {
+            setIsDownloading(false);
         }
     };
 
     const handleSubmitRequisition = async (bypassBudgetCheck: boolean = false) => {
+        if (isSubmittingRef.current || isSubmitting) {
+            return;
+        }
+
         if (!selectedPropertyId) {
             alert('Please select a Center / Property.');
             return;
@@ -359,14 +417,16 @@ export default function SiteRequisitionSheet({
         // Clean items list ensuring valid item objects
         const submitItems = items.filter(i => i.name && i.name.trim().length > 0);
 
+        isSubmittingRef.current = true;
         setIsSubmitting(true);
         setShowOverBudgetModal(false);
         try {
+            const org = organizationId || resolvedOrgId;
             const res = await fetch('/api/procurement/requisitions', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    organization_id: organizationId,
+                    organization_id: org,
                     property_id: selectedPropertyId,
                     floor_tag: floorTag,
                     requisition_month: requisitionMonth,
@@ -395,6 +455,7 @@ export default function SiteRequisitionSheet({
             console.error('Submission failed:', err);
             alert(`Error: ${err.message}`);
         } finally {
+            isSubmittingRef.current = false;
             setIsSubmitting(false);
         }
     };
@@ -424,15 +485,20 @@ export default function SiteRequisitionSheet({
                         )}
                         <button
                             onClick={handleDownloadExcelPreview}
-                            className="h-9 px-3.5 inline-flex items-center gap-1.5 rounded-xl text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 transition-all cursor-pointer"
+                            disabled={isDownloading || isSubmitting}
+                            className="h-9 px-3.5 inline-flex items-center gap-1.5 rounded-xl text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 transition-all disabled:opacity-50 cursor-pointer"
                             title="Download formatted Excel workbook (.xlsx)"
                         >
-                            <Download className="w-3.5 h-3.5 text-slate-600" />
-                            <span>Download .xlsx</span>
+                            {isDownloading ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-600" />
+                            ) : (
+                                <Download className="w-3.5 h-3.5 text-slate-600" />
+                            )}
+                            <span>{isDownloading ? 'Generating...' : 'Download .xlsx'}</span>
                         </button>
                         <button
                             onClick={() => handleSubmitRequisition(false)}
-                            disabled={isSubmitting}
+                            disabled={isSubmitting || isDownloading}
                             className="h-9 px-4.5 inline-flex items-center gap-1.5 rounded-xl text-xs font-black text-white bg-emerald-600 hover:bg-emerald-700 shadow-md shadow-emerald-600/20 transition-all disabled:opacity-50 cursor-pointer"
                         >
                             {isSubmitting ? (
@@ -440,7 +506,7 @@ export default function SiteRequisitionSheet({
                             ) : (
                                 <Send className="w-3.5 h-3.5" />
                             )}
-                            <span>Submit to Procurement</span>
+                            <span>{isSubmitting ? 'Submitting...' : 'Submit to Procurement'}</span>
                         </button>
                     </div>
                 </div>
@@ -641,32 +707,59 @@ export default function SiteRequisitionSheet({
                 )}
 
                 <div className="flex flex-wrap items-center justify-between gap-4">
-                    <div className="flex items-center gap-1 bg-white p-1 rounded-2xl border border-slate-200 shadow-xs">
-                        {[
-                            { id: 'all', label: 'All Items' },
-                            { id: 'HK', label: 'HK / Stationery / Paper' },
-                            { id: 'Beverages', label: 'Beverages / CCD' },
-                            { id: 'Technical', label: 'Spares / Maintenance' },
-                            { id: 'General', label: 'General' }
-                        ].map(tab => (
-                            <button
-                                key={tab.id}
-                                onClick={() => setActiveTab(tab.id as any)}
-                                className={`px-4 py-2 rounded-xl text-xs font-black transition-all cursor-pointer ${
-                                    activeTab === tab.id
-                                        ? 'bg-slate-900 text-white shadow-xs'
-                                        : 'text-slate-600 hover:bg-slate-100'
-                                }`}
-                            >
-                                {tab.label}
-                            </button>
-                        ))}
+                    <div className="flex flex-wrap items-center gap-3">
+                        <div className="flex items-center gap-1 bg-white p-1 rounded-2xl border border-slate-200 shadow-xs">
+                            {[
+                                { id: 'all', label: 'All Items' },
+                                { id: 'HK', label: 'HK / Stationery / Paper' },
+                                { id: 'Beverages', label: 'Beverages / CCD' },
+                                { id: 'Technical', label: 'Spares / Maintenance' },
+                                { id: 'General', label: 'General' }
+                            ].map(tab => (
+                                <button
+                                    key={tab.id}
+                                    onClick={() => setActiveTab(tab.id as any)}
+                                    className={`px-4 py-2 rounded-xl text-xs font-black transition-all cursor-pointer ${
+                                        activeTab === tab.id
+                                            ? 'bg-slate-900 text-white shadow-xs'
+                                            : 'text-slate-600 hover:bg-slate-100'
+                                    }`}
+                                >
+                                    {tab.label}
+                                </button>
+                            ))}
+                        </div>
+
+                        {/* Search Bar for items */}
+                        <div className="relative min-w-[260px] sm:min-w-[320px]">
+                            <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                            <input
+                                type="text"
+                                value={searchQuery}
+                                onChange={(e) => setSearchQuery(e.target.value)}
+                                placeholder="Search product, brand, color, size..."
+                                className="w-full h-10 pl-9 pr-8 bg-white border border-slate-200 rounded-2xl text-xs font-semibold text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 shadow-xs transition-all"
+                            />
+                            {searchQuery && (
+                                <button
+                                    onClick={() => setSearchQuery('')}
+                                    className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100 cursor-pointer"
+                                    title="Clear search"
+                                >
+                                    <X className="w-3.5 h-3.5" />
+                                </button>
+                            )}
+                        </div>
                     </div>
 
                     <div className="flex items-center gap-4 bg-white px-5 py-2 rounded-2xl border border-slate-200 shadow-xs text-sm">
                         <div>
-                            <span className="text-slate-400 text-xs block font-bold">Total Items</span>
-                            <span className="font-black text-slate-800">{items.length} items ({totalRequestedUnits} units)</span>
+                            <span className="text-slate-400 text-xs block font-bold">
+                                {searchQuery ? 'Filtered Items' : 'Total Items'}
+                            </span>
+                            <span className="font-black text-slate-800">
+                                {filteredItems.length} {searchQuery ? `of ${items.length}` : ''} items ({totalRequestedUnits} units)
+                            </span>
                         </div>
                         <div className="h-6 w-px bg-slate-200" />
                         <div>
@@ -730,6 +823,21 @@ export default function SiteRequisitionSheet({
                                                         Procurement has not published the standard item list. Ask them to upload it,
                                                         or add rows manually below.
                                                     </p>
+                                                </div>
+                                            ) : searchQuery ? (
+                                                <div className="space-y-2 py-4">
+                                                    <p className="font-bold text-slate-700 text-sm">
+                                                        No items found matching &quot;{searchQuery}&quot;
+                                                    </p>
+                                                    <p className="text-xs text-slate-400 font-medium">
+                                                        Try searching with a different keyword, brand, or color/size.
+                                                    </p>
+                                                    <button
+                                                        onClick={() => setSearchQuery('')}
+                                                        className="px-3.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-xs font-bold text-slate-700 transition-colors cursor-pointer"
+                                                    >
+                                                        Clear Search
+                                                    </button>
                                                 </div>
                                             ) : (
                                                 <p className="text-xs text-slate-400 font-bold">
@@ -962,6 +1070,29 @@ export default function SiteRequisitionSheet({
                     </div>
                 )}
             </AnimatePresence>
+
+            {/* Submission Progress Modal Overlay to prevent duplicate clicks during slow network */}
+            {isSubmitting && (
+                <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+                    <div className="bg-white rounded-2xl p-6 shadow-2xl border border-slate-200 max-w-sm w-full text-center space-y-3 animate-in fade-in zoom-in-95 duration-150">
+                        <div className="w-12 h-12 rounded-full bg-emerald-50 border border-emerald-100 flex items-center justify-center mx-auto text-emerald-600">
+                            <Loader2 className="w-6 h-6 animate-spin" />
+                        </div>
+                        <div>
+                            <h3 className="text-base font-bold text-slate-800">Submitting Requisition</h3>
+                            <p className="text-xs text-slate-500 mt-1">
+                                Verifying prices, generating Excel workbook, and submitting to procurement. Please wait...
+                            </p>
+                        </div>
+                        <div className="pt-2">
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200">
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                                Processing request safely
+                            </span>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

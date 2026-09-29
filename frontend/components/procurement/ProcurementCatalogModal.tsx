@@ -68,8 +68,9 @@ interface Props {
 let catalogCache: Record<string, CatalogItem[]> = {};
 let usersCache: any[] | null = null;
 
-export default function ProcurementCatalogModal({ isOpen, onClose, ticketId, propertyId, organizationId, isProcurementUser = false }: Props) {
+export default function ProcurementCatalogModal({ isOpen, onClose, ticketId, propertyId, organizationId: propOrgId, isProcurementUser = false }: Props) {
     const { user, membership } = useAuth();
+    const organizationId = propOrgId || membership?.org_id || '';
     const isManagementMode = ticketId === "dashboard_catalog_management";
     
     // Stricter permission check for Material Request mode

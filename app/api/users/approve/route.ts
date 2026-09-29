@@ -147,6 +147,19 @@ export async function POST(request: NextRequest) {
                         role: targetRole,
                         is_active: true
                     }, { onConflict: 'organization_id,user_id' });
+
+                try {
+                    await adminClient.auth.admin.updateUserById(userId, {
+                        user_metadata: {
+                            organization_id: targetOrgId,
+                            role: targetRole,
+                            property_id: targetPropId || undefined,
+                            property_role: role || undefined
+                        }
+                    });
+                } catch (metaErr) {
+                    console.warn('[Approve API] Failed to sync auth user_metadata:', metaErr);
+                }
             }
 
             // Ensure employee_profiles record is linked upon approval for internal roles

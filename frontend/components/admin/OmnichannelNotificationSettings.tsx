@@ -634,7 +634,7 @@ const DEFAULT_NOTIFICATION_MATRIX: NotificationMatrix = {
     hr_tickets: {
         hr_ticket_created_submitter_v2: { channels: { email: true, whatsapp: true, push: true, voice: false }, roles: ['hr', 'hr_head', 'org_super_admin'], user_ids: [], notify_assignee: false, notify_requester: true },
         hr_ticket_assigned_handler_v2: { channels: { email: true, whatsapp: true, push: true, voice: false }, roles: ['manager', 'hr', 'hr_head'], user_ids: [], notify_assignee: true },
-        hr_ticket_escalated_handler: { channels: { email: true, whatsapp: true, push: true, voice: false }, roles: ['hr_head', 'org_super_admin'], user_ids: [], notify_assignee: true },
+        hr_ticket_escalated_handler: { channels: { email: true, whatsapp: true, push: true, voice: false }, roles: [], user_ids: [], notify_assignee: true },
         hr_ticket_status_updated: { channels: { email: true, whatsapp: true, push: true, voice: false }, roles: [], user_ids: [], notify_requester: true },
         hr_ticket_comment_added: { channels: { email: true, whatsapp: true, push: true, voice: false }, roles: [], user_ids: [], notify_assignee: true, notify_requester: true },
         hr_ticket_resolved_ack: { channels: { email: true, whatsapp: true, push: true, voice: false }, roles: [], user_ids: [], notify_requester: true },
@@ -802,10 +802,20 @@ export default function OmnichannelNotificationSettings({ organizationId }: Omni
             if (res.ok) {
                 const data = await res.json();
                 if (data?.notification_matrix) {
-                    setMatrix(prev => ({
-                        ...DEFAULT_NOTIFICATION_MATRIX,
-                        ...data.notification_matrix
-                    }));
+                    setMatrix(prev => {
+                        const merged: any = { ...DEFAULT_NOTIFICATION_MATRIX };
+                        Object.entries(data.notification_matrix).forEach(([modKey, modVal]) => {
+                            if (modVal && typeof modVal === 'object') {
+                                merged[modKey] = {
+                                    ...(DEFAULT_NOTIFICATION_MATRIX[modKey] || {}),
+                                    ...(modVal as any)
+                                };
+                            } else {
+                                merged[modKey] = modVal;
+                            }
+                        });
+                        return merged;
+                    });
                 }
             }
 

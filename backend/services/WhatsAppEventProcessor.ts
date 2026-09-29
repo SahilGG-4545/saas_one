@@ -271,12 +271,12 @@ export const WhatsAppEventProcessor = {
             organizationId,
             propertyId,
             featureKey,
-            contextualUserIds: contextualUserIds ? [
-                contextualUserIds.assigneeId,
-                contextualUserIds.requesterId,
-                contextualUserIds.approverId,
-                ...(contextualUserIds.extraUserIds || [])
-            ].filter(Boolean) as string[] : []
+            contextualUsers: contextualUserIds ? {
+                assigneeId: contextualUserIds.assigneeId,
+                requesterId: contextualUserIds.requesterId,
+                approverId: contextualUserIds.approverId,
+                extraUserIds: contextualUserIds.extraUserIds
+            } : undefined
         });
 
         if (!enabled) {
@@ -289,7 +289,7 @@ export const WhatsAppEventProcessor = {
         const contextualIds: string[] = [];
         if (config.notify_assignee && contextualUserIds?.assigneeId) contextualIds.push(contextualUserIds.assigneeId);
         if (config.notify_requester && contextualUserIds?.requesterId) contextualIds.push(contextualUserIds.requesterId);
-        if (contextualUserIds?.approverId) contextualIds.push(contextualUserIds.approverId);
+        if (config.notify_approver && contextualUserIds?.approverId) contextualIds.push(contextualUserIds.approverId);
         if ((config.notify_requester || config.notify_assignee) && contextualUserIds?.extraUserIds) {
             contextualIds.push(...contextualUserIds.extraUserIds);
         }
@@ -353,7 +353,7 @@ export const WhatsAppEventProcessor = {
             ticket_completed_media: { campaign_name: 'ticket_completed_v1_media', params: ['user_name', 'ticket_number', 'title', 'property', 'resolved_by'] },
             daily_property_report: { campaign_name: 'ai_property_report_v1', params: ['user_name', 'org_name', 'date', 'critical_count', 'open_count', 'resolved_count', 'electricity_kwh', 'dg_liters', 'ppm_completed', 'ppm_missed', 'sop_compliance', 'property_summary', 'ai_insights'] },
             ai_property_report: { campaign_name: 'ai_property_report_v1', params: ['user_name', 'org_name', 'date', 'critical_count', 'open_count', 'resolved_count', 'electricity_kwh', 'dg_liters', 'ppm_completed', 'ppm_missed', 'sop_compliance', 'property_summary', 'ai_insights'] },
-            material_request_created: { campaign_name: 'material_request_created_v3', params: ['user_name', 'ticket_number', 'property', 'requested_by', 'requester_phone', 'items_summary'] },
+            material_request_created: { campaign_name: 'material_request_created_v4', params: ['user_name', 'ticket_number', 'property', 'requested_by', 'requester_phone', 'items_summary'] },
             comparative_uploaded: { campaign_name: 'comparative_approval_requested_v1', params: ['user_name', 'uploaded_by', 'ticket_number', 'title', 'property', 'total_cost', 'notes'] },
             comparative_approval_requested: { campaign_name: 'comparative_approval_requested_v1', params: ['user_name', 'uploaded_by', 'ticket_number', 'title', 'property', 'total_cost', 'notes'] },
             comparative_uploaded_info: { campaign_name: 'comparative_uploaded_info_v1', params: ['user_name', 'uploaded_by', 'ticket_number', 'title', 'property', 'total_cost', 'approver_name', 'notes'] },
@@ -451,6 +451,7 @@ export const WhatsAppEventProcessor = {
             'ai_property_report_v1': ['user_name', 'org_name', 'date', 'critical_count', 'open_count', 'resolved_count', 'electricity_kwh', 'dg_liters', 'ppm_completed', 'ppm_missed', 'sop_compliance', 'property_summary', 'ai_insights'],
             'daily_property_report': ['user_name', 'org_name', 'date', 'critical_count', 'open_count', 'resolved_count', 'electricity_kwh', 'dg_liters', 'ppm_completed', 'ppm_missed', 'sop_compliance', 'property_summary', 'ai_insights'],
 
+            'material_request_created_v4': ['user_name', 'ticket_number', 'property', 'requested_by', 'requester_phone', 'items_summary'],
             'material_request_created_v3': ['user_name', 'ticket_number', 'property', 'requested_by', 'requester_phone', 'items_summary'],
             'material_request_created': ['user_name', 'ticket_number', 'property', 'requested_by', 'requester_phone', 'items_summary'],
 
@@ -825,20 +826,39 @@ export const WhatsAppEventProcessor = {
                 .select('items')
                 .eq('id', requestId)
                 .maybeSingle();
-            if (mr && Array.isArray(mr.items)) {
+            if (mr && Array.isArray(mr.items) && mr.items.length > 0) {
                 itemsList = mr.items;
             } else {
                 const { data: separateItems } = await supabaseAdmin
                     .from('material_request_items')
                     .select('name, quantity')
                     .eq('request_id', requestId);
-                if (separateItems) itemsList = separateItems;
+                if (separateItems && separateItems.length > 0) {
+                    itemsList = separateItems;
+                } else {
+                    // Retry once after 500ms in case line items insertion was slightly delayed
+                    await new Promise(r => setTimeout(r, 500));
+                    const { data: mrRetry } = await supabaseAdmin
+                        .from('material_requests')
+                        .select('items')
+                        .eq('id', requestId)
+                        .maybeSingle();
+                    if (mrRetry && Array.isArray(mrRetry.items) && mrRetry.items.length > 0) {
+                        itemsList = mrRetry.items;
+                    } else {
+                        const { data: sepRetry } = await supabaseAdmin
+                            .from('material_request_items')
+                            .select('name, quantity')
+                            .eq('request_id', requestId);
+                        if (sepRetry && sepRetry.length > 0) itemsList = sepRetry;
+                    }
+                }
             }
         }
 
         const itemsSummary = (itemsList || []).length > 0
-            ? (itemsList || []).map((i: any) => `${i.name} x${i.quantity || 1}`).join(', ')
-            : 'Requested items';
+            ? (itemsList || []).map((i: any) => `${i.name || i.title || i.item_name || 'Item'} x${i.quantity || i.qty || 1}`).join(', ')
+            : (payload.notes || payload.comment || 'Requested items');
 
         const requester = await this.getUserDetails(payload.requested_by);
 
@@ -1020,8 +1040,12 @@ export const WhatsAppEventProcessor = {
         if (!request) return;
 
         const ticket = Array.isArray(request.ticket) ? request.ticket[0] : (request.ticket as any);
-        const items = (request.items as any[]) || [];
-        const itemsSummary = items.map(i => `${i.name} x${i.quantity}`).join(', ') || 'Delivered materials';
+        let itemsList = (request.items as any[]) || [];
+        if (!itemsList || itemsList.length === 0) {
+            const { data: mr } = await supabaseAdmin.from('material_requests').select('items').eq('id', requestId).maybeSingle();
+            if (mr && Array.isArray(mr.items)) itemsList = mr.items;
+        }
+        const itemsSummary = itemsList.map(i => `${i.name || i.title || i.item_name || 'Item'} x${i.quantity || i.qty || 1}`).join(', ') || 'Delivered materials';
         const verifier = await this.getUserDetails(payload.delivered_by || payload.action_by);
 
         await this.dispatch({
@@ -2138,16 +2162,32 @@ export const WhatsAppEventProcessor = {
             contextualUserIds: { assigneeId: ticket?.assigned_to_user_id || payload.assigned_to_user_id }
         });
 
-        if (ticket?.assigned_to?.email) {
-            const { EmailService } = await import('./EmailService');
-            EmailService.sendHrTicketEscalatedEmail({
-                emailTo: ticket.assigned_to.email,
-                ticket: ticket || payload,
-                assigneeName: ownerName,
-                level,
-                reason,
-                submitterName: empName
-            }).catch(err => console.error('[WhatsAppEventProcessor] Escalation email error:', err));
+        try {
+            const { EmailRecipientResolver } = await import('./EmailRecipientResolver');
+            const emailResult = await EmailRecipientResolver.resolveRecipients({
+                organizationId: orgId,
+                propertyId: ticket?.property_id || payload?.property_id,
+                featureKey: 'hr_ticket_escalated_handler',
+                contextualRecipients: {
+                    assigneeEmail: ticket?.assigned_to?.email
+                }
+            });
+
+            if (emailResult.enabled && emailResult.emails.length > 0) {
+                const { EmailService } = await import('./EmailService');
+                for (const email of emailResult.emails) {
+                    EmailService.sendHrTicketEscalatedEmail({
+                        emailTo: email,
+                        ticket: ticket || payload,
+                        assigneeName: ownerName,
+                        level,
+                        reason,
+                        submitterName: empName
+                    }).catch(err => console.error('[WhatsAppEventProcessor] Escalation email error:', err));
+                }
+            }
+        } catch (err) {
+            console.error('[WhatsAppEventProcessor] Escalation email resolve error:', err);
         }
     },
 
@@ -2216,24 +2256,50 @@ export const WhatsAppEventProcessor = {
         const orgId = payload.organization_id;
         const ticketNo = payload.ticket_number || 'HR-CONF-000';
 
-        const isAnon = Boolean(payload.is_anonymous) || payload.ticket_type === 'anonymous_feedback';
+        // Fetch full ticket details with assigned handler
+        const { data: ticket } = await supabaseAdmin
+            .from('hr_tickets')
+            .select('*, assigned_to:users!assigned_to_user_id(id, full_name, email, phone)')
+            .eq('id', ticketId)
+            .maybeSingle();
+
+        const isAnon = Boolean(payload.is_anonymous || ticket?.is_anonymous) || payload.ticket_type === 'anonymous_feedback' || ticket?.ticket_type === 'anonymous_feedback';
+        const assignedUser = ticket?.assigned_to;
+        const assignedName = assignedUser?.full_name || assignedUser?.email || 'Authority';
+        const assignedId = ticket?.assigned_to_user_id || payload.assigned_to_user_id;
+        const categoryLabel = isAnon ? 'Anonymous Feedback' : 'Confidential Grievance';
+        const submitterLabel = isAnon ? 'Anonymous Employee' : 'Confidential Submitter';
+
+        // 1. WhatsApp Alert to Assigned Handler
         await this.dispatch({
             featureKey: 'hr_ticket_assigned_handler_v2',
             templateEventKey: 'hr_ticket_assigned_handler_v2',
             organizationId: orgId,
             entityId: ticketId,
             paramValues: {
-                user_name: 'Director / Management',
+                user_name: assignedName,
                 ticket_number: ticketNo,
                 level: '1',
-                category: isAnon ? 'Anonymous Feedback' : 'Confidential Grievance',
-                submitter: isAnon ? 'Anonymous Employee' : 'Confidential Submitter',
-                subject: payload.subject || 'Confidential Submission',
-                sla_deadline: formatWhatsAppDateTime(payload.sla_due_at)
+                category: categoryLabel,
+                submitter: submitterLabel,
+                subject: ticket?.subject || payload.subject || 'Confidential Submission',
+                sla_deadline: formatWhatsAppDateTime(ticket?.sla_due_at || payload.sla_due_at)
             },
             summaryMessage: `Confidential HR alert received: #${ticketNo}`,
-            contextualUserIds: { assigneeId: payload.assigned_to_user_id }
+            contextualUserIds: { assigneeId: assignedId }
         });
+
+        // 2. Email Alert to Assigned Handler
+        if (assignedUser?.email) {
+            const { EmailService } = await import('./EmailService');
+            EmailService.sendHrTicketAssignedEmail({
+                emailTo: assignedUser.email,
+                ticket: ticket || payload,
+                assigneeName: assignedName,
+                submitterName: submitterLabel,
+                categoryName: categoryLabel
+            }).catch(err => console.error('[WhatsAppEventProcessor] Confidential assigned email error:', err));
+        }
     },
 
     async handleHrTicketResolved(payload: any): Promise<void> {

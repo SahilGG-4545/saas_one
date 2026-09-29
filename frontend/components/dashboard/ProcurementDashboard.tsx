@@ -139,9 +139,14 @@ export default function ProcurementDashboard() {
             if (user?.user_metadata?.organization_id) {
                 setUserOrgId(user.user_metadata.organization_id);
             } else if (user?.id) {
-                supabase.from('organization_memberships').select('organization_id').eq('user_id', user.id).limit(1).maybeSingle().then(({ data }) => {
-                    if (data?.organization_id) setUserOrgId(data.organization_id);
-                });
+                const { data: om } = await supabase.from('organization_memberships').select('organization_id').eq('user_id', user.id).eq('is_active', true).limit(1).maybeSingle();
+                if (om?.organization_id) {
+                    setUserOrgId(om.organization_id);
+                } else {
+                    const { data: pm } = await supabase.from('property_memberships').select('organization_id, property:properties(organization_id)').eq('user_id', user.id).eq('is_active', true).limit(1).maybeSingle();
+                    const org = pm?.organization_id || (pm?.property as any)?.organization_id;
+                    if (org) setUserOrgId(org);
+                }
             }
         };
         getUser();
@@ -154,7 +159,7 @@ export default function ProcurementDashboard() {
     // --- Fetching Logic ---
     const fetchSidebarCounts = useCallback(async () => {
         try {
-            const orgId = user?.user_metadata?.organization_id;
+            const orgId = userOrgId || user?.user_metadata?.organization_id;
 
             // 1. Pending Vendor Requirement Tickets count — "pending" means anything short
             // of arranged, matching ProcurementVendorTicketsTab's own pendingCount (status
@@ -246,7 +251,7 @@ export default function ProcurementDashboard() {
 
     const fetchProperties = useCallback(async () => {
         try {
-            const orgId = user?.user_metadata?.organization_id;
+            const orgId = userOrgId || user?.user_metadata?.organization_id;
             let url = '/api/properties';
             if (orgId) url += `?organizationId=${orgId}`;
             
@@ -830,14 +835,14 @@ export default function ProcurementDashboard() {
                         {activeTab === 'urgency-tracker' && (
                             <PaymentUrgencyTrackerTab
                                 user={user}
-                                organizationId={user?.user_metadata?.organization_id}
+                                organizationId={userOrgId || user?.user_metadata?.organization_id}
                                 isSuperAdmin={isAdmin}
                             />
                         )}
                         {activeTab === 'task-sheet' && (
                             <PaymentUrgencyTrackerTab
                                 user={user}
-                                organizationId={user?.user_metadata?.organization_id}
+                                organizationId={userOrgId || user?.user_metadata?.organization_id}
                                 isSuperAdmin={isAdmin}
                             />
                         )}
@@ -846,34 +851,34 @@ export default function ProcurementDashboard() {
                         {activeTab === 'monthly-requisitions' && (
                             <MonthlyRequisitionsTab
                                 user={user}
-                                organizationId={user?.user_metadata?.organization_id}
-                                userRole={user?.user_metadata?.role || 'procurement_user'}
+                                organizationId={userOrgId || user?.user_metadata?.organization_id}
+                                userRole={isAdmin ? 'org_super_admin' : (user?.user_metadata?.role || 'procurement')}
                                 onNavigateToFeedback={() => setActiveTab('monthly-feedback')}
                             />
                         )}
                         {activeTab === 'monthly-feedback' && (
                             <ProcurementFeedbackTab
-                                organizationId={user?.user_metadata?.organization_id}
+                                organizationId={userOrgId || user?.user_metadata?.organization_id}
                                 properties={allProperties}
                             />
                         )}
                         {activeTab === 'site-pricing' && SHOW_LEGACY_PER_PROPERTY_CONTROLS && (
                             <SitePricingAdminTab
                                 user={user}
-                                organizationId={user?.user_metadata?.organization_id}
+                                organizationId={userOrgId || user?.user_metadata?.organization_id}
                                 properties={allProperties}
                             />
                         )}
                         {activeTab === 'manage-items' && (
                             <ManageItemsTab 
-                                organizationId={user?.user_metadata?.organization_id} 
+                                organizationId={userOrgId || user?.user_metadata?.organization_id} 
                                 propertyId={propertyFilter === 'all' ? '' : propertyFilter}
                                 isProcurementUser={isProcurementRole}
                             />
                         )}
                         {activeTab === 'po-generator' && (
                             <div className="py-8">
-                                <ProcurementPOProcessor organizationId={user?.user_metadata?.organization_id} />
+                                <ProcurementPOProcessor organizationId={userOrgId || user?.user_metadata?.organization_id} />
                             </div>
                         )}
                         {activeTab === 'settings' && (

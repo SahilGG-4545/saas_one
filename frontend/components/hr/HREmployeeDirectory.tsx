@@ -782,7 +782,7 @@ export default function HREmployeeDirectory({ orgId, organizationId, onRefresh }
             {/* App Account Info Details Modal */}
             {selectedEmpForInfo && (
                 <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-3 sm:p-4">
-                    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl sm:rounded-3xl shadow-2xl max-w-md w-full max-h-[90vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+                    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl sm:rounded-3xl shadow-2xl max-w-lg sm:max-w-xl w-full max-h-[90vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
                         {/* Header */}
                         <div className="shrink-0 flex items-center justify-between px-5 py-4 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/50">
                             <div>
@@ -796,7 +796,7 @@ export default function HREmployeeDirectory({ orgId, organizationId, onRefresh }
                             </div>
                             <button
                                 onClick={() => setSelectedEmpForInfo(null)}
-                                className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg transition-colors"
+                                className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg transition-colors cursor-pointer"
                             >
                                 ✕
                             </button>
@@ -836,56 +836,70 @@ export default function HREmployeeDirectory({ orgId, organizationId, onRefresh }
                             )}
 
                             {/* Excel HR Database Info */}
-                            <div className="bg-slate-50 dark:bg-slate-800/60 p-4 rounded-2xl border border-slate-200/80 dark:border-slate-800 space-y-2">
+                            <div className="bg-slate-50 dark:bg-slate-800/60 p-4 rounded-2xl border border-slate-200/80 dark:border-slate-800 space-y-3">
                                 <div className="font-bold text-slate-900 dark:text-white uppercase tracking-wider text-[10px] text-slate-400">
                                     Master HR Database Record (Excel)
                                 </div>
-                                <div className="grid grid-cols-2 gap-3 text-xs">
-                                    <div>
-                                        <span className="text-slate-400 font-medium block text-[10px]">Full Name</span>
-                                        <span className="font-bold text-slate-800 dark:text-slate-200">{selectedEmpForInfo.first_name} {selectedEmpForInfo.last_name}</span>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                                    <div className="min-w-0">
+                                        <span className="text-slate-400 font-medium block text-[10px] uppercase tracking-wider mb-0.5">Full Name</span>
+                                        <span className="font-bold text-slate-800 dark:text-slate-200 block break-words">{selectedEmpForInfo.first_name} {selectedEmpForInfo.last_name}</span>
                                     </div>
-                                    <div>
-                                        <span className="text-slate-400 font-medium block text-[10px]">Employee Code</span>
-                                        <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400">{selectedEmpForInfo.employee_code}</span>
+                                    <div className="min-w-0">
+                                        <span className="text-slate-400 font-medium block text-[10px] uppercase tracking-wider mb-0.5">Employee Code</span>
+                                        <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400 block">{selectedEmpForInfo.employee_code}</span>
                                     </div>
-                                    <div>
-                                        <span className="text-slate-400 font-medium block text-[10px]">HR Email</span>
-                                        <span className="font-semibold text-slate-800 dark:text-slate-200">{selectedEmpForInfo.email || 'N/A'}</span>
+                                    <div className="min-w-0">
+                                        <span className="text-slate-400 font-medium block text-[10px] uppercase tracking-wider mb-0.5">HR Email</span>
+                                        <span className="font-semibold text-slate-800 dark:text-slate-200 block break-all leading-snug" title={selectedEmpForInfo.email}>
+                                            {selectedEmpForInfo.email || 'N/A'}
+                                        </span>
                                     </div>
-                                    <div>
-                                        <span className="text-slate-400 font-medium block text-[10px]">Contact Number</span>
-                                        <span className="font-semibold text-slate-800 dark:text-slate-200">{selectedEmpForInfo.contact_number || selectedEmpForInfo.phone || 'N/A'}</span>
+                                    <div className="min-w-0">
+                                        <span className="text-slate-400 font-medium block text-[10px] uppercase tracking-wider mb-0.5">Contact Number</span>
+                                        <span className="font-semibold text-slate-800 dark:text-slate-200 block break-words">
+                                            {selectedEmpForInfo.contact_number || selectedEmpForInfo.phone || 'N/A'}
+                                        </span>
                                     </div>
-                                    <div>
-                                        <span className="text-slate-400 font-medium block text-[10px]">Department</span>
-                                        <span className="font-semibold text-slate-800 dark:text-slate-200">{selectedEmpForInfo.department || 'N/A'}</span>
+                                    <div className="min-w-0">
+                                        <span className="text-slate-400 font-medium block text-[10px] uppercase tracking-wider mb-0.5">Department</span>
+                                        <span className="font-semibold text-slate-800 dark:text-slate-200 block break-words leading-snug">
+                                            {selectedEmpForInfo.department || 'N/A'}
+                                        </span>
                                     </div>
-                                    <div>
-                                        <span className="text-slate-400 font-medium block text-[10px]">Designation & Location</span>
-                                        <span className="font-semibold text-slate-800 dark:text-slate-200">{selectedEmpForInfo.designation} ({selectedEmpForInfo.location})</span>
+                                    <div className="min-w-0">
+                                        <span className="text-slate-400 font-medium block text-[10px] uppercase tracking-wider mb-0.5">Designation & Location</span>
+                                        <span className="font-semibold text-slate-800 dark:text-slate-200 block break-words leading-snug">
+                                            {selectedEmpForInfo.designation} ({selectedEmpForInfo.location})
+                                        </span>
                                     </div>
                                 </div>
                             </div>
 
                             {/* Live App Account Credentials */}
-                            <div className="bg-slate-50 dark:bg-slate-800/60 p-4 rounded-2xl border border-slate-200/80 dark:border-slate-800 space-y-2">
+                            <div className="bg-slate-50 dark:bg-slate-800/60 p-4 rounded-2xl border border-slate-200/80 dark:border-slate-800 space-y-3">
                                 <div className="font-bold text-slate-900 dark:text-white uppercase tracking-wider text-[10px] text-slate-400">
                                     Live App User Credentials
                                 </div>
                                 {selectedEmpForInfo.is_app_linked ? (
-                                    <div className="grid grid-cols-2 gap-3 text-xs">
-                                        <div>
-                                            <span className="text-slate-400 font-medium block text-[10px]">App Email</span>
-                                            <span className="font-semibold text-slate-900 dark:text-white">{selectedEmpForInfo.app_email || selectedEmpForInfo.user?.email}</span>
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                                        <div className="min-w-0">
+                                            <span className="text-slate-400 font-medium block text-[10px] uppercase tracking-wider mb-0.5">App Email</span>
+                                            <span className="font-semibold text-slate-900 dark:text-white block break-all leading-snug">
+                                                {selectedEmpForInfo.app_email || selectedEmpForInfo.user?.email || 'N/A'}
+                                            </span>
                                         </div>
-                                        <div>
-                                            <span className="text-slate-400 font-medium block text-[10px]">App Role</span>
-                                            <span className="font-bold text-indigo-600 dark:text-indigo-400 uppercase">{selectedEmpForInfo.app_role || 'Staff'}</span>
+                                        <div className="min-w-0">
+                                            <span className="text-slate-400 font-medium block text-[10px] uppercase tracking-wider mb-0.5">App Role</span>
+                                            <span className="font-bold text-indigo-600 dark:text-indigo-400 uppercase block">
+                                                {selectedEmpForInfo.app_role || 'Staff'}
+                                            </span>
                                         </div>
-                                        <div className="col-span-2">
-                                            <span className="text-slate-400 font-medium block text-[10px]">App User ID</span>
-                                            <span className="font-mono text-[10px] text-slate-500 truncate block">{selectedEmpForInfo.user_id}</span>
+                                        <div className="col-span-1 sm:col-span-2 min-w-0 pt-1 border-t border-slate-100 dark:border-slate-700/60">
+                                            <span className="text-slate-400 font-medium block text-[10px] uppercase tracking-wider mb-0.5">App User ID</span>
+                                            <span className="font-mono text-[11px] text-slate-500 dark:text-slate-400 block break-all">
+                                                {selectedEmpForInfo.user_id}
+                                            </span>
                                         </div>
                                     </div>
                                 ) : (

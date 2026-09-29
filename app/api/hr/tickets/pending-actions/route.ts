@@ -46,7 +46,8 @@ export async function GET(request: NextRequest) {
         if (empId) targetIds.push(empId);
 
         // 2. Query open HR tickets requiring attention for this user (assigned handler or submitter awaiting ack)
-        const filterOr = `assigned_to_user_id.in.(${targetIds.join(',')}),manager_user_id.eq.${activeUserId},and(raised_by_user_id.eq.${activeUserId},status.eq.pending_acknowledgement)`;
+        // Managers only handle Level 1 tickets before escalation. Escalated tickets belong strictly to the current assigned_to_user_id!
+        const filterOr = `assigned_to_user_id.in.(${targetIds.join(',')}),and(manager_user_id.eq.${activeUserId},current_level.eq.1,status.neq.escalated),and(raised_by_user_id.eq.${activeUserId},status.eq.pending_acknowledgement)`;
 
         const { data: tickets, error } = await supabaseAdmin
             .from('hr_tickets')
@@ -64,9 +65,21 @@ export async function GET(request: NextRequest) {
             return NextResponse.json({ success: false, error: error.message }, { status: 500 });
         }
 
+        // Strict filter: escalated tickets (current_level > 1 or status === 'escalated') belong ONLY to the active assigned handler!
+        const validTickets = (tickets || []).filter(t => {
+            const isSubmitterWaitingAck = t.raised_by_user_id === activeUserId && t.status === 'pending_acknowledgement';
+            const isCurrentHandler = targetIds.includes(t.assigned_to_user_id);
+            const isL1Manager = t.current_level === 1 && t.status !== 'escalated' && t.manager_user_id === activeUserId;
+
+            if (t.status === 'escalated' || (t.current_level && t.current_level > 1)) {
+                return isCurrentHandler || isSubmitterWaitingAck;
+            }
+            return isCurrentHandler || isSubmitterWaitingAck || isL1Manager;
+        });
+
         return NextResponse.json({
             success: true,
-            tickets: tickets || []
+            tickets: validTickets
         });
     } catch (err: any) {
         console.error('[HR Pending Actions Error]:', err);

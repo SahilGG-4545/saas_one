@@ -212,6 +212,11 @@ export default function HRTicketDetailModal({ isOpen, ticketId, initialTicket, o
     const [replyAttachments, setReplyAttachments] = useState<string[]>([]);
     const [uploadingReplyFile, setUploadingReplyFile] = useState(false);
 
+    const [showEscalateForm, setShowEscalateForm] = useState(false);
+    const [escalationReasonInput, setEscalationReasonInput] = useState('');
+    const [escalating, setEscalating] = useState(false);
+    const [escalateError, setEscalateError] = useState('');
+
     useEffect(() => {
         setMounted(true);
     }, []);
@@ -227,6 +232,9 @@ export default function HRTicketDetailModal({ isOpen, ticketId, initialTicket, o
             setCommentText('');
             setResolutionNoteInput('');
             setShowResolutionForm(false);
+            setShowEscalateForm(false);
+            setEscalationReasonInput('');
+            setEscalateError('');
         }
     }, [isOpen, ticketId]);
 
@@ -335,20 +343,66 @@ export default function HRTicketDetailModal({ isOpen, ticketId, initialTicket, o
                 setResolutionNoteInput('');
                 fetchTicketDetail();
                 onRefresh();
+                if (typeof window !== 'undefined') {
+                    window.dispatchEvent(new CustomEvent('hr-ticket-updated', { detail: { ticketId, status: newStatus, action } }));
+                    window.dispatchEvent(new CustomEvent('app-pending-actions-refresh'));
+                }
             }
         } catch (err) {
             console.error('Error updating status:', err);
         }
     };
 
+    const handleEscalate = async () => {
+        setEscalating(true);
+        setEscalateError('');
+        try {
+            const res = await fetch(`/api/hr/tickets/${ticketId}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    escalate: true,
+                    actor_user_id: currentUserId,
+                    escalation_reason: escalationReasonInput
+                })
+            });
+            const text = await res.text();
+            let data: any = {};
+            try { data = text ? JSON.parse(text) : {}; } catch {}
+            if (data.success) {
+                setShowEscalateForm(false);
+                setEscalationReasonInput('');
+                fetchTicketDetail();
+                onRefresh();
+                if (typeof window !== 'undefined') {
+                    window.dispatchEvent(new CustomEvent('hr-ticket-updated', { detail: { ticketId, action: 'escalate' } }));
+                    window.dispatchEvent(new CustomEvent('app-pending-actions-refresh'));
+                }
+            } else {
+                setEscalateError(data.error || 'Could not escalate this ticket.');
+            }
+        } catch (err: any) {
+            setEscalateError(err.message || 'Could not escalate this ticket.');
+        } finally {
+            setEscalating(false);
+        }
+    };
+
     if (!isOpen || !ticketId || !mounted) return null;
 
-    const isAssignedToMe = Boolean(currentUserId && ticket?.assigned_to_user_id === currentUserId);
+    const currentLvl = ticket?.current_level || 1;
+    const isAssignedToMe = Boolean(
+        currentUserId && (
+            ticket?.assigned_to_user_id === currentUserId ||
+            ticket?.assigned_to?.id === currentUserId ||
+            (currentLvl === 1 && ticket?.manager_user_id === currentUserId) ||
+            (currentLvl === 1 && ticket?.employee_snapshot?.manager_user_id === currentUserId)
+        )
+    );
     const isRaisedByMe = Boolean(currentUserId && ticket?.raised_by_user_id === currentUserId);
     
     // Check if user is active authority for current level
     const normalizedRole = (currentUserRole || '').toLowerCase();
-    const currentLvl = ticket?.current_level || 1;
     const isHrRole = ['hr', 'hr_head', 'hr_manager', 'hr_ops'].includes(normalizedRole);
     const isSuperAdmin = ['org_super_admin', 'master_admin', 'super_admin', 'ops_super_admin'].includes(normalizedRole);
     const isHandler = isAssignedToMe || (Array.isArray(ticket?.assigned_history) && ticket.assigned_history.includes(currentUserId));
@@ -364,10 +418,21 @@ export default function HRTicketDetailModal({ isOpen, ticketId, initialTicket, o
         }
     }
 
+    // Submitter cannot resolve or change progress on their own ticket unless they are the active assigned handler
+    if (isRaisedByMe && !isAssignedToMe && !isSuperAdmin) {
+        canChangeStatus = false;
+    }
+
     // HR roles, Admins, and Handlers can ALWAYS add internal notes even if ticket is assigned to someone else
     const canAddInternalNote = isHrRole || isSuperAdmin || isHandler || canChangeStatus;
 
     const isTicketResolvedOrClosed = ticket?.status === 'resolved' || ticket?.status === 'closed' || ticket?.status === 'pending_acknowledgement';
+
+    // Manual escalation: enabled per ticket type in Admin Config, available to current handler and authorized admins
+    const nextEscalationLevel = currentLvl + 1;
+    const nextEscalationOwner = ticket?.escalation_flow?.find((s: any) => s.level === nextEscalationLevel)?.assignee;
+    const canActorEscalate = (isAssignedToMe || isSuperAdmin || isHrRole || canChangeStatus) && !(isRaisedByMe && !isAssignedToMe && !isSuperAdmin);
+    const canManuallyEscalate = Boolean(ticket?.manual_escalation_enabled) && canActorEscalate && !isTicketResolvedOrClosed && currentLvl < (ticket?.max_level || 4);
 
     const getClosingDetails = () => {
         if (!ticket) return { levelNum: 1, levelLabel: 'Level 1', resolverName: 'HR Head' };
@@ -540,7 +605,7 @@ export default function HRTicketDetailModal({ isOpen, ticketId, initialTicket, o
 
     const modalContent = (
         <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-2 sm:p-4">
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl sm:rounded-3xl shadow-2xl w-full max-w-4xl max-h-[92vh] sm:max-h-[88vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200 my-auto">
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl sm:rounded-3xl shadow-2xl w-full max-w-5xl max-h-[92vh] sm:max-h-[88vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200 my-auto">
                 {/* Header */}
                 <div className="shrink-0 flex items-center justify-between px-4 sm:px-6 py-3.5 sm:py-4 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/50">
                     <div className="flex items-center gap-2 sm:gap-3 min-w-0 pr-2">
@@ -1101,8 +1166,8 @@ export default function HRTicketDetailModal({ isOpen, ticketId, initialTicket, o
                         </div>
 
                         {/* Right Sidebar Section: SLA Timer, Assigned Handler Circle Profile, Employee Snapshot & Lifecycle Actions */}
-                        <div className="w-full md:w-80 p-4 sm:p-6 bg-slate-50/50 dark:bg-slate-800/30 flex flex-col justify-between gap-6 overflow-y-auto shrink-0">
-                            <div className="space-y-6">
+                        <div className="w-full md:w-[350px] p-4 sm:p-5 bg-slate-50/50 dark:bg-slate-800/30 flex flex-col justify-between gap-5 overflow-y-auto shrink-0">
+                            <div className="space-y-5">
                                 {/* SLA / TAT Timer */}
                                 <div className="p-3.5 bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-2 shadow-xs">
                                     <div className="flex items-center justify-between">
@@ -1169,41 +1234,47 @@ export default function HRTicketDetailModal({ isOpen, ticketId, initialTicket, o
                                             </div>
 
                                             <div className="min-w-0 flex-1">
-                                                <div className="font-extrabold text-xs text-slate-900 dark:text-white truncate">
+                                                <div className="font-extrabold text-xs text-slate-900 dark:text-white leading-snug break-words" title={ticket.assigned_to_details?.full_name || ticket.assigned_to?.full_name || ticket.current_level_owner || 'Assigned Authority'}>
                                                     {ticket.assigned_to_details?.full_name || ticket.assigned_to?.full_name || ticket.current_level_owner || 'Assigned Authority'}
                                                 </div>
-                                                <div className="text-[10px] font-bold text-[#587e85] dark:text-[#6c9a9e] truncate">
-                                                    {ticket.assigned_to_details?.app_role || 'HR Authority'}
-                                                </div>
-                                                <div className="text-[10px] text-slate-500 dark:text-slate-400 font-medium truncate">
-                                                    {ticket.assigned_to_details?.employee_role || 'Designated Handler'}
-                                                </div>
+                                                {ticket.assigned_to_details?.app_role && (
+                                                    <div className="text-[10px] font-bold text-[#587e85] dark:text-[#6c9a9e] leading-tight break-words">
+                                                        {ticket.assigned_to_details.app_role}
+                                                    </div>
+                                                )}
+                                                {ticket.assigned_to_details?.employee_role && ticket.assigned_to_details.employee_role.toLowerCase().trim() !== ticket.assigned_to_details?.app_role?.toLowerCase()?.trim() && (
+                                                    <div className="text-[10px] text-slate-500 dark:text-slate-400 font-medium leading-tight break-words">
+                                                        {ticket.assigned_to_details.employee_role}
+                                                    </div>
+                                                )}
                                             </div>
                                         </div>
 
-                                        {/* Detailed User Metadata Grid */}
-                                        <div className="pt-2 border-t border-slate-100 dark:border-slate-700/60 grid grid-cols-2 gap-2 text-[10.5px]">
-                                            <div className="p-1.5 bg-slate-50 dark:bg-slate-900/50 rounded-lg">
-                                                <span className="text-[9px] font-bold text-slate-400 block uppercase tracking-wider">Location</span>
-                                                <span className="font-semibold text-slate-800 dark:text-slate-200 truncate block">
-                                                    📍 {ticket.assigned_to_details?.location && ticket.assigned_to_details.location.toLowerCase() !== 'hidden' ? ticket.assigned_to_details.location : 'Head Office'}
+                                        {/* Detailed User Metadata Grid - Responsive without truncation */}
+                                        <div className="pt-2 border-t border-slate-100 dark:border-slate-700/60 space-y-1.5 text-[10.5px]">
+                                            <div className="grid grid-cols-2 gap-1.5">
+                                                <div className="p-2 bg-slate-50 dark:bg-slate-900/50 rounded-xl min-w-0">
+                                                    <span className="text-[9px] font-bold text-slate-400 block uppercase tracking-wider mb-0.5">Location</span>
+                                                    <span className="font-semibold text-slate-800 dark:text-slate-200 block break-words leading-tight" title={ticket.assigned_to_details?.location || 'Head Office'}>
+                                                        📍 {ticket.assigned_to_details?.location && ticket.assigned_to_details.location.toLowerCase() !== 'hidden' ? ticket.assigned_to_details.location : 'Head Office'}
+                                                    </span>
+                                                </div>
+                                                <div className="p-2 bg-slate-50 dark:bg-slate-900/50 rounded-xl min-w-0">
+                                                    <span className="text-[9px] font-bold text-slate-400 block uppercase tracking-wider mb-0.5">Emp Code</span>
+                                                    <span className="font-mono font-bold text-slate-800 dark:text-slate-200 block leading-tight">
+                                                        {ticket.assigned_to_details?.employee_code || 'N/A'}
+                                                    </span>
+                                                </div>
+                                            </div>
+                                            <div className="p-2 bg-slate-50 dark:bg-slate-900/50 rounded-xl min-w-0">
+                                                <span className="text-[9px] font-bold text-slate-400 block uppercase tracking-wider mb-0.5">Department</span>
+                                                <span className="font-semibold text-slate-800 dark:text-slate-200 block break-words leading-snug" title={ticket.assigned_to_details?.department || 'Operations'}>
+                                                    🏢 {ticket.assigned_to_details?.department || 'Operations'}
                                                 </span>
                                             </div>
-                                            <div className="p-1.5 bg-slate-50 dark:bg-slate-900/50 rounded-lg">
-                                                <span className="text-[9px] font-bold text-slate-400 block uppercase tracking-wider">Department</span>
-                                                <span className="font-semibold text-slate-800 dark:text-slate-200 truncate block">
-                                                    🏢 {ticket.assigned_to_details?.department || 'HR Ops'}
-                                                </span>
-                                            </div>
-                                            <div className="p-1.5 bg-slate-50 dark:bg-slate-900/50 rounded-lg">
-                                                <span className="text-[9px] font-bold text-slate-400 block uppercase tracking-wider">Emp Code</span>
-                                                <span className="font-mono font-bold text-slate-800 dark:text-slate-200 truncate block">
-                                                    {ticket.assigned_to_details?.employee_code || 'N/A'}
-                                                </span>
-                                            </div>
-                                            <div className="p-1.5 bg-slate-50 dark:bg-slate-900/50 rounded-lg">
-                                                <span className="text-[9px] font-bold text-slate-400 block uppercase tracking-wider">App Role</span>
-                                                <span className="font-semibold text-indigo-600 dark:text-indigo-400 truncate block">
+                                            <div className="p-2 bg-slate-50 dark:bg-slate-900/50 rounded-xl min-w-0">
+                                                <span className="text-[9px] font-bold text-slate-400 block uppercase tracking-wider mb-0.5">App Role</span>
+                                                <span className="font-semibold text-indigo-600 dark:text-indigo-400 block break-words leading-snug" title={ticket.assigned_to_details?.app_role || 'HR Admin'}>
                                                     {ticket.assigned_to_details?.app_role || 'HR Admin'}
                                                 </span>
                                             </div>
@@ -1260,41 +1331,43 @@ export default function HRTicketDetailModal({ isOpen, ticketId, initialTicket, o
                                             </div>
 
                                             <div className="min-w-0 flex-1">
-                                                <div className="font-extrabold text-xs text-slate-900 dark:text-white truncate">
+                                                <div className="font-extrabold text-xs text-slate-900 dark:text-white leading-snug break-words" title={ticket.is_anonymous ? '🔒 Anonymous Employee' : (ticket.submitter_details?.full_name || ticket.employee_snapshot?.name || ticket.raised_by?.full_name || 'Employee')}>
                                                     {ticket.is_anonymous ? '🔒 Anonymous Employee' : (ticket.submitter_details?.full_name || ticket.employee_snapshot?.name || ticket.raised_by?.full_name || 'Employee')}
                                                 </div>
-                                                <div className="text-[10px] font-bold text-[#587e85] dark:text-[#6c9a9e] truncate">
+                                                <div className="text-[10px] font-bold text-[#587e85] dark:text-[#6c9a9e] leading-tight break-words">
                                                     {ticket.is_anonymous ? 'Confidential Identity' : (ticket.submitter_details?.designation || ticket.employee_snapshot?.designation || 'Staff')}
                                                 </div>
-                                                <div className="text-[10px] text-slate-500 dark:text-slate-400 font-medium truncate">
+                                                <div className="text-[10px] text-slate-500 dark:text-slate-400 font-medium leading-tight break-words">
                                                     {ticket.is_anonymous ? 'Identity Masked' : `Manager: ${ticket.submitter_details?.manager_name || ticket.employee_snapshot?.manager_name || ticket.employee_snapshot?.reporting_manager_name || 'N/A'}`}
                                                 </div>
                                             </div>
                                         </div>
 
-                                        {/* Submitter Metadata Grid */}
-                                        <div className="pt-2 border-t border-slate-100 dark:border-slate-700/60 grid grid-cols-2 gap-2 text-[10.5px]">
-                                            <div className="p-1.5 bg-slate-50 dark:bg-slate-900/50 rounded-lg">
-                                                <span className="text-[9px] font-bold text-slate-400 block uppercase tracking-wider">Location</span>
-                                                <span className="font-semibold text-slate-800 dark:text-slate-200 truncate block">
-                                                    📍 {ticket.is_anonymous ? 'Hidden' : (ticket.submitter_details?.location || ticket.employee_snapshot?.location || 'Head Office')}
-                                                </span>
+                                        {/* Submitter Metadata Grid - Responsive without truncation */}
+                                        <div className="pt-2 border-t border-slate-100 dark:border-slate-700/60 space-y-1.5 text-[10.5px]">
+                                            <div className="grid grid-cols-2 gap-1.5">
+                                                <div className="p-2 bg-slate-50 dark:bg-slate-900/50 rounded-xl min-w-0">
+                                                    <span className="text-[9px] font-bold text-slate-400 block uppercase tracking-wider mb-0.5">Location</span>
+                                                    <span className="font-semibold text-slate-800 dark:text-slate-200 block break-words leading-tight" title={ticket.is_anonymous ? 'Hidden' : (ticket.submitter_details?.location || ticket.employee_snapshot?.location || 'Head Office')}>
+                                                        📍 {ticket.is_anonymous ? 'Hidden' : (ticket.submitter_details?.location || ticket.employee_snapshot?.location || 'Head Office')}
+                                                    </span>
+                                                </div>
+                                                <div className="p-2 bg-slate-50 dark:bg-slate-900/50 rounded-xl min-w-0">
+                                                    <span className="text-[9px] font-bold text-slate-400 block uppercase tracking-wider mb-0.5">Emp Code</span>
+                                                    <span className="font-mono font-bold text-slate-800 dark:text-slate-200 block leading-tight">
+                                                        {ticket.is_anonymous ? 'Hidden' : (ticket.submitter_details?.employee_code || ticket.employee_snapshot?.code || 'N/A')}
+                                                    </span>
+                                                </div>
                                             </div>
-                                            <div className="p-1.5 bg-slate-50 dark:bg-slate-900/50 rounded-lg">
-                                                <span className="text-[9px] font-bold text-slate-400 block uppercase tracking-wider">Department</span>
-                                                <span className="font-semibold text-slate-800 dark:text-slate-200 truncate block">
+                                            <div className="p-2 bg-slate-50 dark:bg-slate-900/50 rounded-xl min-w-0">
+                                                <span className="text-[9px] font-bold text-slate-400 block uppercase tracking-wider mb-0.5">Department</span>
+                                                <span className="font-semibold text-slate-800 dark:text-slate-200 block break-words leading-snug" title={ticket.is_anonymous ? 'Confidential' : (ticket.submitter_details?.department || ticket.employee_snapshot?.department || 'Operations')}>
                                                     🏢 {ticket.is_anonymous ? 'Confidential' : (ticket.submitter_details?.department || ticket.employee_snapshot?.department || 'Operations')}
                                                 </span>
                                             </div>
-                                            <div className="p-1.5 bg-slate-50 dark:bg-slate-900/50 rounded-lg">
-                                                <span className="text-[9px] font-bold text-slate-400 block uppercase tracking-wider">Emp Code</span>
-                                                <span className="font-mono font-bold text-slate-800 dark:text-slate-200 truncate block">
-                                                    {ticket.is_anonymous ? 'Hidden' : (ticket.submitter_details?.employee_code || ticket.employee_snapshot?.code || 'N/A')}
-                                                </span>
-                                            </div>
-                                            <div className="p-1.5 bg-slate-50 dark:bg-slate-900/50 rounded-lg">
-                                                <span className="text-[9px] font-bold text-slate-400 block uppercase tracking-wider">Manager</span>
-                                                <span className="font-semibold text-indigo-600 dark:text-indigo-400 truncate block">
+                                            <div className="p-2 bg-slate-50 dark:bg-slate-900/50 rounded-xl min-w-0">
+                                                <span className="text-[9px] font-bold text-slate-400 block uppercase tracking-wider mb-0.5">Manager</span>
+                                                <span className="font-semibold text-indigo-600 dark:text-indigo-400 block break-words leading-snug" title={ticket.is_anonymous ? 'Hidden' : (ticket.submitter_details?.manager_name || ticket.employee_snapshot?.manager_name || ticket.employee_snapshot?.reporting_manager_name || 'N/A')}>
                                                     {ticket.is_anonymous ? 'Hidden' : (ticket.submitter_details?.manager_name || ticket.employee_snapshot?.manager_name || ticket.employee_snapshot?.reporting_manager_name || 'N/A')}
                                                 </span>
                                             </div>
@@ -1460,6 +1533,61 @@ export default function HRTicketDetailModal({ isOpen, ticketId, initialTicket, o
                                                         </button>
                                                     </div>
                                                 </div>
+                                            )}
+
+                                            {/* 3. Manual Escalation to Next Level (Admin Config toggle, current handler only) */}
+                                            {canManuallyEscalate && (
+                                                <>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => { setShowEscalateForm(!showEscalateForm); setEscalateError(''); }}
+                                                        className="w-full py-2.5 px-3 bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-800 rounded-2xl text-xs font-bold hover:bg-amber-100 dark:hover:bg-amber-950/70 transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                                                    >
+                                                        <ArrowUpRight className="w-4 h-4" />
+                                                        {showEscalateForm ? 'Hide Escalation Form' : `Escalate to Level ${nextEscalationLevel}`}
+                                                    </button>
+
+                                                    {showEscalateForm && (
+                                                        <div className="p-3.5 bg-amber-50/80 dark:bg-amber-950/40 rounded-2xl border border-amber-200 dark:border-amber-800 space-y-2.5 animate-in fade-in duration-200">
+                                                            <p className="text-[11px] text-amber-900 dark:text-amber-200 font-medium leading-relaxed">
+                                                                This hands the ticket to <strong>Level {nextEscalationLevel}{nextEscalationOwner ? ` (${nextEscalationOwner})` : ''}</strong> now, without waiting for the current TAT to expire. You will no longer be the active handler.
+                                                            </p>
+                                                            <label className="block text-[10px] font-black text-amber-800 dark:text-amber-300 uppercase tracking-wider">
+                                                                Reason for Escalation (optional)
+                                                            </label>
+                                                            <textarea
+                                                                rows={2}
+                                                                value={escalationReasonInput}
+                                                                onChange={(e) => setEscalationReasonInput(e.target.value)}
+                                                                placeholder="e.g. Needs HR policy decision beyond my authority..."
+                                                                className="w-full p-2.5 text-xs rounded-xl border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-amber-500 resize-none font-medium"
+                                                            />
+                                                            {escalateError && (
+                                                                <p className="text-[11px] font-semibold text-red-600 dark:text-red-400 flex items-center gap-1.5">
+                                                                    <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                                                                    {escalateError}
+                                                                </p>
+                                                            )}
+                                                            <div className="flex gap-2">
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={handleEscalate}
+                                                                    disabled={escalating}
+                                                                    className="flex-1 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold shadow-sm cursor-pointer disabled:opacity-60"
+                                                                >
+                                                                    {escalating ? 'Escalating...' : `Confirm Escalation to Level ${nextEscalationLevel}`}
+                                                                </button>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => setShowEscalateForm(false)}
+                                                                    className="px-3 py-2 bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold cursor-pointer"
+                                                                >
+                                                                    Cancel
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </>
                                             )}
                                         </div>
                                     ) : (
