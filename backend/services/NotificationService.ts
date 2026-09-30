@@ -2994,16 +2994,16 @@ export class NotificationService {
                 deepLink: `/hr-tickets?tab=tickets&id=${ticket.id}`
             });
 
-            // Dispatch WhatsApp Reportee Alert
-            const { WhatsAppEventProcessor } = await import('./WhatsAppEventProcessor');
-            WhatsAppEventProcessor.processEvent({
+            // Push event into event_outbox so recipients and platforms are resolved exclusively via Omnichannel matrix
+            await supabaseAdmin.from('event_outbox').insert({
                 event_type: 'HR_TICKET_REPORTEE_ALERT',
+                entity_id: ticket.id,
                 payload: {
                     ...ticket,
                     manager_user_id: managerUserId,
                     reportee_name: assigneeName
                 }
-            }).catch(e => console.error('[NotificationService] WhatsApp HR reportee alert error:', e));
+            });
         } catch (err) {
             console.error('[NotificationService] afterHrTicketCreatedForReportee error:', err);
         }

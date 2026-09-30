@@ -1286,11 +1286,36 @@ export default function OmnichannelNotificationSettings({ organizationId }: Omni
                 });
             });
 
+            // Ensure legacy HR alias keys mirror their modern v2 configuration
+            const finalMatrix = { ...matrix };
+            if (finalMatrix.hr_tickets) {
+                finalMatrix.hr_tickets = { ...finalMatrix.hr_tickets };
+                if (finalMatrix.hr_tickets.hr_ticket_assigned_handler_v2) {
+                    finalMatrix.hr_tickets.hr_ticket_assigned = { ...finalMatrix.hr_tickets.hr_ticket_assigned_handler_v2 };
+                }
+                if (finalMatrix.hr_tickets.hr_ticket_created_submitter_v2) {
+                    finalMatrix.hr_tickets.hr_ticket_created = { ...finalMatrix.hr_tickets.hr_ticket_created_submitter_v2 };
+                }
+            }
+
+            if (syncWhatsAppConfig['hr_ticket_assigned_handler_v2']) {
+                syncWhatsAppConfig['hr_ticket_assigned'] = { ...syncWhatsAppConfig['hr_ticket_assigned_handler_v2'] };
+            }
+            if (syncEmailConfig['hr_ticket_assigned_handler_v2']) {
+                syncEmailConfig['hr_ticket_assigned'] = { ...syncEmailConfig['hr_ticket_assigned_handler_v2'] };
+            }
+            if (syncWhatsAppConfig['hr_ticket_created_submitter_v2']) {
+                syncWhatsAppConfig['hr_ticket_created'] = { ...syncWhatsAppConfig['hr_ticket_created_submitter_v2'] };
+            }
+            if (syncEmailConfig['hr_ticket_created_submitter_v2']) {
+                syncEmailConfig['hr_ticket_created'] = { ...syncEmailConfig['hr_ticket_created_submitter_v2'] };
+            }
+
             const res = await fetch(`/api/admin/organizations/${organizationId}`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    notification_matrix: matrix,
+                    notification_matrix: finalMatrix,
                     whatsapp_service_config: syncWhatsAppConfig,
                     email_service_config: syncEmailConfig
                 })

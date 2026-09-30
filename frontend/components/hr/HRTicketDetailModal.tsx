@@ -391,12 +391,14 @@ export default function HRTicketDetailModal({ isOpen, ticketId, initialTicket, o
     if (!isOpen || !ticketId || !mounted) return null;
 
     const currentLvl = ticket?.current_level || 1;
+    const isConfOrAnon = Boolean(ticket?.is_confidential || ticket?.is_anonymous || ticket?.ticket_type === 'confidential_feedback' || ticket?.ticket_type === 'anonymous_feedback' || ticket?.ticket_type === 'confidential');
+
     const isAssignedToMe = Boolean(
         currentUserId && (
             ticket?.assigned_to_user_id === currentUserId ||
             ticket?.assigned_to?.id === currentUserId ||
-            (currentLvl === 1 && ticket?.manager_user_id === currentUserId) ||
-            (currentLvl === 1 && ticket?.employee_snapshot?.manager_user_id === currentUserId)
+            (!isConfOrAnon && currentLvl === 1 && ticket?.manager_user_id === currentUserId) ||
+            (!isConfOrAnon && currentLvl === 1 && ticket?.employee_snapshot?.manager_user_id === currentUserId)
         )
     );
     const isRaisedByMe = Boolean(currentUserId && ticket?.raised_by_user_id === currentUserId);
@@ -405,7 +407,21 @@ export default function HRTicketDetailModal({ isOpen, ticketId, initialTicket, o
     const normalizedRole = (currentUserRole || '').toLowerCase();
     const isHrRole = ['hr', 'hr_head', 'hr_manager', 'hr_ops'].includes(normalizedRole);
     const isSuperAdmin = ['org_super_admin', 'master_admin', 'super_admin', 'ops_super_admin'].includes(normalizedRole);
-    const isHandler = isAssignedToMe || (Array.isArray(ticket?.assigned_history) && ticket.assigned_history.includes(currentUserId));
+    const isHandler = isAssignedToMe || (Array.isArray(ticket?.assigned_history) && ticket.assigned_history.includes(currentUserId) && (!isConfOrAnon || (currentUserId !== ticket.manager_user_id && currentUserId !== ticket.employee_snapshot?.manager_user_id)));
+
+    const isSubmitter = Boolean(currentUserId && ticket?.raised_by_user_id === currentUserId);
+    const canViewInternalNotes = Boolean(isSuperAdmin || (isHandler && !isSubmitter) || (isHrRole && !isSubmitter));
+
+    const visibleAuditLogs = (() => {
+        if (!ticket?.audit_logs || !Array.isArray(ticket.audit_logs)) return [];
+        if (canViewInternalNotes) return ticket.audit_logs;
+        return ticket.audit_logs.filter((log: any) => {
+            const action = (log.action || '').toUpperCase();
+            if (action === 'INTERNAL_NOTE_ADDED' || action.includes('INTERNAL_NOTE')) return false;
+            if (log.new_values?.is_internal === true) return false;
+            return true;
+        });
+    })();
 
     let canChangeStatus = isSuperAdmin || isAssignedToMe;
     if (!canChangeStatus) {
@@ -847,7 +863,7 @@ export default function HRTicketDetailModal({ isOpen, ticketId, initialTicket, o
                                                     : 'text-slate-400 hover:text-slate-600'
                                             }`}
                                         >
-                                            Audit History ({ticket.audit_logs?.length || 0})
+                                            Audit History ({visibleAuditLogs.length})
                                         </button>
                                     </div>
                                 </div>
@@ -878,15 +894,19 @@ export default function HRTicketDetailModal({ isOpen, ticketId, initialTicket, o
                                                     let senderPhoto = comment.sender?.user_photo_url || null;
                                                     let isAnonymousSender = false;
 
-                                                    if (comment.sender_user_id && comment.sender_user_id === ticket.raised_by_user_id) {
-                                                        if (ticket.is_anonymous) {
-                                                            senderDisplayName = 'Anonymous Employee';
-                                                            senderPhoto = null;
-                                                            isAnonymousSender = true;
-                                                        } else {
-                                                            senderDisplayName = ticket.employee_snapshot?.name || ticket.raised_by?.full_name || comment.sender?.full_name || ticket.raised_by?.email || 'Employee';
-                                                            senderPhoto = senderPhoto || ticket.submitter_details?.photo_url || ticket.raised_by?.user_photo_url || null;
-                                                        }
+                                                    const isAnonTicket = Boolean(ticket.is_anonymous || ticket.ticket_type === 'anonymous_feedback');
+                                                    const isSenderHandler = comment.sender_user_id && (
+                                                        comment.sender_user_id === ticket.assigned_to_user_id || 
+                                                        (Array.isArray(ticket.assigned_history) && ticket.assigned_history.includes(comment.sender_user_id))
+                                                    );
+
+                                                    if (isAnonTicket && !isSenderHandler) {
+                                                        senderDisplayName = 'Anonymous Employee';
+                                                        senderPhoto = null;
+                                                        isAnonymousSender = true;
+                                                    } else if (comment.sender_user_id && comment.sender_user_id === ticket.raised_by_user_id) {
+                                                        senderDisplayName = ticket.employee_snapshot?.name || ticket.raised_by?.full_name || comment.sender?.full_name || ticket.raised_by?.email || 'Employee';
+                                                        senderPhoto = senderPhoto || ticket.submitter_details?.photo_url || ticket.raised_by?.user_photo_url || null;
                                                     } else if (comment.sender_user_id && comment.sender_user_id === ticket.assigned_to_user_id) {
                                                         senderDisplayName = ticket.assigned_to_details?.full_name || ticket.assigned_to?.full_name || comment.sender?.full_name || 'Assigned Handler';
                                                         senderPhoto = senderPhoto || ticket.assigned_to_details?.photo_url || ticket.assigned_to?.user_photo_url || null;
@@ -1112,15 +1132,23 @@ export default function HRTicketDetailModal({ isOpen, ticketId, initialTicket, o
                                         {/* Continuous Vertical Timeline Line */}
                                         <div className="absolute left-2.5 top-2 bottom-4 w-0.5 bg-slate-200 dark:bg-slate-800" />
 
-                                        {!ticket.audit_logs || ticket.audit_logs.length === 0 ? (
+                                        {visibleAuditLogs.length === 0 ? (
                                             <div className="text-center py-8 text-xs text-slate-400 font-medium">
                                                 No audit history entries recorded yet.
                                             </div>
                                         ) : (
-                                            ticket.audit_logs.map((log: any) => {
+                                            visibleAuditLogs.map((log: any) => {
                                                 const badge = getAuditActionBadge(log.action);
-                                                const actorPhoto = log.actor?.user_photo_url || log.actor?.avatar_url || log.actor?.raw_user_meta_data?.user_photo_url;
-                                                const actorName = log.actor?.full_name || log.actor?.email || 'System / Auto';
+                                                const isAnonTicket = Boolean(ticket?.is_anonymous || ticket?.ticket_type === 'anonymous_feedback');
+                                                const isHandlerActor = log.actor_user_id && (
+                                                    log.actor_user_id === ticket.assigned_to_user_id || 
+                                                    (Array.isArray(ticket.assigned_history) && ticket.assigned_history.includes(log.actor_user_id))
+                                                );
+
+                                                const actorPhoto = (isAnonTicket && !isHandlerActor) ? null : (log.actor?.user_photo_url || log.actor?.avatar_url || log.actor?.raw_user_meta_data?.user_photo_url);
+                                                const actorName = (isAnonTicket && !isHandlerActor) 
+                                                    ? 'Anonymous Employee' 
+                                                    : (log.actor?.full_name || log.actor?.email || 'System / Auto');
 
                                                 return (
                                                     <div key={log.id} className="relative flex items-start gap-3 group">

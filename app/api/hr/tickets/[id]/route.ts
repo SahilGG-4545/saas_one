@@ -86,24 +86,33 @@ export async function GET(
         const isSuperAdmin = orgSuperAdminRoles.includes(reqRole);
         const isHrRole = hrRoles.includes(reqRole);
         const isConfidential = Boolean(ticket.is_confidential) || ticket.ticket_type === 'confidential_feedback' || ticket.ticket_type === 'confidential';
+        const isAnon = Boolean(ticket.is_anonymous) || ticket.ticket_type === 'anonymous_feedback';
+        const isConfOrAnon = isConfidential || isAnon;
 
-        const isAssigned = Boolean(reqUserId && (ticket.assigned_to_user_id === reqUserId || (Array.isArray(ticket.assigned_history) && ticket.assigned_history.includes(reqUserId))));
+        const isAssigned = Boolean(
+            reqUserId && (
+                ticket.assigned_to_user_id === reqUserId || 
+                (Array.isArray(ticket.assigned_history) && ticket.assigned_history.includes(reqUserId) && (!isConfOrAnon || (reqUserId !== ticket.manager_user_id && reqUserId !== ticket.employee_snapshot?.manager_user_id)))
+            )
+        );
         const isSubmitter = Boolean(reqUserId && ticket.raised_by_user_id === reqUserId);
 
         if (ticket.is_anonymous) {
-            // Anonymous feedback tickets are strictly accessible to Org Super Admin and the assigned handler
-            if (!isSuperAdmin && !isAssigned) {
-                return NextResponse.json({ success: false, error: 'Anonymous feedback tickets are restricted to Org Super Admin and assigned users.' }, { status: 403 });
+            // Anonymous feedback tickets are strictly accessible to Org Super Admin, the assigned handler, or the submitter
+            if (!isSuperAdmin && !isAssigned && !isSubmitter) {
+                return NextResponse.json({ success: false, error: 'Anonymous feedback tickets are restricted to Org Super Admin, assigned users, and the submitter.' }, { status: 403 });
             }
-            ticket.raised_by = { id: null, email: 'anonymous@hidden.local', full_name: 'Anonymous Employee' };
-            ticket.employee_snapshot = {
-                name: 'Anonymous Employee',
-                department: 'Confidential',
-                location: 'Hidden',
-                manager_name: 'Hidden',
-                reporting_manager_name: 'Hidden',
-                code: 'Hidden'
-            };
+            if (!isSubmitter) {
+                ticket.raised_by = { id: null, email: 'anonymous@hidden.local', full_name: 'Anonymous Employee' };
+                ticket.employee_snapshot = {
+                    name: 'Anonymous Employee',
+                    department: 'Confidential',
+                    location: 'Hidden',
+                    manager_name: 'Hidden',
+                    reporting_manager_name: 'Hidden',
+                    code: 'Hidden'
+                };
+            }
         } else if (isConfidential) {
             // Confidential tickets are strictly restricted to Org Super Admin, the explicitly assigned user, or the submitter
             if (!isSuperAdmin && !isAssigned && !isSubmitter) {
@@ -454,14 +463,61 @@ export async function GET(
             };
         }
 
-        // Filter out internal notes for the creator of the request (submitter)
-        if (Array.isArray(ticket.comments)) {
-            const isAssigned = reqUserId && (ticket.assigned_to_user_id === reqUserId || (Array.isArray(ticket.assigned_history) && ticket.assigned_history.includes(reqUserId)));
-            const isSubmitter = reqUserId && ticket.raised_by_user_id === reqUserId;
-            const canViewInternalNotes = isSuperAdmin || (isAssigned && !isSubmitter) || (isHrRole && !isSubmitter);
+        // Filter out internal notes for the creator of the request (submitter) and unauthorized users
+        const canViewInternalNotes = isSuperAdmin || (isAssigned && !isSubmitter) || (isHrRole && !isSubmitter);
 
-            if (!canViewInternalNotes) {
+        if (!canViewInternalNotes) {
+            if (Array.isArray(ticket.comments)) {
                 ticket.comments = ticket.comments.filter((c: any) => !c.is_internal);
+            }
+            if (Array.isArray(ticket.audit_logs)) {
+                ticket.audit_logs = ticket.audit_logs.filter((log: any) => {
+                    const action = (log.action || '').toUpperCase();
+                    if (action === 'INTERNAL_NOTE_ADDED' || action.includes('INTERNAL_NOTE')) return false;
+                    if (log.new_values?.is_internal === true) return false;
+                    return true;
+                });
+            }
+        }
+
+        // Strictly mask employee comments and audit logs on anonymous tickets
+        if (ticket.is_anonymous || ticket.ticket_type === 'anonymous_feedback') {
+            const assignedIds = new Set([
+                ticket.assigned_to_user_id,
+                ...(Array.isArray(ticket.assigned_history) ? ticket.assigned_history : [])
+            ].filter(Boolean));
+
+            if (Array.isArray(ticket.comments)) {
+                ticket.comments = ticket.comments.map((c: any) => {
+                    const isHandler = c.sender_user_id && assignedIds.has(c.sender_user_id);
+                    if (!isHandler) {
+                        return {
+                            ...c,
+                            sender_user_id: null,
+                            sender_name: 'Anonymous Employee',
+                            sender: { full_name: 'Anonymous Employee', email: null, user_photo_url: null }
+                        };
+                    }
+                    return c;
+                });
+            }
+
+            if (Array.isArray(ticket.audit_logs)) {
+                ticket.audit_logs = ticket.audit_logs.map((log: any) => {
+                    const isHandler = log.actor_user_id && assignedIds.has(log.actor_user_id);
+                    if (!isHandler) {
+                        return {
+                            ...log,
+                            actor_user_id: null,
+                            actor: { full_name: 'Anonymous Employee', email: 'hidden', user_photo_url: null },
+                            new_values: log.new_values ? {
+                                ...log.new_values,
+                                ...(log.new_values.sender_name ? { sender_name: 'Anonymous Employee' } : {})
+                            } : log.new_values
+                        };
+                    }
+                    return log;
+                });
             }
         }
 

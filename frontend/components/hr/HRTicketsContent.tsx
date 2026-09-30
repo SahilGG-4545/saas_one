@@ -380,16 +380,18 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
         const tAssignedEmail = (t.assigned_to_email || t.assigned_to?.email || t.assigned_to_user_email || '').toLowerCase().trim();
         const tAssignedCode = (t.assigned_to_code || t.assigned_to?.employee_code || '').toLowerCase().trim();
 
+        const isConfOrAnon = Boolean(t.is_confidential || t.is_anonymous || t.ticket_type === 'confidential_feedback' || t.ticket_type === 'anonymous_feedback' || t.ticket_type === 'confidential');
+
         if (uid) {
             if (tAssignedId === uid || t.assigned_to_user_id === uid) return true;
-            if (t.manager_user_id === uid || t.employee_snapshot?.manager_user_id === uid) return true;
-            if (Array.isArray(t.assigned_history) && t.assigned_history.includes(uid)) return true;
-            if (Array.isArray(t.employee_snapshot?.assigned_history) && t.employee_snapshot.assigned_history.includes(uid)) return true;
+            if (!isConfOrAnon && (t.manager_user_id === uid || t.employee_snapshot?.manager_user_id === uid)) return true;
+            if (Array.isArray(t.assigned_history) && t.assigned_history.includes(uid) && (!isConfOrAnon || (uid !== t.manager_user_id && uid !== t.employee_snapshot?.manager_user_id))) return true;
+            if (Array.isArray(t.employee_snapshot?.assigned_history) && t.employee_snapshot.assigned_history.includes(uid) && (!isConfOrAnon || (uid !== t.manager_user_id && uid !== t.employee_snapshot?.manager_user_id))) return true;
         }
         if (pId) {
             if (tAssignedId === pId || tAssignedId.includes(pId)) return true;
-            if (Array.isArray(t.assigned_history) && t.assigned_history.includes(pId)) return true;
-            if (Array.isArray(t.employee_snapshot?.assigned_history) && t.employee_snapshot.assigned_history.includes(pId)) return true;
+            if (Array.isArray(t.assigned_history) && t.assigned_history.includes(pId) && (!isConfOrAnon || (pId !== t.manager_user_id && pId !== t.employee_snapshot?.manager_user_id))) return true;
+            if (Array.isArray(t.employee_snapshot?.assigned_history) && t.employee_snapshot.assigned_history.includes(pId) && (!isConfOrAnon || (pId !== t.manager_user_id && pId !== t.employee_snapshot?.manager_user_id))) return true;
         }
         if (uEmail && (tAssignedEmail === uEmail || tAssignedId.toLowerCase() === uEmail)) return true;
         if (pEmail && (tAssignedEmail === pEmail || tAssignedId.toLowerCase() === pEmail)) return true;

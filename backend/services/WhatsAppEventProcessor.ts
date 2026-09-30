@@ -2058,27 +2058,60 @@ export const WhatsAppEventProcessor = {
             });
         }
 
-        // 3. Trigger-Driven Email Dispatch (Resend / SMTP)
-        const { EmailService } = await import('./EmailService');
+        // 3. Trigger-Driven Email Dispatch (Resend / SMTP) - strictly respecting Omnichannel Matrix
+        try {
+            const { EmailRecipientResolver } = await import('./EmailRecipientResolver');
+            const { EmailService } = await import('./EmailService');
 
-        if (!isAnonymous && ticket?.raised_by?.email) {
-            EmailService.sendHrTicketCreatedEmail({
-                emailTo: ticket.raised_by.email,
-                ticket: ticket || payload,
-                submitterName: empName,
-                assignedOwnerName: assignedName,
-                categoryName
-            }).catch(err => console.error('[WhatsAppEventProcessor] Trigger-driven employee email error:', err));
-        }
+            // 3a. Submitter Email (Ticket Submitted)
+            if (!isAnonymous && ticket?.raised_by?.email) {
+                const submitterEmailResult = await EmailRecipientResolver.resolveRecipients({
+                    organizationId: orgId,
+                    propertyId: ticket?.property_id || payload?.property_id,
+                    featureKey: 'hr_ticket_created_submitter_v2',
+                    contextualRecipients: {
+                        requesterEmail: ticket.raised_by.email
+                    }
+                });
 
-        if (ticket?.assigned_to?.email && ticket.assigned_to.email !== ticket.raised_by?.email) {
-            EmailService.sendHrTicketAssignedEmail({
-                emailTo: ticket.assigned_to.email,
-                ticket: ticket || payload,
-                assigneeName: assignedName,
-                submitterName: empName,
-                categoryName
-            }).catch(err => console.error('[WhatsAppEventProcessor] Trigger-driven manager email error:', err));
+                if (submitterEmailResult.enabled && submitterEmailResult.emails.length > 0) {
+                    for (const email of submitterEmailResult.emails) {
+                        EmailService.sendHrTicketCreatedEmail({
+                            emailTo: email,
+                            ticket: ticket || payload,
+                            submitterName: empName,
+                            assignedOwnerName: assignedName,
+                            categoryName
+                        }).catch(err => console.error('[WhatsAppEventProcessor] Submitter email error:', err));
+                    }
+                }
+            }
+
+            // 3b. Handler Email (New Ticket Assignment)
+            if (ticket?.assigned_to?.email) {
+                const handlerEmailResult = await EmailRecipientResolver.resolveRecipients({
+                    organizationId: orgId,
+                    propertyId: ticket?.property_id || payload?.property_id,
+                    featureKey: 'hr_ticket_assigned_handler_v2',
+                    contextualRecipients: {
+                        assigneeEmail: ticket.assigned_to.email
+                    }
+                });
+
+                if (handlerEmailResult.enabled && handlerEmailResult.emails.length > 0) {
+                    for (const email of handlerEmailResult.emails) {
+                        EmailService.sendHrTicketAssignedEmail({
+                            emailTo: email,
+                            ticket: ticket || payload,
+                            assigneeName: assignedName,
+                            submitterName: empName,
+                            categoryName
+                        }).catch(err => console.error('[WhatsAppEventProcessor] Handler assignment email error:', err));
+                    }
+                }
+            }
+        } catch (emailErr) {
+            console.error('[WhatsAppEventProcessor] HR Ticket Created email dispatch error:', emailErr);
         }
     },
 
@@ -2115,15 +2148,31 @@ export const WhatsAppEventProcessor = {
             contextualUserIds: { assigneeId: ticket?.assigned_to_user_id || payload.assigned_to_user_id }
         });
 
-        if (ticket?.assigned_to?.email) {
-            const { EmailService } = await import('./EmailService');
-            EmailService.sendHrTicketAssignedEmail({
-                emailTo: ticket.assigned_to.email,
-                ticket: ticket || payload,
-                assigneeName: assignedName,
-                submitterName: empName,
-                categoryName
-            }).catch(err => console.error('[WhatsAppEventProcessor] Reassignment email error:', err));
+        try {
+            const { EmailRecipientResolver } = await import('./EmailRecipientResolver');
+            const emailResult = await EmailRecipientResolver.resolveRecipients({
+                organizationId: orgId,
+                propertyId: ticket?.property_id || payload?.property_id,
+                featureKey: 'hr_ticket_assigned_handler_v2',
+                contextualRecipients: {
+                    assigneeEmail: ticket?.assigned_to?.email
+                }
+            });
+
+            if (emailResult.enabled && emailResult.emails.length > 0) {
+                const { EmailService } = await import('./EmailService');
+                for (const email of emailResult.emails) {
+                    EmailService.sendHrTicketAssignedEmail({
+                        emailTo: email,
+                        ticket: ticket || payload,
+                        assigneeName: assignedName,
+                        submitterName: empName,
+                        categoryName
+                    }).catch(err => console.error('[WhatsAppEventProcessor] Reassignment email error:', err));
+                }
+            }
+        } catch (emailErr) {
+            console.error('[WhatsAppEventProcessor] HR ticket reassignment email error:', emailErr);
         }
     },
 
@@ -2289,16 +2338,34 @@ export const WhatsAppEventProcessor = {
             contextualUserIds: { assigneeId: assignedId }
         });
 
-        // 2. Email Alert to Assigned Handler
+        // 2. Email Alert to Assigned Handler - strictly respecting Omnichannel Matrix
         if (assignedUser?.email) {
-            const { EmailService } = await import('./EmailService');
-            EmailService.sendHrTicketAssignedEmail({
-                emailTo: assignedUser.email,
-                ticket: ticket || payload,
-                assigneeName: assignedName,
-                submitterName: submitterLabel,
-                categoryName: categoryLabel
-            }).catch(err => console.error('[WhatsAppEventProcessor] Confidential assigned email error:', err));
+            try {
+                const { EmailRecipientResolver } = await import('./EmailRecipientResolver');
+                const emailResult = await EmailRecipientResolver.resolveRecipients({
+                    organizationId: orgId,
+                    propertyId: ticket?.property_id || payload?.property_id,
+                    featureKey: 'hr_ticket_assigned_handler_v2',
+                    contextualRecipients: {
+                        assigneeEmail: assignedUser.email
+                    }
+                });
+
+                if (emailResult.enabled && emailResult.emails.length > 0) {
+                    const { EmailService } = await import('./EmailService');
+                    for (const email of emailResult.emails) {
+                        EmailService.sendHrTicketAssignedEmail({
+                            emailTo: email,
+                            ticket: ticket || payload,
+                            assigneeName: assignedName,
+                            submitterName: submitterLabel,
+                            categoryName: categoryLabel
+                        }).catch(err => console.error('[WhatsAppEventProcessor] Confidential assigned email error:', err));
+                    }
+                }
+            } catch (emailErr) {
+                console.error('[WhatsAppEventProcessor] Confidential assigned email error:', emailErr);
+            }
         }
     },
 
@@ -2335,16 +2402,34 @@ export const WhatsAppEventProcessor = {
             });
         }
 
-        // Trigger-Driven Resolution Email (Resend / SMTP)
+        // Trigger-Driven Resolution Email (Resend / SMTP) - strictly respecting Omnichannel Matrix
         if (!isAnonymous && ticket?.raised_by?.email) {
-            const { EmailService } = await import('./EmailService');
-            EmailService.sendHrTicketResolvedEmail({
-                emailTo: ticket.raised_by.email,
-                ticket: ticket || payload,
-                submitterName: empName,
-                resolverName,
-                resolutionNote
-            }).catch(err => console.error('[WhatsAppEventProcessor] Trigger-driven resolution email error:', err));
+            try {
+                const { EmailRecipientResolver } = await import('./EmailRecipientResolver');
+                const emailResult = await EmailRecipientResolver.resolveRecipients({
+                    organizationId: orgId,
+                    propertyId: ticket?.property_id || payload?.property_id,
+                    featureKey: 'hr_ticket_resolved_ack',
+                    contextualRecipients: {
+                        requesterEmail: ticket.raised_by.email
+                    }
+                });
+
+                if (emailResult.enabled && emailResult.emails.length > 0) {
+                    const { EmailService } = await import('./EmailService');
+                    for (const email of emailResult.emails) {
+                        EmailService.sendHrTicketResolvedEmail({
+                            emailTo: email,
+                            ticket: ticket || payload,
+                            submitterName: empName,
+                            resolverName,
+                            resolutionNote
+                        }).catch(err => console.error('[WhatsAppEventProcessor] Trigger-driven resolution email error:', err));
+                    }
+                }
+            } catch (emailErr) {
+                console.error('[WhatsAppEventProcessor] Resolution email error:', emailErr);
+            }
         }
     },
 
@@ -2405,14 +2490,33 @@ export const WhatsAppEventProcessor = {
         }
 
         if (targetUser?.email && (!isAnonymous || isSenderEmployee)) {
-            const { EmailService } = await import('./EmailService');
-            EmailService.sendHrTicketCommentAddedEmail({
-                emailTo: targetUser.email,
-                ticket: ticket || payload,
-                recipientName: targetName,
-                senderName,
-                commentSnippet: msgSnippet
-            }).catch(err => console.error('[WhatsAppEventProcessor] Comment email error:', err));
+            try {
+                const { EmailRecipientResolver } = await import('./EmailRecipientResolver');
+                const emailResult = await EmailRecipientResolver.resolveRecipients({
+                    organizationId: orgId,
+                    propertyId: ticket?.property_id || payload?.property_id,
+                    featureKey: 'hr_ticket_comment_added',
+                    contextualRecipients: {
+                        assigneeEmail: isSenderEmployee ? targetUser.email : undefined,
+                        requesterEmail: !isSenderEmployee ? targetUser.email : undefined
+                    }
+                });
+
+                if (emailResult.enabled && emailResult.emails.length > 0) {
+                    const { EmailService } = await import('./EmailService');
+                    for (const email of emailResult.emails) {
+                        EmailService.sendHrTicketCommentAddedEmail({
+                            emailTo: email,
+                            ticket: ticket || payload,
+                            recipientName: targetName,
+                            senderName,
+                            commentSnippet: msgSnippet
+                        }).catch(err => console.error('[WhatsAppEventProcessor] Comment email error:', err));
+                    }
+                }
+            } catch (emailErr) {
+                console.error('[WhatsAppEventProcessor] Comment email error:', emailErr);
+            }
         }
     },
 
@@ -2447,13 +2551,31 @@ export const WhatsAppEventProcessor = {
         });
 
         if (ticket?.assigned_to?.email) {
-            const { EmailService } = await import('./EmailService');
-            EmailService.sendHrTicketAcknowledgedEmail({
-                emailTo: ticket.assigned_to.email,
-                ticket: ticket || payload,
-                handlerName,
-                submitterName: empName
-            }).catch(err => console.error('[WhatsAppEventProcessor] Acknowledged email error:', err));
+            try {
+                const { EmailRecipientResolver } = await import('./EmailRecipientResolver');
+                const emailResult = await EmailRecipientResolver.resolveRecipients({
+                    organizationId: orgId,
+                    propertyId: ticket?.property_id || payload?.property_id,
+                    featureKey: 'hr_ticket_acknowledged_closed',
+                    contextualRecipients: {
+                        assigneeEmail: ticket.assigned_to.email
+                    }
+                });
+
+                if (emailResult.enabled && emailResult.emails.length > 0) {
+                    const { EmailService } = await import('./EmailService');
+                    for (const email of emailResult.emails) {
+                        EmailService.sendHrTicketAcknowledgedEmail({
+                            emailTo: email,
+                            ticket: ticket || payload,
+                            handlerName,
+                            submitterName: empName
+                        }).catch(err => console.error('[WhatsAppEventProcessor] Acknowledged email error:', err));
+                    }
+                }
+            } catch (emailErr) {
+                console.error('[WhatsAppEventProcessor] Acknowledged email error:', emailErr);
+            }
         }
     },
 

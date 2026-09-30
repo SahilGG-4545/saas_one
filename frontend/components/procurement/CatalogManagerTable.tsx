@@ -1027,13 +1027,38 @@ export default function CatalogManagerTable({
                             type="button"
                             onClick={() => {
                                 const selectedArr = Array.from(selectedItemIds);
-                                const firstItem = items.find(i => i.id === selectedArr[0]);
+                                const selectedItems = items.filter(i => selectedItemIds.has(i.id));
+
+                                // Calculate common properties assigned across selected items
+                                let resolvedInitialPropIds: string[] = [];
+
+                                if (selectedItems.length > 0) {
+                                    // Properties present on ALL selected items (intersection)
+                                    const commonProps = selectedItems.reduce<string[]>((acc, item, idx) => {
+                                        const itemProps = (item.assigned_property_ids || []).filter(p => p && p !== 'ALL');
+                                        if (idx === 0) return [...itemProps];
+                                        return acc.filter(id => itemProps.includes(id));
+                                    }, []);
+
+                                    if (commonProps.length > 0) {
+                                        resolvedInitialPropIds = commonProps;
+                                    } else {
+                                        // Union of assigned properties across selected items
+                                        const unionProps = Array.from(new Set(
+                                            selectedItems.flatMap(i => (i.assigned_property_ids || []).filter(p => p && p !== 'ALL'))
+                                        ));
+                                        resolvedInitialPropIds = unionProps;
+                                    }
+                                }
+
+                                if (filteredPropertyObj && !resolvedInitialPropIds.includes(filteredPropertyObj.id)) {
+                                    resolvedInitialPropIds = [filteredPropertyObj.id, ...resolvedInitialPropIds];
+                                }
+
                                 setPropertyModalState({
                                     isOpen: true,
                                     targetItemIds: selectedArr,
-                                    initialPropIds: filteredPropertyObj
-                                        ? [filteredPropertyObj.id]
-                                        : (selectedArr.length === 1 ? (firstItem?.assigned_property_ids || []) : [])
+                                    initialPropIds: resolvedInitialPropIds
                                 });
                             }}
                             className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-black uppercase tracking-wider transition-all shadow-md flex items-center gap-2 border border-slate-700 active:scale-95"
@@ -1603,7 +1628,14 @@ export default function CatalogManagerTable({
                     initialAssignedIds={propertyModalState.initialPropIds}
                     availableProperties={availableProperties}
                     isSaving={isSavingProp}
-                    activeFilterPropertyName={filteredPropertyObj?.name}
+                    activeFilterPropertyName={
+                        filteredPropertyObj?.name ||
+                        (filters.property.startsWith('count_')
+                            ? `Assigned to ${filters.property.replace('count_', '')} Properties`
+                            : (filters.propertyCountOp !== 'any' && filters.propertyCountValue
+                                ? `Assigned to ${filters.propertyCountValue} Properties`
+                                : undefined))
+                    }
                     onClose={() => setPropertyModalState(null)}
                     onSave={handleSavePropertyAssignments}
                 />
@@ -1643,6 +1675,14 @@ function PropertyAssignmentModal({
         new Set(isInitialAll ? [] : initialAssignedIds)
     );
     const [propSearch, setPropSearch] = useState('');
+
+    useEffect(() => {
+        if (isOpen) {
+            const isAll = initialAssignedIds.length === 0 || initialAssignedIds.includes('ALL');
+            setMode(isAll ? 'all' : 'specific');
+            setSelectedPropIds(new Set(isAll ? [] : initialAssignedIds));
+        }
+    }, [isOpen, initialAssignedIds]);
 
     if (!isOpen) return null;
 
