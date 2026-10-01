@@ -1,3 +1,5 @@
+import { campaignOptions } from '../lib/whatsapp/assistant/templates.mjs';
+
 const AISENSY_API_URL = 'https://backend.aisensy.com/campaign/t1/api/v2';
 
 export interface AiSensyTemplateOptions {
@@ -15,6 +17,24 @@ export interface AiSensySendResult {
 }
 
 export class AiSensyService {
+    /** Requires an approved template and an active API campaign in AiSensy. */
+    static async sendGreeting(phone: string): Promise<AiSensySendResult> {
+        return this.sendTemplate({
+            phone,
+            campaignName: process.env.AISENSY_GREETING_CAMPAIGN_NAME || 'fms_greeting_reply_v1',
+            templateParams: [],
+        });
+    }
+
+    static async sendAssistantReply(phone: string, reply: { key: string; params: string[] }): Promise<AiSensySendResult> {
+        try {
+            const overrides = JSON.parse(process.env.AISENSY_ASSISTANT_CAMPAIGNS || '{}');
+            return await this.sendTemplate(campaignOptions(phone, reply, overrides));
+        } catch (error) {
+            return { success: false, error: error instanceof Error ? error.message : 'Invalid assistant campaign configuration' };
+        }
+    }
+
     private static formatPhone(phone: string): string {
         const digits = phone.replace(/\D/g, '');
         // Indian 10-digit numbers → prepend country code 91
@@ -28,7 +48,7 @@ export class AiSensyService {
      */
     static async sendTemplate(options: AiSensyTemplateOptions): Promise<AiSensySendResult> {
         const apiKey = process.env.AISENSY_API_KEY;
-        const apiUrl = process.env.AISENSY_API_URL || 'https://backend.aisensy.com/campaign/t1/api/v2';
+        const apiUrl = process.env.AISENSY_API_URL || AISENSY_API_URL;
 
         if (!apiKey) {
             return { success: false, error: 'AISENSY_API_KEY not configured' };
@@ -40,7 +60,7 @@ export class AiSensyService {
         }
 
         try {
-            const bodyPayload: any = {
+            const bodyPayload: { apiKey: string; campaignName: string; destination: string; userName: string; templateParams: string[]; source: string; media?: { url: string; filename: string } } = {
                 apiKey,
                 campaignName: options.campaignName,
                 destination,
@@ -56,21 +76,22 @@ export class AiSensyService {
                 };
             }
 
-            console.log('[AiSensy Outgoing Payload]:', JSON.stringify({
+            console.info('[AiSensy] Sending campaign', {
                 campaignName: options.campaignName,
-                destination,
-                templateParams: options.templateParams,
-                paramCount: options.templateParams?.length
-            }, null, 2));
+                paramCount: options.templateParams.length,
+            });
 
+            const started = Date.now();
             const res = await fetch(apiUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(bodyPayload),
+                signal: AbortSignal.timeout(15_000),
             });
 
 
             const responseText = await res.text();
+            console.info('[AiSensy] API response', { campaign: options.campaignName, status: res.status, durationMs: Date.now() - started });
 
             if (!res.ok) {
                 console.error(`[AiSensy] ❌ Campaign "${options.campaignName}" failed — Status: ${res.status}`, responseText);
@@ -88,9 +109,9 @@ export class AiSensyService {
             }
 
             return { success: true };
-        } catch (err: any) {
+        } catch (err: unknown) {
             console.error('[AiSensy] ❌ Network error:', err);
-            return { success: false, error: err?.message || 'Network error' };
+            return { success: false, error: err instanceof Error ? err.message : 'Network error' };
         }
     }
 }

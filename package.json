@@ -7,7 +7,8 @@
     "build": "node --max-old-space-size=8192 ./node_modules/next/dist/bin/next build --webpack",
     "start": "next start",
     "lint": "eslint",
-    "lint:sql": "node scripts/lint_sql_migrations.js"
+    "lint:sql": "node scripts/lint_sql_migrations.js",
+    "test:whatsapp": "node --test --test-isolation=none tests/aisensy-greetings.test.mjs tests/whatsapp-assistant.test.mjs tests/whatsapp-assistant-worker.test.mjs tests/whatsapp-assistant-route.test.mjs tests/whatsapp-assistant-db.test.mjs tests/whatsapp-assistant-access.test.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.82.0",
@@ -72,6 +73,7 @@
     "zod": "^4.3.4"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/qrcode.react": "^1.0.5",
