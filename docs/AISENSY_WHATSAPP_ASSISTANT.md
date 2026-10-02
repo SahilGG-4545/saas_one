@@ -216,9 +216,8 @@ Buttons: none. Sample `{{1}}`:
    credit tables and the existing `deduct_meeting_room_credit` function.
 2. Submit the ten templates above and activate their API campaigns after approval.
 3. Retain the existing `AISENSY_API_KEY` and optional `AISENSY_API_URL` in Vercel.
-   Configure `AISENSY_WEBHOOK_SECRET` with a strong secret and configure AiSensy to
-   send it using `x-aisensy-secret`, `x-webhook-secret`, `Authorization: Bearer …`,
-   or a URL-encoded `secret` query parameter on the existing webhook URL.
+   Use the plain webhook URL below; no webhook secret, authentication header, or
+   query parameter is required. `AISENSY_WEBHOOK_SECRET` is no longer used.
 4. Set `AISENSY_ASSISTANT_ENABLED=true` after the migration and campaigns are ready.
    Ensure `CRON_SECRET` is configured; the retry cron is included in `vercel.json`.
 5. Deploy the branch. Test with a registered, approved WhatsApp number with active
@@ -231,8 +230,10 @@ The endpoint remains:
 https://fms-dev-saas-one.vercel.app/api/webhooks/aisensy
 ```
 
-If AiSensy uses a query secret, add `?secret=<URL-encoded-secret>` in its webhook
-configuration. Never put the actual secret in this document or source control.
+The inbound webhook is public and does not verify that requests originate from
+AiSensy. Registered-user and property access checks still apply, but a caller can
+forge a registered sender phone number. `CRON_SECRET` remains required for the
+separate recovery cron endpoint.
 
 Optional `AISENSY_ASSISTANT_CAMPAIGNS` overrides **campaign names**, by reply key:
 

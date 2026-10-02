@@ -33,9 +33,20 @@ const request = (body = payload, token = 'secret') => new next.NextRequest('http
     method: 'POST', headers: { 'Content-Type': 'application/json', 'x-aisensy-secret': token }, body: typeof body === 'string' ? body : JSON.stringify(body),
 });
 
-test('enabled webhook requires configured authentication', async () => {
-    assert.equal((await handler({ AISENSY_ASSISTANT_ENABLED: 'true' }).POST(request())).status, 503);
-    assert.equal((await handler({ AISENSY_ASSISTANT_ENABLED: 'true', AISENSY_WEBHOOK_SECRET: 'secret' }).POST(request(payload, 'wrong'))).status, 401);
+test('enabled webhook accepts the plain URL without a secret', async () => {
+    const route = handler({ AISENSY_ASSISTANT_ENABLED: 'true' });
+    const plainRequest = new next.NextRequest('https://example.com/api/webhooks/aisensy', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+    const response = await route.POST(plainRequest);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { success: true, queued: true, duplicate: false });
+    assert.equal(route.callbacks.length, 1);
+});
+
+test('a leftover webhook secret environment variable does not reject inbound messages', async () => {
+    const route = handler({ AISENSY_ASSISTANT_ENABLED: 'true', AISENSY_WEBHOOK_SECRET: 'old-secret' });
+    assert.equal((await route.POST(request(payload, 'wrong'))).status, 200);
 });
 
 test('webhook validates JSON and requires stable message ID', async () => {
