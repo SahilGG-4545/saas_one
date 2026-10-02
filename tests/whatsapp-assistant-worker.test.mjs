@@ -69,3 +69,27 @@ test('a direct captioned photo has an idempotency key before ticket creation', a
     assert.equal(requests[0].requestId, store.event.id);
     assert.equal(requests[0].title, 'Lift stuck');
 });
+
+
+test('permanent campaign failure does not block the next greeting menu', async () => {
+    const events = [
+        { id: 'missing-template', payload: {}, reply: { key: 'select', params: [] }, status: 'ready' },
+        { id: 'new-hi', payload: { text: 'Hi' }, snapshot: { step: 'property' }, reply: null, status: 'pending' },
+    ];
+    const store = {
+        async claim() { const event = events.find(item => !['sent', 'failed'].includes(item.status)); return event ? { event, token: 'lease' } : null; },
+        async save(claim, state, reply) { claim.event.reply = reply; },
+        async finish(claim, error) { claim.event.status = error ? 'ready' : 'sent'; },
+        async fail(claim, error) { claim.event.status = 'failed'; claim.event.error = error; },
+    };
+    const sent = [];
+    const processed = await drainPhone('919876543210', {
+        store, dependencies: {}, advance: async () => ({ session: { step: 'menu' }, reply: { key: 'menu', params: [] } }),
+        send: async (phone, reply) => { sent.push(reply.key); return reply.key === 'select' ?
+            { success: false, retryable: false, error: 'Campaign not found' } : { success: true }; },
+    });
+    assert.equal(processed, 1);
+    assert.deepEqual(sent, ['select', 'menu']);
+    assert.equal(events[0].status, 'failed');
+    assert.equal(events[1].status, 'sent');
+});

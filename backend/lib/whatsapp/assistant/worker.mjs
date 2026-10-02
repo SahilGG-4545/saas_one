@@ -18,6 +18,12 @@ export async function drainPhone(phone, { store, advance, dependencies, send, lo
                 reply = step.reply;
             }
             const sent = await send(phone, reply);
+            if (!sent.success && sent.retryable === false) {
+                await store.fail(claim, sent.error || 'Permanent AiSensy configuration failure');
+                log({ eventId: claim.event.id, status: 'failed', durationMs: Date.now() - started });
+                // A missing campaign cannot recover by retrying and must not block a new menu.
+                continue;
+            }
             if (!sent.success) throw new Error(sent.error || 'AiSensy rejected reply');
             await store.finish(claim, null);
             processed++;

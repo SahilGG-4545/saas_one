@@ -28,6 +28,9 @@ const store = {
     async save(claim: EventClaim, state: unknown, reply: unknown) {
         await rpc('whatsapp_assistant_save', { p_id: claim.event.id, p_token: claim.token, p_state: state, p_reply: reply });
     },
+    async fail(claim: EventClaim, error: string) {
+        await rpc('whatsapp_assistant_fail', { p_id: claim.event.id, p_token: claim.token, p_error: error });
+    },
     async finish(claim: EventClaim, error: string | null) {
         await rpc('whatsapp_assistant_finish', { p_id: claim.event.id, p_token: claim.token, p_error: error });
     },
