@@ -30,14 +30,14 @@ export async function POST(req: NextRequest) {
     try { body = await req.json(); }
     catch { return NextResponse.json({ error: 'Invalid JSON payload' }, { status: 400 }); }
     const input = normalizeInbound(body);
-    console.info('[AiSensyWebhook] Payload inspected', {
+    console.info('[AiSensyWebhook] Payload inspected', JSON.stringify({
         assistantEnabled: enabled,
         normalized: !!input,
         hasMessageId: !!input?.messageId,
         hasText: !!input?.text,
         hasMedia: !!input?.mediaUrl,
         shape: payloadShape(body),
-    });
+    }));
     if (!input) return NextResponse.json({ ok: true, ignored: true });
     if (input.mediaUrl) {
         try { if (new URL(input.mediaUrl).protocol !== 'https:') throw new Error('Invalid protocol'); }

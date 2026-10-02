@@ -85,10 +85,12 @@ test('ignored payloads report their nested structure without exposing message or
     assert.deepEqual(await response.json(), { ok: true, ignored: true });
     const diagnostic = route.logs.find(entry => entry[0] === '[AiSensyWebhook] Payload inspected');
     assert.ok(diagnostic, 'every parsed request should emit a diagnostic');
-    assert.equal(diagnostic[1].assistantEnabled, true);
-    assert.equal(diagnostic[1].normalized, false);
-    assert.equal(diagnostic[1].shape.data.unusualContact.number, 'string');
-    assert.equal(diagnostic[1].shape.data.unusualMessage.body, 'string');
+    assert.equal(typeof diagnostic[1], 'string');
+    const details = JSON.parse(diagnostic[1]);
+    assert.equal(details.assistantEnabled, true);
+    assert.equal(details.normalized, false);
+    assert.equal(details.shape.data.unusualContact.number, 'string');
+    assert.equal(details.shape.data.unusualMessage.body, 'string');
     const output = JSON.stringify(route.logs);
     for (const sensitive of ['919876543210', 'private greeting text', 'private-id']) assert.equal(output.includes(sensitive), false);
     assert.equal(route.callbacks.length, 0);
