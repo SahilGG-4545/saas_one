@@ -8,6 +8,17 @@ import { AiSensyService } from '@/backend/services/AiSensyService';
 export const runtime = 'nodejs';
 export const maxDuration = 120;
 
+// Log field names and types only: never sender numbers, message text, or credentials.
+// Bound traversal so unexpected provider payloads cannot create oversized logs.
+function payloadShape(value: unknown, depth = 0): unknown {
+    if (value === null) return 'null';
+    if (Array.isArray(value)) return depth >= 5 ? 'array' : value.slice(0, 1).map(item => payloadShape(item, depth + 1));
+    if (typeof value !== 'object') return typeof value;
+    if (depth >= 5) return 'object';
+    return Object.fromEntries(Object.entries(value).slice(0, 30)
+        .map(([key, item]) => [key, payloadShape(item, depth + 1)]));
+}
+
 export async function GET() {
     return NextResponse.json({ status: 'ok', service: 'AiSensy inbound webhook',
         assistantEnabled: process.env.AISENSY_ASSISTANT_ENABLED === 'true' });
@@ -19,6 +30,14 @@ export async function POST(req: NextRequest) {
     try { body = await req.json(); }
     catch { return NextResponse.json({ error: 'Invalid JSON payload' }, { status: 400 }); }
     const input = normalizeInbound(body);
+    console.info('[AiSensyWebhook] Payload inspected', {
+        assistantEnabled: enabled,
+        normalized: !!input,
+        hasMessageId: !!input?.messageId,
+        hasText: !!input?.text,
+        hasMedia: !!input?.mediaUrl,
+        shape: payloadShape(body),
+    });
     if (!input) return NextResponse.json({ ok: true, ignored: true });
     if (input.mediaUrl) {
         try { if (new URL(input.mediaUrl).protocol !== 'https:') throw new Error('Invalid protocol'); }
