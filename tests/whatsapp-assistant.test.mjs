@@ -1,4 +1,5 @@
 import test from 'node:test';
+import assert from 'node:assert/strict';
 import * as engine from '../backend/lib/whatsapp/assistant/engine.mjs';
 import * as protocol from '../backend/lib/whatsapp/assistant/protocol.mjs';
 import { runAssistantChecks } from './whatsapp-assistant-checks.mjs';
@@ -32,4 +33,16 @@ test('outer image metadata is retained for nested message payloads', () => {
 test('opaque provider button IDs use the human-readable quick-reply title', () => {
     const result = protocol.normalizeInbound({ topic: 'message.sender.user', data: { phone: '919876543210', messageId: 'button-2', message: { interactive: { button_reply: { id: 'provider-button-0', title: 'Create Ticket' } } } } });
     if (result.text !== 'Create Ticket') throw new Error('An opaque button ID must not hide the action title');
+});
+
+
+test('AiSensy project webhook reads nested phone text type and WhatsApp message ID', () => {
+    const payload = { id: 'delivery-1', topic: 'message.sender.user', delivery_attempt: '1', data: { message: {
+        id: 'provider-record-1', type: 'message', phone_number: '919876543210', sender: 'user',
+        message_content: { text: 'Hi' }, message_type: 'TEXT', messageId: 'wamid-aisensy-1',
+    } } };
+    const expected = { phone: '919876543210', messageId: 'wamid-aisensy-1', text: 'Hi', mediaUrl: null, mediaType: 'text' };
+    assert.deepEqual(protocol.normalizeInbound(payload), expected);
+    assert.deepEqual(protocol.normalizeInbound({ ...payload, id: 'delivery-2', delivery_attempt: '2' }), expected);
+    assert.equal(protocol.normalizeInbound({ ...payload, topic: 'message.sent.business' }), null);
 });
