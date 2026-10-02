@@ -17,11 +17,11 @@ export function normalizeInbound(body) {
         String(data.phone || data.mobile || data.mobileNumber || data.mobile_number || data.phoneNumber || data.phone_number || ''),
         data.userPhone, data.user_phone, data.customerPhone, data.senderPhone, data.sender_phone,
         data.waId, data.wa_id, data.from, data.sender?.phone, data.sender?.mobile,
-        data.user?.phone, data.contact?.phone, data.contacts?.[0]?.wa_id, msg.from,
+        data.user?.phone, data.contact?.phone, data.contacts?.[0]?.wa_id, msg.phone_number, msg.phoneNumber, msg.from,
         body.phone, body.mobile, body.from,
     ));
     if (!/^\d{11,15}$/.test(phone)) return null;
-    const mediaType = firstText(data.messageType, data.message_type, msg.type,
+    const mediaType = firstText(data.messageType, data.message_type, msg.message_type, msg.messageType, msg.type,
         !/[.]|inbound/i.test(data.type || '') ? data.type : '', body.messageType, body.message_type,
         !/[.]|inbound/i.test(body.type || '') ? body.type : '', 'text').toLowerCase();
     const image = msg.image || data.image || {};
@@ -36,13 +36,13 @@ export function normalizeInbound(body) {
         msg.interactive?.button_reply?.title, msg.interactive?.list_reply?.title,
         msg.button?.text, data.button?.text, data.buttonReply?.title,
         ...buttonIds,
-        msg.text?.body, msg.text, msg.body, image.caption, video.caption, msg.caption,
+        msg.message_content?.text, msg.text?.body, msg.text, msg.body, image.caption, video.caption, msg.caption,
         data.caption, data.text?.body, data.text, data.messageText, data.message_text,
         data.message, data.content, body.message, body.text,
     );
     const mediaUrl = firstText(data.mediaUrl, data.media_url, data.media?.url,
         image.url, video.url, msg.mediaUrl, msg.url, data.url, body.mediaUrl) || null;
-    const messageId = firstText(data.messageId, data.message_id, data.wamid, msg.id, data.id, body.messageId, body.id);
+    const messageId = firstText(data.messageId, data.message_id, data.wamid, msg.messageId, msg.message_id, msg.id, data.id, body.messageId, body.id);
     if (!text && !mediaUrl) return null;
     return { phone, messageId, text, mediaUrl, mediaType: mediaType === 'photo' ? 'image' : mediaType };
 }

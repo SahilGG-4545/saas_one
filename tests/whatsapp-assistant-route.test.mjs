@@ -95,3 +95,18 @@ test('ignored payloads report their nested structure without exposing message or
     for (const sensitive of ['919876543210', 'private greeting text', 'private-id']) assert.equal(output.includes(sensitive), false);
     assert.equal(route.callbacks.length, 0);
 });
+
+
+test('AiSensy nested project message is persisted and schedules the reply worker', async () => {
+    let stored;
+    const route = handler({ AISENSY_ASSISTANT_ENABLED: 'true' }, async input => { stored = input; return 'event-aisensy'; });
+    const response = await route.POST(request({ topic: 'message.sender.user', data: { message: {
+        phone_number: '919876543210', message_content: { text: 'Hi' }, message_type: 'TEXT',
+        type: 'message', id: 'provider-record', messageId: 'wamid-project-1',
+    } } }));
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { success: true, queued: true, duplicate: false });
+    assert.equal(stored.text, 'Hi');
+    assert.equal(stored.messageId, 'wamid-project-1');
+    assert.equal(route.callbacks.length, 1);
+});
