@@ -1,4 +1,3 @@
-import { timingSafeEqual } from 'node:crypto';
 import { NextRequest, NextResponse, after } from 'next/server';
 import { normalizeInbound } from '@/backend/lib/whatsapp/assistant/protocol.mjs';
 import { enqueueAssistantMessage, drainWhatsAppPhone } from '@/backend/lib/whatsapp/assistant/runtime';
@@ -9,13 +8,6 @@ import { AiSensyService } from '@/backend/services/AiSensyService';
 export const runtime = 'nodejs';
 export const maxDuration = 120;
 
-function secretMatches(value: string | null, expected: string) {
-    if (!value) return false;
-    const candidate = Buffer.from(value);
-    const secret = Buffer.from(expected);
-    return candidate.length === secret.length && timingSafeEqual(candidate, secret);
-}
-
 export async function GET() {
     return NextResponse.json({ status: 'ok', service: 'AiSensy inbound webhook',
         assistantEnabled: process.env.AISENSY_ASSISTANT_ENABLED === 'true' });
@@ -23,16 +15,6 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
     const enabled = process.env.AISENSY_ASSISTANT_ENABLED === 'true';
-    const secret = process.env.AISENSY_WEBHOOK_SECRET;
-    // A phone number in an unauthenticated payload must never authorize a booking.
-    if (enabled && !secret) return NextResponse.json({ error: 'Webhook authentication is not configured' }, { status: 503 });
-    if (secret) {
-        const supplied = req.headers.get('x-aisensy-secret') || req.headers.get('x-webhook-secret') || req.headers.get('authorization');
-        if (!secretMatches(req.nextUrl.searchParams.get('secret'), secret) &&
-            !secretMatches(supplied, secret) && !secretMatches(supplied, `Bearer ${secret}`)) {
-            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-        }
-    }
     let body: unknown;
     try { body = await req.json(); }
     catch { return NextResponse.json({ error: 'Invalid JSON payload' }, { status: 400 }); }
