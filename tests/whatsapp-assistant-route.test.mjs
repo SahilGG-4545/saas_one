@@ -12,6 +12,7 @@ const source = await readFile(new URL('../app/api/webhooks/aisensy/route.ts', im
 
 function handler(env, enqueue = async () => 'event-1') {
     const callbacks = [];
+    const logs = [];
     const exports = {};
     const imports = {
         'node:crypto': require('node:crypto'),
@@ -24,8 +25,8 @@ function handler(env, enqueue = async () => 'event-1') {
     };
     const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
     vm.runInNewContext(compiled, { exports, require: name => { if (!(name in imports)) throw new Error('Unexpected import ' + name); return imports[name]; },
-        Buffer, URL, process: { env }, console: { info() {}, error() {} } });
-    return { ...exports, callbacks };
+        Buffer, URL, process: { env }, console: { info: (...args) => logs.push(args), error() {} } });
+    return { ...exports, callbacks, logs };
 }
 
 const payload = { topic: 'message.sender.user', data: { phone: '919876543210', messageId: 'wamid-1', message: 'Hi' } };
@@ -73,5 +74,22 @@ test('outbound events are ignored and persistence failure requests delivery retr
     assert.equal((await ignored.json()).ignored, true);
     assert.equal(called, false);
     assert.equal((await route.POST(request())).status, 503);
+    assert.equal(route.callbacks.length, 0);
+});
+
+
+test('ignored payloads report their nested structure without exposing message or phone values', async () => {
+    const route = handler({ AISENSY_ASSISTANT_ENABLED: 'true' });
+    const unknown = { topic: 'message.sender.user', data: { unusualContact: { number: '919876543210' }, unusualMessage: { body: 'private greeting text', id: 'private-id' } } };
+    const response = await route.POST(request(unknown));
+    assert.deepEqual(await response.json(), { ok: true, ignored: true });
+    const diagnostic = route.logs.find(entry => entry[0] === '[AiSensyWebhook] Payload inspected');
+    assert.ok(diagnostic, 'every parsed request should emit a diagnostic');
+    assert.equal(diagnostic[1].assistantEnabled, true);
+    assert.equal(diagnostic[1].normalized, false);
+    assert.equal(diagnostic[1].shape.data.unusualContact.number, 'string');
+    assert.equal(diagnostic[1].shape.data.unusualMessage.body, 'string');
+    const output = JSON.stringify(route.logs);
+    for (const sensitive of ['919876543210', 'private greeting text', 'private-id']) assert.equal(output.includes(sensitive), false);
     assert.equal(route.callbacks.length, 0);
 });
