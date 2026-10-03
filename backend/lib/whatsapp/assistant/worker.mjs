@@ -11,13 +11,13 @@ export async function drainPhone(phone, { store, advance, dependencies, send, lo
         const started = Date.now();
         try {
             let reply = claim.event.reply;
-            if (!reply) {
+            if (!reply && claim.event.status !== 'ready') {
                 const step = await advance({ ...claim.event.payload, requestId: claim.event.id }, claim.event.snapshot, dependencies);
                 if (step.session && !step.session.id) step.session.id = claim.event.id;
                 await store.save(claim, step.session, step.reply);
                 reply = step.reply;
             }
-            const sent = await send(phone, reply);
+            const sent = reply ? await send(phone, reply) : { success: true };
             if (!sent.success && sent.retryable === false) {
                 await store.fail(claim, sent.error || 'Permanent AiSensy configuration failure');
                 log({ eventId: claim.event.id, status: 'failed', durationMs: Date.now() - started });

@@ -93,3 +93,24 @@ test('permanent campaign failure does not block the next greeting menu', async (
     assert.equal(events[0].status, 'failed');
     assert.equal(events[1].status, 'sent');
 });
+
+
+test('outbox-only completion retries finalization without submitting or sending a duplicate success reply', async () => {
+    const store = memoryStore();
+    let submissions = 0;
+    let sends = 0;
+    const originalFinish = store.finish;
+    let finishes = 0;
+    store.finish = async (claim, error) => {
+        if (!error && ++finishes === 1) throw new Error('Temporary finish failure');
+        await originalFinish(claim, error);
+        if (error) store.event.status = 'ready';
+    };
+    const worker = { store, dependencies: {}, advance: async () => { submissions++; return { session: null, reply: null }; },
+        send: async () => { sends++; return { success: true }; } };
+    await drainPhone('919876543210', worker);
+    await drainPhone('919876543210', worker);
+    assert.equal(submissions, 1);
+    assert.equal(sends, 0);
+    assert.equal(store.event.status, 'sent');
+});
