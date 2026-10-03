@@ -3,7 +3,7 @@
 > Planning only. Product code and database changes have not been implemented.
 > For agentic workers: use superpowers:executing-plans or superpowers:subagent-driven-development after this plan is reviewed. Track implementation with the checkboxes below.
 
-**Goal:** Let eligible internal users request property-linked petty cash, route it to selected allocators and approvers, receive funds after accounts records payment, and account for every expense with proof.
+**Goal:** Let eligible internal users request property-linked petty cash, route it automatically to system-configured allocators and approvers, receive funds after accounts records payment, and account for every expense with proof.
 
 **Architecture:** Extend the existing petty-cash module rather than introduce a parallel module. Keep requests, documents, activity, payment and settlement history; add property-specific assignments, an allocation stage, transaction records and an auditable requester wallet. Apply one server-side access policy to all reads, writes, reports, notifications and supporting files.
 
@@ -16,8 +16,8 @@
 Confirmed by the user:
 
 - All eligible internal users can access Petty Cash and request cash for a property.
-- UI selection supports property-specific allocators and approvers.
-- Requests go to allocator, then selected approver, then accounts for payment.
+- Only org super admins and ops super admins configure allocator and approver users per property through system settings. Requesters select neither actor; allocators do not select approvers.
+- Requests route automatically to the configured allocator, then the configured approver, then accounts for payment.
 - Clicking Paid credits the requester's wallet.
 - Every expense must contain transaction details and proof.
 - Allocators and approvers can process requests in bulk and see relevant spends.
@@ -29,7 +29,7 @@ Confirmed by the user:
 Proposed defaults for review:
 
 - Assignments are per property, not new organization-wide roles. An internal staff member can be an allocator at Property A and an ordinary requester at Property B.
-- Org/ops super admins configure the eligible allocator and approver lists. Requesters select a configured allocator; allocators select a configured approver during allocation. A single configured user is preselected, but shown clearly.
+- Org/ops super admins configure allocator and approver assignments with one designated primary for each stage/property. Additional configured users are backups available for explicit super-admin reassignment; they do not automatically gain access to requests assigned to another actor. The system resolves and snapshots both primary actors when a request is submitted.
 - A user's wallet is per organization; each advance and expense remains linked to its originating property and request. Changing property does not bypass the next-request gate.
 - Only one unresolved request pipeline per requester/organization: pending allocation, sent back, pending approval or approved/unpaid prevents another submission. Drafts can be saved but must pass the same gate on submission.
 - Accounts has a limited payment/reconciliation work queue, not the unrestricted employee-wallet/spend browser reserved for assigned actors and super admins. This is the necessary operational exception to the visibility rule.
@@ -43,7 +43,7 @@ Proposed defaults for review:
 | Current component | What exists now | Planned treatment |
 | --- | --- | --- |
 | `frontend/components/pettyCash/PettyCashDashboard.tsx` | My Requests, Approvals, Disbursements, All/Ledger, Tracker | Add wallet and personal expenses; assignment-based queues; consolidated super-admin reporting |
-| `NewRequestModal.tsx` | Property, amount, purpose, documents, selected approver | Keep request details; select configured allocator after property selection; show approver selection at allocation stage |
+| `NewRequestModal.tsx` | Property, amount, purpose, documents, selected approver | Keep request details and property selection; remove approver selection; show system-assigned actors as read-only information |
 | `RequestDetailDrawer.tsx` | Approval/payment/settlement actions, bills and timeline | Add allocation, explicit assigned actors, transaction list and lifecycle-specific actions |
 | `PettyCashTracker.tsx` | Request/property/custodian reconciliation | Retain history; add user-ID grouping, wallet/spend summaries and correct scoped totals |
 | `backend/lib/pettyCash/access.ts` and `frontend/lib/pettyCash/roles.ts` | Broad role-based approval and org/property visibility | Replace implicit manager approval with explicit assignments; ordinary users see own data only |
@@ -74,26 +74,26 @@ Capabilities combine when a user has multiple permitted assignments. Membership 
 | --- | --- | --- | --- |
 | Internal staff, security, MST, technicians, housekeeping, supervisors, managers, HR, procurement, other internal users | Yes | Own requests, wallet, expenses, proofs, timeline | Request cash, correct sent-back requests, record own expenses/proofs |
 | Property admin or org admin without assignment | Yes | Own data only | Same personal actions; no automatic coworker visibility/approval |
-| Assigned allocator | Yes | Own data plus requests assigned to them and their subsequent spends/history | Allocate/reject/send back; select approver; bulk allocation; inspect relevant expense proofs |
+| Assigned allocator | Yes | Own data plus requests assigned to them and their subsequent spends/history | Allocate/reject/send back; bulk allocation; inspect relevant expense proofs; no approver selection |
 | Assigned approver | Yes | Own data plus requests assigned to them and their subsequent spends/history | Approve/reject/send back; bulk approval; inspect relevant expense proofs |
 | Accounts team (`accounts`) | Yes, including accounts workspace | Own data plus approved payments and paid-request reconciliation items within configured finance scope | Mark Paid, verify payment evidence, review expense proofs and close reconciliation |
 | Org super admin / ops super admin | Yes | All petty cash within authorized organization, across properties/users | Configure routing, reassign pending requests, consolidated reports, inspect all spends/history; workflow actions only when explicitly assigned |
-| Existing master admin | Yes | Explicitly selected organization under existing platform access | Audited support/configuration; no automatic bypass of financial stages |
+| Existing master admin | Yes | Explicitly selected organization under existing platform access | Audited support visibility; routing edits require an org/ops super-admin membership; no automatic bypass of financial stages |
 | Tenants, tenant users/admins, super tenants | No | None | Direct routes/APIs/proofs also denied |
 | Food, pantry, cafeteria and other external/vendor roles | No | None | Cannot request or be selected as allocator/approver |
 
-Mixed memberships: evaluate eligibility within the selected organization/property. An external-only user is denied; a user with a genuine active internal membership can use that internal scope only. Do not let a tenant/vendor membership contribute eligible properties. Candidate search returns only selectable users, not the complete staff directory.
+Mixed memberships: evaluate eligibility within the selected organization/property. An external-only user is denied; a user with a genuine active internal membership can use that internal scope only. Do not let a tenant/vendor membership contribute eligible properties. Candidate search is available only to org/ops super admins configuring routing, and returns eligible internal users rather than exposing the directory to requesters.
 
 Accounts scope is organization-level when the active accounts membership is organization-level, otherwise restricted to their finance properties. Accounts receives only the fields/evidence necessary for payment and reconciliation; full cross-user wallet browsing requires a separate allocator/approver assignment or super-admin access.
 
-## 4. Property routing setup and selection
+## 4. System-configured property routing
 
 1. Add **Petty Cash Settings → Property Routing**, accessible to org/ops super admins.
-2. Select property, then choose eligible internal allocator(s) and approver(s), with optional defaults.
+2. Super admin selects property and adds eligible internal allocator(s) and approver(s), designating exactly one active primary per stage. Additional configured users serve as backups for explicit reassignment.
 3. Search by name/email; display role and property association. Permit eligible organization-level staff assigned to support that property; prohibit cross-organization and external users.
-4. Requester selects an authorized property, then a configured allocator. Changing property clears invalid selections.
-5. Allocator reviews purpose, requested amount, requester history and spends, enters allocated amount and remarks, then selects a configured approver.
-6. Save selected actor IDs on the request, alongside actual allocating/approving actor IDs and timestamps.
+4. Requester selects only an authorized property and fills cash-request details. The server resolves that property’s configured primary allocator and approver; the UI shows them read-only. Missing/inactive routing blocks submission with a configuration message.
+5. Assigned allocator reviews purpose, requested amount, requester history and spends, then enters allocated amount and remarks. Allocation automatically forwards the request to its snapshotted, system-configured approver; there is no approver selector.
+6. Resolve both actor IDs server-side from active property configuration and save them on the request, alongside actual allocating/approving actor IDs and timestamps. Reject requester/allocator payloads attempting to supply or change assigned actor IDs.
 7. Configuration changes apply to new requests. Pending requests require explicit reassignment and an audit entry; historical requests retain their actor history.
 8. Inactive or removed actors cannot perform new actions. Flag their pending requests for super-admin reassignment; never auto-approve.
 9. Existing SPOC rules may continue notification escalation, but assignment remains the authority for allocation/approval.
@@ -104,10 +104,10 @@ Recommended approach: explicit assignment tables plus snapshots on requests. Ext
 
 ```mermaid
 flowchart TD
-    A[Requester selects property and allocator] --> B{Wallet zero, proofs complete, no pending pipeline?}
+    A[Requester selects property; system assigns configured actors] --> B{Wallet zero, proofs complete, no pending pipeline?}
     B -->|No| C[Explain blocker and link to wallet or request]
     B -->|Yes| D[Pending allocation]
-    D --> E[Assigned allocator sets amount and selects approver]
+    D --> E[Assigned allocator sets amount; system forwards to configured approver]
     E --> F[Pending approval]
     F --> G[Assigned approver approves allocated amount]
     G --> H[Accounts payment queue]
@@ -123,8 +123,8 @@ flowchart TD
 Lifecycle mapping:
 
 - `draft`: editable personal draft; submission still validates routing and wallet.
-- `submitted`: Pending Allocation; selected allocator can act.
-- `pending_approval`: allocation recorded; only selected approver can act.
+- `submitted`: Pending Allocation; system-assigned allocator can act.
+- `pending_approval`: allocation recorded; only system-assigned approver can act.
 - `approved`: accounts can record payment; no wallet credit yet.
 - `paid`: successful payment transaction has credited wallet.
 - `settlement_submitted`: existing settlement/reconciliation queue remains available independently of next-request eligibility.
@@ -159,14 +159,14 @@ Server checks inside the request-creation transaction, not only a disabled UI bu
 3. Require exactly ₹0 remaining across funded advances in that organization.
 4. Require every posted expense to have complete valid proof; rejected/unresolved evidence blocks submission.
 5. Require no other pending allocation/approval/payment or sent-back pipeline.
-6. Validate property, allocator eligibility and active routing, then create the request atomically.
+6. Validate property and active routing, resolve both configured primary actors, validate eligibility and separation of duties, then snapshot assignments and create the request atomically.
 
 No `acknowledge_open_advances` override and no normal admin bypass. Missing wallet/reconciliation infrastructure returns an actionable failure; it never silently permits a request. Draft submission and resubmission use the same gate, excluding the request being resubmitted from the pending-pipeline check.
 
 ## 8. Bulk allocation and approval
 
-- Allocation queue supports selection of requests assigned to the current allocator. Show requested amount and an editable allocated amount plus approver for each row.
-- A common approver shortcut is allowed only if that user is eligible for every selected property; otherwise require per-row selection.
+- Allocation queue supports selection of requests assigned to the current allocator. Show requested amount, editable allocated amount and read-only system-assigned approver for each row.
+- Each bulk item automatically follows its own property configuration/request assignment. There is no common or per-row approver selector; invalid or inactive routing fails that item and requires super-admin reassignment.
 - Approval queue supports selection of requests assigned to the current approver. Show property, requester, allocation amount and expense/history access before confirmation.
 - Preview item count and total amount before submitting. Enforce a proposed maximum of 100 requests per batch.
 - Use the same permission/state rules as single actions. Each item is an independent atomic transaction with idempotency protection.
@@ -192,7 +192,7 @@ Use viewport-level modal portals for new petty-cash overlays to avoid sidebar st
 
 Proposed new data:
 
-- `petty_cash_property_assignments`: organization, property, user, assignment kind (`allocator`/`approver`), active/default flags, created/updated actor and timestamps. Validate same-org eligibility; unique active user/kind/property assignment and at most one default per kind/property.
+- `petty_cash_property_assignments`: organization, property, user, assignment kind (`allocator`/`approver`), active/primary flags, created/updated actor and timestamps. Validate same-org eligibility; unique active user/kind/property assignment and exactly one active primary per kind/property before routing is enabled.
 - Extend requests with `workflow_version`, `assigned_allocator_id`, `allocated_by`, `allocated_amount`, `allocated_at`, `allocation_remarks`, `sent_back_stage`, and concurrency/version data. Keep existing `assigned_approver_id` and actual approval/payment fields.
 - `petty_cash_wallets`: unique organization/requester, authoritative balance updated only through financial transactions. Retain per-advance balances for property attribution.
 - `petty_cash_expenses`: requester, request, property, organization, monetary amount, spend metadata and proof/review state.
@@ -201,8 +201,8 @@ Proposed new data:
 
 Extend existing APIs and add focused routes:
 
-- `GET/PUT /api/petty-cash/assignments`: scoped routing configuration.
-- `GET /api/petty-cash/candidates`: selectable candidates filtered by organization/property/assignment kind; validated search.
+- `GET/PUT /api/petty-cash/assignments`: routing configuration managed only by org/ops super admins; ordinary users receive only read-only routing information for their eligible property.
+- `GET /api/petty-cash/candidates`: super-admin-only configuration candidates filtered by organization/property/assignment kind; validated search.
 - Existing list/create/detail/action routes: assignment-aware authorization, allocation action and hard submission gate.
 - `GET /api/petty-cash/wallet`: personal wallet; another requester requires authorized oversight scope.
 - `POST /api/petty-cash/[id]/expenses`: record spend and evidence atomically.
@@ -251,8 +251,8 @@ API service-role access bypasses RLS, so explicit server checks remain mandatory
 **Modify:** `backend/lib/pettyCash/transitions.ts`, request routes, `PettyCashDashboard.tsx`, `NewRequestModal.tsx`, `RequestDetailDrawer.tsx`.
 **Create:** `backend/lib/pettyCash/actions.ts`, bulk route, `AllocationForm.tsx`, `BulkActionPanel.tsx`, request workflow migration.
 
-- [ ] Write failing state tests: approve before allocation, unassigned manager, self-action, stale version, invalid amount, inactive selected actor, cross-property bulk approver, and sent-back edits.
-- [ ] Implement `submitted → pending_approval → approved` and routing snapshots/explicit reassignment.
+- [ ] Write failing state tests: approve before allocation, unassigned manager, self-action, stale version, invalid amount, inactive configured actor, unauthorized assignment payload, cross-property automatic bulk routing, and sent-back edits.
+- [ ] Implement `submitted → pending_approval → approved`, server-resolved routing snapshots and super-admin-only explicit reassignment. Verify requester and allocator forms contain no actor-selection controls.
 - [ ] Implement shared transactional action service and bulk per-item outcomes.
 - [ ] Verify mixed-validity batches, retries and simultaneous actor clicks produce one action/audit per request.
 - [ ] Commit allocation/approval changes with passing focused tests.
@@ -275,7 +275,7 @@ API service-role access bypasses RLS, so explicit server checks remain mandatory
 **Create:** `ConsolidatedOverview.tsx`, scoped reporting helpers and reviewed data backfill migration/script.
 
 - [ ] Test org/ops consolidated totals beyond existing 50/200-row limits and identical scope between summary, detail and proof download.
-- [ ] Route notifications to selected allocator, then selected approver, then eligible accounts; requester receives allocation/approval/payment/proof-status updates.
+- [ ] Route notifications to system-assigned allocator, then system-assigned approver, then eligible accounts; requester receives allocation/approval/payment/proof-status updates.
 - [ ] Test email actions enforce identical stage/assignment rules and removed users lose action rights. Notification failure never retries a financial debit/credit.
 - [ ] Test historical paid/closed/alternate-custodian/reimbursement records and backfill idempotency against audited fixtures.
 - [ ] Validate ledger balance = payment credits − expense debits − confirmed returns + audited adjustments; reconcile migration totals before activation.
@@ -292,6 +292,6 @@ API service-role access bypasses RLS, so explicit server checks remain mandatory
 
 ## 13. Decisions to review before implementation
 
-The ₹0 + complete-proofs rule is confirmed. Please review the proposed defaults: super admins configure property routing; requester chooses allocator and allocator chooses approver; assigned actors see their assigned requests/spends rather than every user at the property; accounts gets only its payment/reconciliation work; self-actions are prohibited; unused cash returns can zero the wallet; new reimbursements are outside this advance-wallet release.
+The ₹0 + complete-proofs rule and super-admin-only configuration with automatic routing are confirmed. Please review the proposed defaults: org/ops super admins alone configure property routing and the system assigns both actors automatically; assigned actors see their assigned requests/spends rather than every user at the property; accounts gets only its payment/reconciliation work; self-actions are prohibited; unused cash returns can zero the wallet; new reimbursements are outside this advance-wallet release.
 
 No implementation or deployment is included in this planning change.
