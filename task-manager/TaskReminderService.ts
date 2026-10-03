@@ -1,5 +1,6 @@
 import { supabaseAdmin } from '@/backend/lib/supabase/admin';
 import { WhatsAppService } from '@/backend/services/WhatsAppService';
+import { AiSensyService } from '@/backend/services/AiSensyService';
 import { TaskManagerService } from './TaskManagerService';
 
 export class TaskReminderService {
@@ -11,20 +12,53 @@ export class TaskReminderService {
     }
 
     /**
-     * Helper to send WhatsApp text to an enrolled employee.
+     * Helper to send WhatsApp text / template to an enrolled employee via AiSensy.
      */
-    private static async sendWhatsApp(phone: string, text: string): Promise<boolean> {
+    private static async sendWhatsApp(phone: string, text: string, name?: string): Promise<{ success: boolean; error?: string }> {
+        const campaignName = process.env.AISENSY_TASK_CAMPAIGN_NAME || 'tm_daily_report_nudge_v1';
         try {
-            await WhatsAppService.sendAsync(phone, {
-                message: text,
-                templateName: process.env.AISENSY_TASK_CAMPAIGN_NAME || undefined,
-                templateParams: process.env.AISENSY_TASK_CAMPAIGN_NAME ? [text] : undefined,
+            const res = await AiSensyService.sendTemplate({
+                phone,
+                campaignName,
+                userName: name || 'User',
+                templateParams: [name || 'Team Member'],
             });
-            return true;
-        } catch (err) {
+
+            if (!res.success) {
+                console.warn(`[TaskReminderService] AiSensy delivery note for ${phone} (${campaignName}):`, res.error);
+            }
+            return res;
+        } catch (err: any) {
             console.warn(`[TaskReminderService] Failed to send WhatsApp to ${phone}:`, err);
-            return false;
+            return { success: false, error: err?.message || 'Delivery failed' };
         }
+    }
+
+    /**
+     * Send an EOD reminder to an individual team member.
+     */
+    static async sendSingleMemberNudge(params: {
+        phone: string;
+        name?: string;
+        dryRun?: boolean;
+    }): Promise<{ success: boolean; error?: string; message?: string }> {
+        const { phone, name = 'Team Member', dryRun = false } = params;
+        if (!phone) {
+            return { success: false, error: 'Phone number is required' };
+        }
+
+        if (dryRun) {
+            return { success: true, message: `[Dry Run] Simulated WhatsApp reminder to ${name} (${phone})` };
+        }
+
+        const res = await this.sendWhatsApp(phone, `Hi ${name}, please share your daily EOD report update.`, name);
+        return {
+            success: res.success,
+            error: res.error,
+            message: res.success
+                ? `Sent WhatsApp reminder to ${name} via Autopilot Offices Bot.`
+                : (res.error || 'Failed to send WhatsApp message'),
+        };
     }
 
     /**
@@ -52,12 +86,7 @@ export class TaskReminderService {
             console.warn('[TaskReminderService] tm_members query error:', err);
         }
 
-        // Fallback to test user if table empty
-        if (members.length === 0) {
-            const testPhone = process.env.TEST_WHATSAPP_PHONE || '8433649199';
-            const member = await TaskManagerService.getMemberByPhone(testPhone);
-            if (member) members = [member];
-        }
+
 
         // 2. Fetch reports submitted today
         const { data: reports } = await supabaseAdmin
@@ -85,7 +114,7 @@ export class TaskReminderService {
             ].join('\n');
 
             if (!options.dryRun && member.phone) {
-                await this.sendWhatsApp(member.phone, message);
+                await this.sendWhatsApp(member.phone, message, member.full_name);
             }
 
             nudgedMembers.push({
@@ -126,11 +155,7 @@ export class TaskReminderService {
             console.warn('[TaskReminderService] tm_members query error:', err);
         }
 
-        if (members.length === 0) {
-            const testPhone = process.env.TEST_WHATSAPP_PHONE || '8433649199';
-            const member = await TaskManagerService.getMemberByPhone(testPhone);
-            if (member) members = [member];
-        }
+
 
         const recipients: string[] = [];
 
@@ -212,11 +237,7 @@ export class TaskReminderService {
             console.warn('[TaskReminderService] tm_members superusers query error:', err);
         }
 
-        if (superusers.length === 0) {
-            const testPhone = process.env.TEST_WHATSAPP_PHONE || '8433649199';
-            const fallback = await TaskManagerService.getMemberByPhone(testPhone);
-            if (fallback && fallback.is_superuser) superusers = [fallback];
-        }
+
 
         // 2. Fetch stats
         const { count: activeTasksCount } = await supabaseAdmin

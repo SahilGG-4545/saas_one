@@ -12,6 +12,19 @@ export async function POST(request: NextRequest) {
         const body = await request.json().catch(() => ({}));
         const { action = 'eod_nudge', dryRun = false } = body;
 
+        if (action === 'nudge_member') {
+            const { phone, name } = body;
+            if (!phone) {
+                return NextResponse.json({ ok: false, error: 'Phone number is required' }, { status: 400 });
+            }
+            const result = await TaskReminderService.sendSingleMemberNudge({ phone, name, dryRun });
+            return NextResponse.json({
+                ok: result.success,
+                message: result.message || (result.success ? `Sent WhatsApp nudge to ${name}` : result.error),
+                result,
+            }, { status: result.success ? 200 : 400 });
+        }
+
         if (action === 'eod_nudge') {
             const result = await TaskReminderService.sendDailyReportNudges({ dryRun });
             return NextResponse.json({
