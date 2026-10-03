@@ -28,6 +28,8 @@ async function database() {
     const deduct = creditSql.slice(creditSql.indexOf('CREATE OR REPLACE FUNCTION deduct_meeting_room_credit('), creditSql.indexOf('-- Function: Atomically refund'));
     await db.exec(deduct);
     await db.exec(await readFile(new URL('../supabase/migrations/20261001000001_whatsapp_assistant.sql', import.meta.url), 'utf8'));
+    await db.exec(await readFile(new URL('../supabase/migrations/20261002000001_whatsapp_assistant_permanent_failures.sql', import.meta.url), 'utf8'));
+    await db.exec(await readFile(new URL('../supabase/migrations/20261003000001_whatsapp_message_booking.sql', import.meta.url), 'utf8'));
     await db.exec(`
         INSERT INTO users(id) VALUES ('${uuid(1)}'),('${uuid(2)}'),('${uuid(3)}');
         INSERT INTO properties(id,name,organization_id) VALUES ('${uuid(10)}','Hub One','${uuid(20)}'),('${uuid(11)}','Hub Two','${uuid(20)}'),('${uuid(12)}','Other Org','${uuid(21)}');
@@ -94,5 +96,43 @@ test('event RPCs deduplicate, serialize a sender, persist prompts, and expire se
         assert.equal((await claim(uuid(204))).snapshot, null);
         const grants = await db.query("select has_function_privilege('authenticated','whatsapp_assistant_book(uuid,uuid,uuid,uuid,date,uuid)','EXECUTE') as allowed");
         assert.equal(grants.rows[0].allowed, false);
+    } finally { await db.close(); }
+});
+
+
+test('permanent reply failure releases the sender for the next greeting and requires its lease', async () => {
+    const db = await database();
+    try {
+        const phone = '919876543210';
+        const first = (await db.query('select whatsapp_assistant_enqueue($1) as id', [{ phone, messageId: 'missing-template', text: 'Create Ticket' }])).rows[0].id;
+        const second = (await db.query('select whatsapp_assistant_enqueue($1) as id', [{ phone, messageId: 'new-hi', text: 'Hi' }])).rows[0].id;
+        await db.query('select whatsapp_assistant_claim($1,$2)', [phone, uuid(300)]);
+        await db.query('select whatsapp_assistant_save($1,$2,$3,$4)', [first, uuid(300), { step: 'property' }, { key: 'select', params: [] }]);
+        await assert.rejects(db.query('select whatsapp_assistant_fail($1,$2,$3)', [first, uuid(301), 'Campaign not found']), /lease lost/);
+        await db.query('select whatsapp_assistant_fail($1,$2,$3)', [first, uuid(300), 'Campaign not found']);
+        assert.equal((await db.query('select status from whatsapp_assistant_events where id=$1', [first])).rows[0].status, 'failed');
+        assert.equal((await db.query('select whatsapp_assistant_claim($1,$2) as event', [phone, uuid(302)])).rows[0].event.id, second);
+        assert.equal((await db.query("select has_function_privilege('authenticated','whatsapp_assistant_fail(uuid,uuid,text)','EXECUTE') as allowed")).rows[0].allowed, false);
+    } finally { await db.close(); }
+});
+
+test('natural time-range booking is atomic, scoped, idempotent and covered by configured slots', async () => {
+    const db = await database();
+    try {
+        const book = (user, start, end, request, room = 30) => db.query('select whatsapp_assistant_book_range($1,$2,$3,$4,$5,$6,$7) as booking',
+            [uuid(user), uuid(10), uuid(room), '2099-10-01', start, end, uuid(request)]);
+        const first = (await book(2, '10:30', '11:30', 400)).rows[0].booking;
+        assert.equal(first.start_time, '10:30:00');
+        assert.equal((await book(2, '10:30', '11:30', 400)).rows[0].booking.id, first.id);
+        assert.equal(Number((await db.query('select remaining_hours from meeting_room_credits where id=$1', [uuid(60)])).rows[0].remaining_hours), 1);
+        await assert.rejects(book(2, '11:00', '12:00', 401), /SLOT_UNAVAILABLE/);
+        await assert.rejects(book(3, '11:30', '12:00', 402), /No active access/);
+        await assert.rejects(book(2, '11:30', '12:00', 403, 31), /Room is not active/);
+        await assert.rejects(book(2, '12:00', '13:00', 404), /Outside configured booking slots/);
+        await assert.rejects(book(2, '11:00', '10:00', 405), /Invalid or past interval/);
+        await db.exec(`update meeting_room_credits set remaining_hours=0 where id='${uuid(60)}'`);
+        await assert.rejects(book(2, '11:30', '12:00', 406), /INSUFFICIENT_CREDITS/);
+        assert.equal((await db.query('select count(*)::int as n from meeting_room_bookings')).rows[0].n, 1);
+        assert.equal((await db.query("select has_function_privilege('authenticated','whatsapp_assistant_book_range(uuid,uuid,uuid,date,time,time,uuid)','EXECUTE') as allowed")).rows[0].allowed, false);
     } finally { await db.close(); }
 });

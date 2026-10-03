@@ -14,6 +14,7 @@ export interface AiSensyTemplateOptions {
 export interface AiSensySendResult {
     success: boolean;
     error?: string;
+    retryable?: boolean;
 }
 
 export class AiSensyService {
@@ -31,7 +32,7 @@ export class AiSensyService {
             const overrides = JSON.parse(process.env.AISENSY_ASSISTANT_CAMPAIGNS || '{}');
             return await this.sendTemplate(campaignOptions(phone, reply, overrides));
         } catch (error) {
-            return { success: false, error: error instanceof Error ? error.message : 'Invalid assistant campaign configuration' };
+            return { success: false, error: error instanceof Error ? error.message : 'Invalid assistant campaign configuration', retryable: false };
         }
     }
 
@@ -51,12 +52,12 @@ export class AiSensyService {
         const apiUrl = process.env.AISENSY_API_URL || AISENSY_API_URL;
 
         if (!apiKey) {
-            return { success: false, error: 'AISENSY_API_KEY not configured' };
+            return { success: false, error: 'AISENSY_API_KEY not configured', retryable: false };
         }
 
         const destination = this.formatPhone(options.phone);
         if (!destination || destination.length < 11) {
-            return { success: false, error: `Invalid phone number: ${options.phone}` };
+            return { success: false, error: `Invalid phone number: ${options.phone}`, retryable: false };
         }
 
         try {
@@ -95,14 +96,17 @@ export class AiSensyService {
 
             if (!res.ok) {
                 console.error(`[AiSensy] ❌ Campaign "${options.campaignName}" failed — Status: ${res.status}`, responseText);
-                return { success: false, error: `AiSensy HTTP ${res.status}: ${responseText}` };
+                return { success: false, error: `AiSensy HTTP ${res.status}: ${responseText}`,
+                    retryable: !(res.status >= 400 && res.status < 500 && ![408, 409, 425, 429].includes(res.status)) };
             }
 
             try {
                 const parsed = JSON.parse(responseText);
                 if (parsed.success === false) {
                     console.error(`[AiSensy] ❌ Campaign "${options.campaignName}" API error:`, parsed.message || 'unknown');
-                    return { success: false, error: parsed.message || 'AiSensy API returned failure' };
+                    const error = typeof parsed.message === 'string' ? parsed.message : 'AiSensy API returned failure';
+                    const permanent = /campaign.*(inactive|not active|not found|does not exist|invalid)|invalid.*campaign|template.*(not found|not approved|does not exist)/i.test(error);
+                    return { success: false, error, retryable: !permanent };
                 }
             } catch {
                 // Non-JSON response — treat as success if HTTP was ok

@@ -28,6 +28,9 @@ const store = {
     async save(claim: EventClaim, state: unknown, reply: unknown) {
         await rpc('whatsapp_assistant_save', { p_id: claim.event.id, p_token: claim.token, p_state: state, p_reply: reply });
     },
+    async fail(claim: EventClaim, error: string) {
+        await rpc('whatsapp_assistant_fail', { p_id: claim.event.id, p_token: claim.token, p_error: error });
+    },
     async finish(claim: EventClaim, error: string | null) {
         await rpc('whatsapp_assistant_finish', { p_id: claim.event.id, p_token: claim.token, p_error: error });
     },
@@ -54,6 +57,24 @@ async function slots(propertyId: string, roomId: string, date: string) {
         !(bookingResult.data || []).some(booking => booking.start_time < slot.end_time && booking.end_time > slot.start_time));
 }
 
+async function availableRooms(propertyId: string, date: string, startTime: string, endTime: string) {
+    const [roomList, booked, configured] = await Promise.all([
+        rooms(propertyId),
+        supabaseAdmin.from('meeting_room_bookings').select('meeting_room_id').eq('property_id', propertyId)
+            .eq('booking_date', date).eq('status', 'confirmed').lt('start_time', endTime).gt('end_time', startTime),
+        supabaseAdmin.from('meeting_room_slots').select('start_time,end_time').order('start_time'),
+    ]);
+    if (booked.error) throw booked.error;
+    if (configured.error) throw configured.error;
+    // Check union coverage; the transactional RPC checks it again before inserting.
+    let coveredUntil = startTime;
+    for (const slot of configured.data || []) {
+        if (slot.start_time.slice(0, 5) <= coveredUntil && slot.end_time.slice(0, 5) > coveredUntil) coveredUntil = slot.end_time.slice(0, 5);
+    }
+    if (coveredUntil < endTime) return [];
+    return roomList.filter(room => !(booked.data || []).some(booking => booking.meeting_room_id === room.id));
+}
+
 async function creditSummary(userId: string, propertyId: string, slot: { start_time: string; end_time: string }) {
     const { data: members, error: memberError } = await supabaseAdmin.from('company_members')
         .select('company_id, company:companies!inner(property_id)').eq('user_id', userId).eq('company.property_id', propertyId);
@@ -70,11 +91,31 @@ async function creditSummary(userId: string, propertyId: string, slot: { start_t
 }
 
 const dependencies = {
-    now: () => new Date(), findUser: findWhatsAppUser, properties: getWhatsAppProperties, rooms, slots, creditSummary,
+    now: () => new Date(), findUser: findWhatsAppUser, properties: getWhatsAppProperties, rooms, slots, creditSummary, availableRooms,
     async createTicket(request: { phone: string; userId: string; propertyId: string; title: string; mediaUrl: string | null; messageId: string; requestId: string }) {
         return processIncomingMessage(request.phone, request.title, request.mediaUrl, null, !!request.mediaUrl,
             null, null, false, request.propertyId, request.messageId,
             { userId: request.userId, requestId: request.requestId, suppressReply: true, throwOnError: true });
+    },
+    async findBooking(requestId: string, userId: string) {
+        const { data, error } = await supabaseAdmin.from('meeting_room_bookings')
+            .select('id,user_id,property_id').eq('wa_assistant_request_id', requestId).eq('user_id', userId).maybeSingle();
+        if (error) throw error;
+        return data;
+    },
+    async bookRange(request: { userId: string; propertyId: string; roomId: string; date: string; startTime: string; endTime: string; requestId: string }) {
+        try {
+            const booking = await rpc('whatsapp_assistant_book_range', { p_user_id: request.userId, p_property_id: request.propertyId,
+                p_room_id: request.roomId, p_date: request.date, p_start_time: request.startTime, p_end_time: request.endTime,
+                p_request_id: request.requestId });
+            await NotificationService.afterRoomBooked(booking.id).catch(error => console.error('[WhatsAppAssistant] Booking notification failed', error));
+            return booking;
+        } catch (error) {
+            const failure = error as { code?: string; message?: string };
+            if (failure.code === '23P01' || failure.message?.includes('SLOT_UNAVAILABLE')) throw Object.assign(new Error('Slot unavailable'), { code: 'SLOT_UNAVAILABLE' });
+            if (failure.message?.includes('INSUFFICIENT_CREDITS')) throw Object.assign(new Error('Insufficient credits'), { code: 'INSUFFICIENT_CREDITS' });
+            throw error;
+        }
     },
     async bookRoom(request: { userId: string; propertyId: string; roomId: string; slotId: string; date: string; requestId: string }) {
         try {
@@ -101,7 +142,8 @@ export async function enqueueAssistantMessage(payload: Record<string, unknown>) 
 }
 
 export async function drainWhatsAppPhone(phone: string) {
-    return drainPhone(phone, { store, advance, dependencies,
+    return drainPhone(phone, { store, advance, dependencies: { ...dependencies,
+        bookRange: process.env.AISENSY_MESSAGE_BOOKING_ENABLED === 'true' ? dependencies.bookRange : undefined },
         send: (destination: string, reply: { key: string; params: string[] }) => AiSensyService.sendAssistantReply(destination, reply),
         log: (entry: Record<string, unknown>) => console.info('[WhatsAppAssistant]', JSON.stringify(entry)),
     });
