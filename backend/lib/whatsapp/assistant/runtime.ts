@@ -97,6 +97,12 @@ const dependencies = {
             null, null, false, request.propertyId, request.messageId,
             { userId: request.userId, requestId: request.requestId, suppressReply: true, throwOnError: true });
     },
+    async findBooking(requestId: string, userId: string) {
+        const { data, error } = await supabaseAdmin.from('meeting_room_bookings')
+            .select('id,user_id,property_id').eq('wa_assistant_request_id', requestId).eq('user_id', userId).maybeSingle();
+        if (error) throw error;
+        return data;
+    },
     async bookRange(request: { userId: string; propertyId: string; roomId: string; date: string; startTime: string; endTime: string; requestId: string }) {
         try {
             const booking = await rpc('whatsapp_assistant_book_range', { p_user_id: request.userId, p_property_id: request.propertyId,

@@ -21,6 +21,7 @@ export function isBookingRequest(text) {
 export function parseBookingMessage(text, now) {
     const source = String(text).toLowerCase().replace(/\b(a|p)\.?m\.?\b/g, '$1m');
     const today = parseBookingDate('today', now);
+    const dateOptions = new Set([...source.matchAll(/\b(?:day after tomorrow|today|tomorrow|\d{4}-\d{2}-\d{2}|\d{2}-\d{2}-\d{4}|sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/g)].map(match => match[0]));
     let dateToken = source.match(/\b\d{4}-\d{2}-\d{2}\b|\b\d{2}-\d{2}-\d{4}\b/)?.[0];
     if (!dateToken) dateToken = source.match(/\b(today|tomorrow)\b/)?.[0];
     if (/\bday after tomorrow\b/.test(source)) dateToken = new Date(Date.parse(today + 'T00:00:00Z') + 2 * 86400000).toISOString().slice(0, 10);
@@ -34,15 +35,27 @@ export function parseBookingMessage(text, now) {
     }
     // Only a range is considered here, so room numbers and calendar dates are not times.
     const timeSource = source.replace(/\b\d{4}-\d{2}-\d{2}\b|\b\d{2}-\d{2}-\d{4}\b/g, '');
-    const range = timeSource.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:to|until|till|[-–])\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/);
+    const ranges = [...timeSource.matchAll(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:to|until|till|[-–])\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/g)];
+    const durations = [...timeSource.matchAll(/\b(?:at|from)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s+for\s+(\d+(?:\.\d+)?)\s*(hours?|hrs?|minutes?|mins?)\b/g)];
+    const singles = [...timeSource.matchAll(/\b(from|at|until|till|start(?:ing)?(?: at)?|end(?:ing)?(?: at)?)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/g)];
+    const standaloneTimes = singles.filter(match => {
+        const clockIndex = match.index + match[0].search(/\d/);
+        return ![...ranges, ...durations].some(major => clockIndex >= major.index && clockIndex < major.index + major[0].length);
+    });
+    if (ranges.length + durations.length + standaloneTimes.length > 1) {
+        return { date: dateToken && dateOptions.size <= 1 ? parseBookingDate(dateToken, now) : null,
+            dateMentioned: !!dateToken, times: null, timeMentioned: true };
+    }
+    const range = ranges.length === 1 ? ranges[0] : null;
     let times = null;
-    let timeMentioned = !!range;
+    let timeMentioned = ranges.length > 0;
     if (range) {
         const start = minutes(range[1], range[2], range[3] || range[6], !!range[2]);
         const end = minutes(range[4], range[5], range[6] || range[3], !!range[5]);
         if (start !== null && end !== null && end > start) times = { startTime: asTime(start), endTime: asTime(end) };
-    } else {
-        const duration = timeSource.match(/\b(?:at|from)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s+for\s+(\d+(?:\.\d+)?)\s*(hours?|hrs?|minutes?|mins?)\b/);
+    } else if (!timeMentioned) {
+        if (durations.length > 1) timeMentioned = true;
+        const duration = durations.length === 1 ? durations[0] : null;
         if (duration) {
             timeMentioned = true;
             const start = minutes(duration[1], duration[2], duration[3], !!duration[2]);
@@ -53,24 +66,38 @@ export function parseBookingMessage(text, now) {
         }
     }
     if (!timeMentioned) {
-        const single = timeSource.match(/\b(from|at|until|till|start(?:ing)?(?: at)?|end(?:ing)?(?: at)?)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/);
+        if (singles.length > 1) timeMentioned = true;
+        const single = singles.length === 1 ? singles[0] : null;
         if (single) {
             timeMentioned = true;
             const value = minutes(single[2], single[3], single[4], !!single[3]);
             if (value !== null) times = { [/^(until|till|end)/.test(single[1]) ? 'endTime' : 'startTime']: asTime(value) };
         }
     }
-    return { date: dateToken ? parseBookingDate(dateToken, now) : null, dateMentioned: !!dateToken, times, timeMentioned };
+    return { date: dateToken && dateOptions.size <= 1 ? parseBookingDate(dateToken, now) : null, dateMentioned: !!dateToken, times, timeMentioned };
 }
 
 function named(text, items) {
     const source = ` ${clean(text)} `;
-    const matches = items.filter(item => source.includes(` ${clean(item.name)} `));
-    // Prefer the most specific complete name, but never resolve duplicate names arbitrarily.
-    const longest = Math.max(0, ...matches.map(item => clean(item.name).length));
-    const best = matches.filter(item => clean(item.name).length === longest);
-    return best.length === 1 ? best[0] : null;
+    const occurrences = [];
+    for (const item of items) {
+        const name = clean(item.name);
+        if (!name) continue;
+        let offset = 0;
+        while (offset < source.length) {
+            const index = source.indexOf(` ${name} `, offset);
+            if (index < 0) break;
+            occurrences.push({ item, start: index + 1, end: index + 1 + name.length });
+            offset = index + 1;
+        }
+    }
+    // Suppress only a name occurrence physically contained within a longer occurrence.
+    const explicit = occurrences.filter(match => !occurrences.some(other => other.start <= match.start && other.end >= match.end &&
+        other.end - other.start > match.end - match.start));
+    const matches = items.filter(item => explicit.some(match => match.item.id === item.id));
+    return matches.length === 1 ? matches[0] : null;
 }
+
 const labels = items => items.slice(0, 10).map((item, index) => `${index + 1}. ${item.name}`).join('; ');
 const problem = (session, reason, alternatives = 'Reply with another room, date or time, or MENU to start again.') =>
     ({ session, reply: { key: 'booking_problem', params: [session?.property?.name || 'your property', reason, alternatives] } });
@@ -81,14 +108,23 @@ export async function advanceBooking(input, current, deps) {
     const properties = await deps.properties(user.id);
     if (!properties.length) return problem(null, 'You have no active property access.');
     const session = current?.step === 'booking_request' ? structuredClone(current) : { step: 'booking_request', id: input.requestId };
+    const existing = await deps.findBooking?.(session.id, user.id);
+    if (existing) {
+        if (existing.user_id !== user.id || !properties.some(item => item.id === existing.property_id)) return problem(null, 'Your access to the existing booking has changed.');
+        return { session: null, reply: null };
+    }
     if (session.property && !properties.some(item => item.id === session.property.id)) return problem(null, 'Your property access has changed.');
     const text = input.text.trim();
     if (/\b(don.t|do not|dont|cancel)\b.*\b(book|booking|reserve)\b/i.test(text)) return problem(null, 'No booking was created. Reply MENU to start again.');
     if (!session.property && isBookingRequest(text)) session.roomHint = text;
     const number = /^[1-9]\d*$/.test(text) ? Number(text) - 1 : -1;
     const property = named(text, properties) || (session.awaiting === 'property' ? properties.find(item => item.id === session.options?.[number]?.id) : null);
+    if (!property && properties.some(item => ` ${clean(text)} `.includes(` ${clean(item.name)} `))) { delete session.property; delete session.room; }
     if (property && property.id !== session.property?.id) { session.property = property; delete session.room; }
-    if (!session.property && properties.length === 1) session.property = properties[0];
+    const location = text.match(/\b(?:at|in)\s+([a-z][a-z0-9 ]+?)(?=\b(?:today|tomorrow|from|on|at|for)\b|$)/i)?.[1];
+    const unknownLocation = location && !named(location, properties) && !/\b(room|boardroom)\b/i.test(location);
+    if (unknownLocation) { delete session.property; delete session.room; }
+    if (!session.property && properties.length === 1 && !unknownLocation) session.property = properties[0];
     const bareTime = /^\d{1,2}(?::\d{2})?\s*(?:am|pm)$/i.test(text);
     const timeText = bareTime && (!!session.startTime !== !!session.endTime) ? `${session.startTime ? 'until' : 'from'} ${text}` : text;
     const parsed = parseBookingMessage(timeText, deps.now());
@@ -108,7 +144,7 @@ export async function advanceBooking(input, current, deps) {
         const room = named(text, rooms) || named(session.roomHint, rooms) || (session.awaiting === 'room' ? rooms.find(item => item.id === session.options?.[number]?.id) : null);
         delete session.roomHint;
         if (room) session.room = room;
-        else if (/\b(room|boardroom)\b/i.test(text) && !isBookingRequest(text)) delete session.room;
+        else if (/\b(room|boardroom)\b/i.test(text)) delete session.room;
     }
     if (!session.date) missing.push('the date (today, tomorrow, or DD-MM-YYYY)');
     if (!session.startTime || !session.endTime) missing.push(`${!session.startTime && !session.endTime ? 'both start and end time' : !session.startTime ? 'the start time' : 'the end time (later than the start time)'} with AM/PM (for example, 2 PM to 3 PM)`);
