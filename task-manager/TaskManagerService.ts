@@ -336,30 +336,6 @@ export class TaskManagerService {
             console.warn('[TaskManagerService] tm_members table check:', err);
         }
 
-        // Fallback for initial test phone if tm_members is not yet seeded
-        const testPhone = process.env.TEST_WHATSAPP_PHONE || '8433649199';
-        const last10Allowed = testPhone.replace(/\D/g, '').slice(-10);
-
-        if (last10 === last10Allowed) {
-            const { data: user } = await supabaseAdmin
-                .from('users')
-                .select('id, full_name, phone')
-                .or(`phone.eq.${testPhone},phone.ilike.%${last10Allowed}`)
-                .maybeSingle();
-
-            if (user) {
-                return {
-                    id: user.id,
-                    user_id: user.id,
-                    phone: user.phone || testPhone,
-                    full_name: user.full_name || 'Sahil Gorde',
-                    department: 'Tech',
-                    is_superuser: true, // Superuser by default for the primary administrator
-                    is_active: true
-                };
-            }
-        }
-
         return null;
     }
 

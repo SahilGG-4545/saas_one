@@ -86,12 +86,7 @@ export class TaskReminderService {
             console.warn('[TaskReminderService] tm_members query error:', err);
         }
 
-        // Fallback to test user if table empty
-        if (members.length === 0) {
-            const testPhone = process.env.TEST_WHATSAPP_PHONE || '919004363328';
-            const member = await TaskManagerService.getMemberByPhone(testPhone);
-            if (member) members = [member];
-        }
+
 
         // 2. Fetch reports submitted today
         const { data: reports } = await supabaseAdmin
@@ -160,11 +155,7 @@ export class TaskReminderService {
             console.warn('[TaskReminderService] tm_members query error:', err);
         }
 
-        if (members.length === 0) {
-            const testPhone = process.env.TEST_WHATSAPP_PHONE || '8433649199';
-            const member = await TaskManagerService.getMemberByPhone(testPhone);
-            if (member) members = [member];
-        }
+
 
         const recipients: string[] = [];
 
@@ -246,11 +237,7 @@ export class TaskReminderService {
             console.warn('[TaskReminderService] tm_members superusers query error:', err);
         }
 
-        if (superusers.length === 0) {
-            const testPhone = process.env.TEST_WHATSAPP_PHONE || '8433649199';
-            const fallback = await TaskManagerService.getMemberByPhone(testPhone);
-            if (fallback && fallback.is_superuser) superusers = [fallback];
-        }
+
 
         // 2. Fetch stats
         const { count: activeTasksCount } = await supabaseAdmin

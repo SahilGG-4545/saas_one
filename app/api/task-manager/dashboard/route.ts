@@ -65,29 +65,6 @@ export async function GET(request: NextRequest) {
         const allTasks = taskRes.data || [];
         const allReports = reportRes.data || [];
 
-        // Fallback for members if tm_members is not yet populated
-        if (members.length === 0) {
-            const testPhone = process.env.TEST_WHATSAPP_PHONE || '8433649199';
-            const last10 = testPhone.replace(/\D/g, '').slice(-10);
-            const { data: su } = await supabaseAdmin
-                .from('users')
-                .select('id, full_name, phone')
-                .or(`phone.eq.${testPhone},phone.ilike.%${last10}`)
-                .maybeSingle();
-            if (su) {
-                members = [{
-                    id: su.id,
-                    user_id: su.id,
-                    full_name: su.full_name || 'Sahil Gorde',
-                    phone: su.phone || testPhone,
-                    department: 'Tech',
-                    designation: 'Director / Co-Founder',
-                    is_superuser: true,
-                    is_active: true
-                }];
-            }
-        }
-
         // 3. Department breakdown
         const deptMetrics: Record<string, { total: number; completed: number; inProgress: number; pending: number }> = {};
         CORPORATE_DEPARTMENTS.forEach(dept => {
