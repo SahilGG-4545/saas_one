@@ -16,6 +16,7 @@
 Confirmed by the user:
 
 - All eligible internal users can access Petty Cash and request cash for a property.
+- If the requester has exactly one eligible assigned property in the current organization, automatically use it and omit the property selector. Show its name as read-only context. Show a selector only when multiple eligible properties are assigned; no eligible property blocks requesting cash.
 - Only org super admins and ops super admins configure allocator and approver users per property through system settings. Requesters select neither actor; allocators do not select approvers.
 - Requests route automatically to the configured allocator, then the configured approver, then accounts for payment.
 - Clicking Paid credits the requester's wallet.
@@ -43,7 +44,7 @@ Proposed defaults for review:
 | Current component | What exists now | Planned treatment |
 | --- | --- | --- |
 | `frontend/components/pettyCash/PettyCashDashboard.tsx` | My Requests, Approvals, Disbursements, All/Ledger, Tracker | Add wallet and personal expenses; assignment-based queues; consolidated super-admin reporting |
-| `NewRequestModal.tsx` | Property, amount, purpose, documents, selected approver | Keep request details and property selection; remove approver selection; show system-assigned actors as read-only information |
+| `NewRequestModal.tsx` | Property, amount, purpose, documents, selected approver | Keep request details; auto-assign the sole eligible property, select only for multiple properties; remove approver selection; show system-assigned actors as read-only information |
 | `RequestDetailDrawer.tsx` | Approval/payment/settlement actions, bills and timeline | Add allocation, explicit assigned actors, transaction list and lifecycle-specific actions |
 | `PettyCashTracker.tsx` | Request/property/custodian reconciliation | Retain history; add user-ID grouping, wallet/spend summaries and correct scoped totals |
 | `backend/lib/pettyCash/access.ts` and `frontend/lib/pettyCash/roles.ts` | Broad role-based approval and org/property visibility | Replace implicit manager approval with explicit assignments; ordinary users see own data only |
@@ -91,7 +92,7 @@ Accounts scope is organization-level when the active accounts membership is orga
 1. Add **Petty Cash Settings → Property Routing**, accessible to org/ops super admins.
 2. Super admin selects property and adds eligible internal allocator(s) and approver(s), designating exactly one active primary per stage. Additional configured users serve as backups for explicit reassignment.
 3. Search by name/email; display role and property association. Permit eligible organization-level staff assigned to support that property; prohibit cross-organization and external users.
-4. Requester selects only an authorized property and fills cash-request details. The server resolves that property’s configured primary allocator and approver; the UI shows them read-only. Missing/inactive routing blocks submission with a configuration message.
+4. Resolve the requester’s eligible active assigned properties in the current organization. With exactly one, auto-assign it and show its name read-only without a selector. With multiple, require selection from those properties. With none, disable submission and explain that property assignment is required. The requester fills cash-request details; the server resolves the property’s configured primary allocator and approver, shown read-only. Missing/inactive routing blocks submission with a configuration message.
 5. Assigned allocator reviews purpose, requested amount, requester history and spends, then enters allocated amount and remarks. Allocation automatically forwards the request to its snapshotted, system-configured approver; there is no approver selector.
 6. Resolve both actor IDs server-side from active property configuration and save them on the request, alongside actual allocating/approving actor IDs and timestamps. Reject requester/allocator payloads attempting to supply or change assigned actor IDs.
 7. Configuration changes apply to new requests. Pending requests require explicit reassignment and an audit entry; historical requests retain their actor history.
@@ -104,7 +105,7 @@ Recommended approach: explicit assignment tables plus snapshots on requests. Ext
 
 ```mermaid
 flowchart TD
-    A[Requester selects property; system assigns configured actors] --> B{Wallet zero, proofs complete, no pending pipeline?}
+    A[Auto-assign sole property or select from multiple; system assigns actors] --> B{Wallet zero, proofs complete, no pending pipeline?}
     B -->|No| C[Explain blocker and link to wallet or request]
     B -->|Yes| D[Pending allocation]
     D --> E[Assigned allocator sets amount; system forwards to configured approver]
@@ -159,7 +160,7 @@ Server checks inside the request-creation transaction, not only a disabled UI bu
 3. Require exactly ₹0 remaining across funded advances in that organization.
 4. Require every posted expense to have complete valid proof; rejected/unresolved evidence blocks submission.
 5. Require no other pending allocation/approval/payment or sent-back pipeline.
-6. Validate property and active routing, resolve both configured primary actors, validate eligibility and separation of duties, then snapshot assignments and create the request atomically.
+6. Re-resolve eligible active property assignments server-side. If property_id is omitted and exactly one eligible assigned property exists, use it; if multiple exist, require an eligible selection; if none exist, deny submission. Reject supplied unauthorized property IDs and stale assignments. Validate active routing, resolve both configured primary actors, validate eligibility and separation of duties, then snapshot assignments and create the request atomically.
 
 No `acknowledge_open_advances` override and no normal admin bypass. Missing wallet/reconciliation infrastructure returns an actionable failure; it never silently permits a request. Draft submission and resubmission use the same gate, excluding the request being resubmitted from the pending-pipeline check.
 
@@ -253,6 +254,7 @@ API service-role access bypasses RLS, so explicit server checks remain mandatory
 
 - [ ] Write failing state tests: approve before allocation, unassigned manager, self-action, stale version, invalid amount, inactive configured actor, unauthorized assignment payload, cross-property automatic bulk routing, and sent-back edits.
 - [ ] Implement `submitted → pending_approval → approved`, server-resolved routing snapshots and super-admin-only explicit reassignment. Verify requester and allocator forms contain no actor-selection controls.
+- [ ] Test one eligible property auto-assigns without a selector, multiple properties require selection, and zero properties block submission. Test inactive/external/cross-org memberships do not count, server inference when property_id is omitted, forged property IDs and membership removal between form opening and submission.
 - [ ] Implement shared transactional action service and bulk per-item outcomes.
 - [ ] Verify mixed-validity batches, retries and simultaneous actor clicks produce one action/audit per request.
 - [ ] Commit allocation/approval changes with passing focused tests.
@@ -284,7 +286,7 @@ API service-role access bypasses RLS, so explicit server checks remain mandatory
 ### Phase 5 — End-to-end verification
 
 - [ ] Run TypeScript, targeted lint and new access/state/database tests; compare unrelated existing lint findings to baseline.
-- [ ] Browser-test requester → allocator → approver → accounts Paid → wallet credit → multiple spends/proofs → next request at ₹0.
+- [ ] Browser-test requester → allocator → approver → accounts Paid → wallet credit → multiple spends/proofs → next request at ₹0, covering both single-property automatic assignment and multiple-property selection.
 - [ ] Browser-test bulk allocation/approval and failed/stale items across properties.
 - [ ] Test org/ops super-admin views, ordinary property-admin isolation, accounts-only workspace and excluded tenant/food-vendor accounts.
 - [ ] Verify modal/sidebar behavior at desktop and mobile widths, scoped realtime updates and authorized evidence downloads.
@@ -292,6 +294,6 @@ API service-role access bypasses RLS, so explicit server checks remain mandatory
 
 ## 13. Decisions to review before implementation
 
-The ₹0 + complete-proofs rule and super-admin-only configuration with automatic routing are confirmed. Please review the proposed defaults: org/ops super admins alone configure property routing and the system assigns both actors automatically; assigned actors see their assigned requests/spends rather than every user at the property; accounts gets only its payment/reconciliation work; self-actions are prohibited; unused cash returns can zero the wallet; new reimbursements are outside this advance-wallet release.
+The ₹0 + complete-proofs rule, super-admin-only configuration with automatic routing, and automatic property assignment for single-property requesters are confirmed. Please review the proposed defaults: org/ops super admins alone configure property routing and the system assigns both actors automatically; assigned actors see their assigned requests/spends rather than every user at the property; accounts gets only its payment/reconciliation work; self-actions are prohibited; unused cash returns can zero the wallet; new reimbursements are outside this advance-wallet release.
 
 No implementation or deployment is included in this planning change.
