@@ -159,3 +159,57 @@ test('one approved booking update campaign covers missing fields and booking fai
     assert.match(missing.reply.params[2], /date/);
     assert.match(unavailable.reply.params[1], /No room is available/);
 });
+
+test('multi-property named request asks only for date then books the selected property', async () => {
+    const { deps, bookings } = setup({ properties: async () => [...properties, { id: 'p2', name: 'Other Plaza' }] });
+    let result = await advanceBooking(input('hey book Conference Room 1 in SS Plaza at 2pm to 3pm'), null, deps);
+    assert.equal(bookings.length, 0);
+    assert.equal(result.session.property.id, 'p1');
+    assert.equal(result.session.room.id, 'r1');
+    assert.match(result.reply.params[2], /date/);
+    assert.doesNotMatch(result.reply.params[2], /the property|the meeting room/);
+    result = await advanceBooking(input('today'), result.session, deps);
+    assert.equal(result.reply, null);
+    assert.equal(bookings[0].propertyId, 'p1');
+});
+
+test('changing property clears the previous room and asks for a room at the new property', async () => {
+    const { deps, bookings } = setup({ properties: async () => [...properties, { id: 'p2', name: 'Other Plaza' }],
+        rooms: async property => property === 'p1' ? rooms : [{ id: 'r3', name: 'Boardroom' }],
+        availableRooms: async property => property === 'p1' ? rooms : [{ id: 'r3', name: 'Boardroom' }] });
+    let result = await advanceBooking(input('book Conference Room 1 in SS Plaza 2pm to 3pm'), null, deps);
+    result = await advanceBooking(input('Other Plaza tomorrow'), result.session, deps);
+    assert.equal(bookings.length, 0);
+    assert.equal(result.session.property.id, 'p2');
+    assert.equal(result.session.room, undefined);
+    result = await advanceBooking(input('Boardroom'), result.session, deps);
+    assert.equal(result.reply, null);
+    assert.equal(bookings[0].roomId, 'r3');
+});
+
+test('numeric room selection uses the displayed identifiers when room ordering changes', async () => {
+    let reverse = false;
+    const { deps, bookings } = setup({ rooms: async () => reverse ? [...rooms].reverse() : rooms });
+    const prompt = await advanceBooking(input('book meeting room tomorrow 2pm to 3pm'), null, deps);
+    reverse = true;
+    await advanceBooking(input('2'), prompt.session, deps);
+    assert.equal(bookings[0].roomId, 'r2');
+});
+
+test('duplicate room names require a numbered selection', async () => {
+    const duplicates = [{ id: 'r1', name: 'Conference Room 1' }, { id: 'r2', name: 'Conference Room 1' }];
+    const { deps, bookings } = setup({ rooms: async () => duplicates, availableRooms: async () => duplicates });
+    const prompt = await advanceBooking(input('book Conference Room 1 tomorrow 2pm to 3pm'), null, deps);
+    assert.equal(bookings.length, 0);
+    assert.match(prompt.reply.params[2], /meeting room/);
+    await advanceBooking(input('2'), prompt.session, deps);
+    assert.equal(bookings[0].roomId, 'r2');
+});
+
+test('a missing end time accepts an explicit 24-hour reply', async () => {
+    const { deps, bookings } = setup();
+    const prompt = await advanceBooking(input('book Conference Room 1 tomorrow from 14:00'), null, deps);
+    await advanceBooking(input('15:30'), prompt.session, deps);
+    assert.equal(bookings.length, 1);
+    assert.equal(bookings[0].endTime, '15:30');
+});

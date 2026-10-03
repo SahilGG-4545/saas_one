@@ -125,7 +125,7 @@ export async function advanceBooking(input, current, deps) {
     const unknownLocation = location && !named(location, properties) && !/\b(room|boardroom)\b/i.test(location);
     if (unknownLocation) { delete session.property; delete session.room; }
     if (!session.property && properties.length === 1 && !unknownLocation) session.property = properties[0];
-    const bareTime = /^\d{1,2}(?::\d{2})?\s*(?:am|pm)$/i.test(text);
+    const bareTime = /^(?:\d{1,2}(?::\d{2})?\s*(?:am|pm)|\d{1,2}:\d{2})$/i.test(text);
     const timeText = bareTime && (!!session.startTime !== !!session.endTime) ? `${session.startTime ? 'until' : 'from'} ${text}` : text;
     const parsed = parseBookingMessage(timeText, deps.now());
     if (parsed.dateMentioned) session.date = parsed.date;
