@@ -126,6 +126,36 @@ export default function TaskManagerSuperuserDashboard({ orgId }: { orgId?: strin
     const [enrollDesignation, setEnrollDesignation] = useState('');
     const [enrollIsSuperuser, setEnrollIsSuperuser] = useState(false);
     const [sendingAction, setSendingAction] = useState<string | null>(null);
+    const [nudgingPhone, setNudgingPhone] = useState<string | null>(null);
+
+    const handleNudgeSingleMember = async (member: { name: string; phone: string }) => {
+        if (!member.phone) {
+            alert('❌ Missing phone number for this member');
+            return;
+        }
+        setNudgingPhone(member.phone);
+        try {
+            const res = await fetch('/api/task-manager/reminders', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    action: 'nudge_member',
+                    phone: member.phone,
+                    name: member.name,
+                }),
+            });
+            const data = await res.json();
+            if (data.ok) {
+                alert(`✅ ${data.message || `Nudge sent to ${member.name} via Autopilot Offices Bot!`}`);
+            } else {
+                alert(`❌ Failed: ${data.error || 'Delivery failed'}`);
+            }
+        } catch (err: any) {
+            alert(`❌ Error: ${err?.message || 'Failed to dispatch nudge'}`);
+        } finally {
+            setNudgingPhone(null);
+        }
+    };
 
     const triggerReminderAction = async (action: 'eod_nudge' | 'morning_digest' | 'superuser_rollup') => {
         setSendingAction(action);
@@ -681,14 +711,14 @@ export default function TaskManagerSuperuserDashboard({ orgId }: { orgId?: strin
                                             <p className="text-xs font-bold text-slate-800 dark:text-slate-200">{member.name}</p>
                                             <p className="text-[10px] text-slate-400">{member.department} · {member.designation || 'Staff'}</p>
                                         </div>
-                                        <a
-                                            href={`https://wa.me/${member.phone?.replace(/\D/g, '')}?text=${encodeURIComponent('Hi ' + member.name + ', please share your daily EOD report update on WhatsApp before end of day.')}`}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            className="px-2.5 py-1 rounded-lg text-[10px] font-bold bg-[#587e85]/10 text-[#587e85] hover:bg-[#587e85] hover:text-white transition-colors"
+                                        <button
+                                            onClick={() => handleNudgeSingleMember(member)}
+                                            disabled={nudgingPhone === member.phone}
+                                            className="px-2.5 py-1 rounded-lg text-[10px] font-bold bg-[#587e85]/10 text-[#587e85] hover:bg-[#587e85] hover:text-white transition-colors disabled:opacity-50"
+                                            title={`Send WhatsApp reminder via Autopilot Offices Bot to ${member.name}`}
                                         >
-                                            Nudge
-                                        </a>
+                                            {nudgingPhone === member.phone ? 'Sending...' : 'Nudge (Bot)'}
+                                        </button>
                                     </div>
                                 ))}
                             </div>
