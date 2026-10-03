@@ -225,6 +225,17 @@ export async function processIncomingMessage(
             return;
         }
 
+        // ── Task Manager Interceptor: handle employee task actions ──────────
+        const { handleTaskManagerMessage } = await import('@/task-manager/router');
+        const handledByTaskManager = await handleTaskManagerMessage({
+            senderPhone,
+            messageText,
+            user: userRow,
+        });
+        if (handledByTaskManager) {
+            return;
+        }
+
         // Resolve active memberships across all organizations, including ops super admins.
         const propertyOptions = await getWhatsAppProperties(userRow.id, !processingOptions.requestId);
 

@@ -7,7 +7,7 @@ import {
     Search, Plus, Filter, LogOut, ChevronRight, MapPin, Edit, Trash2, X, Check, UsersRound,
     Coffee, IndianRupee, FileDown, ChevronDown, Fuel, Menu, Upload, FileBarChart, Zap, Package, ClipboardCheck, Scan, Key,
     AlertCircle, CheckCircle2, Clock, GitBranch, DoorOpen, MessageCircle, Send, Loader2, CalendarDays, Calendar, Wrench, ShoppingCart, Sun, Moon, Droplets, TrendingUp, Smartphone,
-    MessageSquarePlus, Bot, Gauge, Cpu, FolderLock, Layers, ShieldCheck
+    MessageSquarePlus, Bot, Gauge, Cpu, FolderLock, Layers, ShieldCheck, ClipboardList
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { createClient } from '@/frontend/utils/supabase/client';
@@ -51,6 +51,7 @@ import WaterAnalyticsDashboard from '@/frontend/components/water/WaterAnalyticsD
 import VendorManagementModal from '@/frontend/components/vendor/VendorManagementModal';
 import GuestExperienceDashboard from '@/frontend/components/guest-experience/GuestExperienceDashboard';
 import AITicketsDashboard from '@/frontend/components/ai-tickets/AITicketsDashboard';
+import TaskManagerSuperuserDashboard from '@/frontend/components/task-manager/TaskManagerSuperuserDashboard';
 
 import { BDQuickStats } from './UnifiedDashboard';
 import FeedbackModal from '@/frontend/components/ui/FeedbackModal';
@@ -62,7 +63,7 @@ import AgentPulse from '@/frontend/components/agents/AgentPulse';
 import type { ModuleKey } from '@/frontend/types/agentRuntime';
 
 // Types
-type Tab = 'overview' | 'properties' | 'requests' | 'reports' | 'visitors' | 'settings' | 'profile' | 'revenue' | 'users' | 'diesel_logger' | 'diesel' | 'electricity_logger' | 'electricity' | 'stock_reports' | 'checklist' | 'super_tenants' | 'escalation' | 'rooms' | 'ppm' | 'vendors' | 'procurement' | 'roster' | 'water_logger' | 'water' | 'guest_experience' | 'ai_tickets' | 'org_progress' | 'org_efficiency' | 'agent_console' | 'document_bank' | 'grievance' | 'assets';
+type Tab = 'overview' | 'properties' | 'requests' | 'reports' | 'visitors' | 'settings' | 'profile' | 'revenue' | 'users' | 'diesel_logger' | 'diesel' | 'electricity_logger' | 'electricity' | 'stock_reports' | 'checklist' | 'super_tenants' | 'escalation' | 'rooms' | 'ppm' | 'vendors' | 'procurement' | 'roster' | 'water_logger' | 'water' | 'guest_experience' | 'ai_tickets' | 'org_progress' | 'org_efficiency' | 'agent_console' | 'document_bank' | 'grievance' | 'assets' | 'tasks';
 
 /**
  * AGENT PULSE MOUNTS — tab -> canonical module slug.
@@ -139,20 +140,22 @@ const OrgAdminDashboard = () => {
     });
 
     const setActiveTab = useCallback((newTab: Tab | ((prev: Tab) => Tab)) => {
-        setActiveTabRaw((prevTab) => {
-            const resolvedTab = typeof newTab === 'function' ? newTab(prevTab) : newTab;
-            if (typeof window !== 'undefined') {
-                try {
-                    const savedKey = orgSlugOrId ? `active_tab_${orgSlugOrId}` : 'active_tab_org';
-                    localStorage.setItem(savedKey, resolvedTab);
-                    const url = new URL(window.location.href);
-                    url.searchParams.set('tab', resolvedTab);
-                    window.history.replaceState(null, '', url.toString());
-                } catch (e) {}
+        setActiveTabRaw(newTab);
+    }, []);
+
+    // Sync activeTab to localStorage & URL without triggering in-render Router setState
+    useEffect(() => {
+        if (typeof window === 'undefined' || !activeTab) return;
+        try {
+            const savedKey = orgSlugOrId ? `active_tab_${orgSlugOrId}` : 'active_tab_org';
+            localStorage.setItem(savedKey, activeTab);
+            const url = new URL(window.location.href);
+            if (url.searchParams.get('tab') !== activeTab) {
+                url.searchParams.set('tab', activeTab);
+                window.history.replaceState(null, '', url.toString());
             }
-            return resolvedTab;
-        });
-    }, [orgSlugOrId]);
+        } catch (e) {}
+    }, [activeTab, orgSlugOrId]);
 
     useEffect(() => {
         const tabParam = searchParams.get('tab');
@@ -549,7 +552,7 @@ const OrgAdminDashboard = () => {
     // Restore tab from URL
     useEffect(() => {
         const tab = searchParams.get('tab');
-        if (tab && ['overview', 'properties', 'requests', 'reports', 'visitors', 'settings', 'profile', 'revenue', 'users', 'diesel_logger', 'diesel', 'electricity_logger', 'electricity', 'stock_reports', 'checklist', 'super_tenants', 'escalation', 'rooms', 'ppm', 'vendors', 'procurement', 'roster', 'water_logger', 'water', 'guest_experience', 'agent_console', 'org_progress', 'org_efficiency', 'grievance', 'assets'].includes(tab)) {
+        if (tab && ['overview', 'properties', 'requests', 'reports', 'visitors', 'settings', 'profile', 'revenue', 'users', 'diesel_logger', 'diesel', 'electricity_logger', 'electricity', 'stock_reports', 'checklist', 'super_tenants', 'escalation', 'rooms', 'ppm', 'vendors', 'procurement', 'roster', 'water_logger', 'water', 'guest_experience', 'agent_console', 'org_progress', 'org_efficiency', 'grievance', 'assets', 'tasks'].includes(tab)) {
             if (isOpsSuperAdmin && (tab === 'org_progress' || tab === 'org_efficiency' || tab === 'agent_console')) {
                 setActiveTab('overview');
             } else {
@@ -1482,6 +1485,16 @@ const OrgAdminDashboard = () => {
                         </p>
                         <div className="space-y-1">
                             <button
+                                onClick={() => handleTabChange('tasks')}
+                                className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl transition-all duration-200 font-bold text-sm group ${activeTab === 'tasks'
+                                    ? 'bg-primary text-text-inverse shadow-sm'
+                                    : 'text-text-secondary hover:bg-primary/10 hover:text-primary'
+                                    }`}
+                            >
+                                <ClipboardList className={`w-4 h-4 transition-transform ${activeTab === 'tasks' ? '' : 'group-hover:scale-110'}`} />
+                                <span className="flex-1 text-left">Task Manager</span>
+                            </button>
+                            <button
                                 onClick={() => handleTabChange('ai_tickets')}
                                 className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl transition-all duration-200 font-bold text-sm group ${activeTab === 'ai_tickets'
                                     ? 'bg-primary text-text-inverse shadow-sm'
@@ -1776,6 +1789,7 @@ const OrgAdminDashboard = () => {
                             and credentials all live behind it. */}
                         {!isOpsSuperAdmin && activeTab === 'agent_console' && <AgentConsole key="agent-console-tab" orgId={org?.id ?? ''} />}
                         {activeTab === 'ai_tickets' && <AITicketsDashboard propertyId={selectedPropertyId === 'all' ? undefined : selectedPropertyId} />}
+                        {activeTab === 'tasks' && <TaskManagerSuperuserDashboard orgId={org?.id || ''} />}
                         {activeTab === 'revenue' && <RevenueTab key="revenue-tab" properties={properties} selectedPropertyId={selectedPropertyId} />}
                         {activeTab === 'properties' && (
                             <PropertiesTab
