@@ -1,5 +1,6 @@
 'use client';
 
+import PettyCashNavLink from '@/frontend/components/pettyCash/PettyCashNavLink';
 import React, { useState, useEffect } from 'react';
 import {
     ShieldCheck, Users, Building2, AlertTriangle, Activity,
@@ -512,6 +513,7 @@ const MasterAdminDashboard = () => {
                             </button>
                         </React.Fragment>
                     ))}
+                <PettyCashNavLink />
                 </nav>
 
                 <div className="pt-6 pb-12 border-t border-border flex-shrink-0">

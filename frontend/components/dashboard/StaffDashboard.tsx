@@ -1,4 +1,5 @@
 'use client';
+import PettyCashNavLink from '@/frontend/components/pettyCash/PettyCashNavLink';
 import HRTicketsContent from '@/frontend/components/hr/HRTicketsContent';
 
 import React, { useState, useEffect } from 'react';
@@ -663,6 +664,7 @@ const StaffDashboard = () => {
                             </button>
                         </div>
                     </div>
+                <PettyCashNavLink />
                 </nav>
 
                 {/* Footer */}

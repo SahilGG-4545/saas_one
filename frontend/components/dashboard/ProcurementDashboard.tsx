@@ -1,5 +1,6 @@
 'use client';
 
+import PettyCashNavLink from '@/frontend/components/pettyCash/PettyCashNavLink';
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { createClient } from '@utils/supabase/client';
 import { 
@@ -691,6 +692,7 @@ export default function ProcurementDashboard() {
                                 ))}
                             </div>
                         </div>
+                    <PettyCashNavLink />
                     </nav>
 
                     <div className="px-6 py-6 border-t border-slate-100 mt-auto flex-shrink-0 bg-slate-50/50">

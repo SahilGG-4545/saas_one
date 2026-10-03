@@ -8,7 +8,9 @@
     "start": "next start",
     "lint": "eslint",
     "lint:sql": "node scripts/lint_sql_migrations.js",
-    "test:whatsapp": "node --test --test-isolation=none tests/aisensy-greetings.test.mjs tests/whatsapp-assistant.test.mjs tests/whatsapp-assistant-worker.test.mjs tests/whatsapp-assistant-route.test.mjs tests/whatsapp-assistant-db.test.mjs tests/whatsapp-assistant-access.test.mjs"
+    "test:whatsapp": "node --test --test-isolation=none tests/aisensy-greetings.test.mjs tests/whatsapp-assistant.test.mjs tests/whatsapp-assistant-worker.test.mjs tests/whatsapp-assistant-route.test.mjs tests/whatsapp-assistant-db.test.mjs tests/whatsapp-assistant-access.test.mjs",
+    "test:petty-cash": "node --test tests/petty-cash/workflow.test.mjs tests/petty-cash/api.test.mjs tests/petty-cash/sidebar.test.mjs",
+    "test:petty-cash:browser": "npm exec --yes --package=esbuild -- node --test tests/petty-cash/browser.test.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.82.0",

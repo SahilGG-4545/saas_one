@@ -1,4 +1,5 @@
 'use client';
+import PettyCashNavLink from '@/frontend/components/pettyCash/PettyCashNavLink';
 import HRTicketsContent from '@/frontend/components/hr/HRTicketsContent';
 
 import { useState, useEffect } from 'react';
@@ -475,6 +476,7 @@ const SecurityDashboard = () => {
                             </button>
                         </div>
                     </div>
+                <PettyCashNavLink />
                 </nav>
 
                 <div className="pt-3 border-t border-border px-4 pb-12 flex-shrink-0 bg-white">

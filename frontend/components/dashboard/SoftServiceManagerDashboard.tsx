@@ -1,5 +1,6 @@
 'use client';
 
+import PettyCashNavLink from '@/frontend/components/pettyCash/PettyCashNavLink';
 import HRTicketsContent from '@/frontend/components/hr/HRTicketsContent';
 import React, { useState, useEffect, useMemo } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
@@ -232,6 +233,7 @@ const SoftServiceManagerDashboard: React.FC<SoftServiceManagerDashboardProps> = 
                             </button>
                         </div>
                     </div>
+                <PettyCashNavLink />
                 </nav>
 
                 <div className="px-4 pt-3 pb-12 border-t border-border mt-auto flex-shrink-0 bg-white">

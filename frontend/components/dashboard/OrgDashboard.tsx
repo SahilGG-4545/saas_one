@@ -1,5 +1,6 @@
 'use client';
 
+import PettyCashNavLink from '@/frontend/components/pettyCash/PettyCashNavLink';
 import React, { useState, useEffect } from 'react';
 import {
     BarChart3, Users, Building2, LayoutDashboard,
@@ -178,6 +179,7 @@ const OrgDashboard = ({ orgId }: { orgId: string }) => {
                                 </div>
                             </div>
                         ))}
+                    <PettyCashNavLink />
                     </nav>
                 </div>
 

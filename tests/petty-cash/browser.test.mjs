@@ -1,0 +1,78 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
+import { readFile, mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { chromium } from 'playwright';
+import postcss from 'postcss';
+import tailwind from '@tailwindcss/postcss';
+import sharp from 'sharp';
+import { id, setup, call } from './database.mjs';
+const root=new URL('../..',import.meta.url).pathname;
+// Run via npm exec --package=esbuild -- node --test tests/petty-cash/browser.test.mjs.
+const scratch=await mkdtemp(join(tmpdir(),'petty-cash-browser-'));
+execFileSync('esbuild',['tests/petty-cash/fixtures/app.tsx','--bundle',`--outfile=${join(scratch,'app.js')}`,'--alias:next/navigation=./tests/petty-cash/fixtures/navigation.ts','--alias:next/link=./tests/petty-cash/fixtures/link.tsx','--alias:@/frontend/context/AuthContext=./tests/petty-cash/fixtures/auth.ts','--alias:@/frontend/utils/supabase/client=./tests/petty-cash/fixtures/supabase.ts'],{cwd:root});
+const bundle=await readFile(join(scratch,'app.js'),'utf8');
+const css=(await postcss([tailwind()]).process(await readFile(join(root,'app/globals.css'),'utf8'),{from:join(root,'app/globals.css')})).css;
+const png=await sharp({create:{width:100,height:80,channels:3,background:'white'}}).png().toBuffer();
+async function fixture(db){
+ const files=new Map();
+ const reqRow=async(r)=>{const user=(await db.query('select id,full_name,email from users where id=$1',[r.requester_id])).rows[0];const property=(await db.query('select id,name from properties where id=$1',[r.property_id])).rows[0];const actors=(await db.query('select id,full_name,email from users where id in ($1,$2)',[r.assigned_allocator_id,r.assigned_approver_id])).rows;return {...r,requester:user,property,assigned_allocator:actors.find(a=>a.id===r.assigned_allocator_id),assigned_approver:actors.find(a=>a.id===r.assigned_approver_id)};};
+ const server=createServer(async(req,res)=>{try{
+  const url=new URL(req.url,'http://fixture');const actor=id(Number(req.headers['x-fixture-actor']||url.searchParams.get('actor')||11));
+  if(!url.pathname.startsWith('/api/')){res.setHeader('content-type','text/html');res.end(`<style>${css}</style><div id="root"></div><script>${bundle.replace(/<\/script/gi,'<\\/script')}</script>`);return;}
+  const parts=[];for await(const part of req)parts.push(part);const bytes=Buffer.concat(parts);let body={};if((req.headers['content-type']||'').includes('application/json'))body=JSON.parse(bytes.toString());
+  let data;
+  if(url.pathname.endsWith('/context')){
+   const wallet=await call(db,'pc_wallet',[actor,id(1)]);const superAdmin=await call(db,'pc_super',[actor,id(1)]);const pm=(await db.query('select p.id,p.name from properties p join property_memberships m on p.id=m.property_id where m.user_id=$1 and m.is_active',[actor])).rows;
+   const assignments=(await db.query('select a.*,jsonb_build_object(\'id\',u.id,\'full_name\',u.full_name,\'email\',u.email) "user" from petty_cash_property_assignments a join users u on u.id=a.user_id where is_active and is_primary')).rows;
+   const assigned=(await db.query('select * from petty_cash_property_assignments where user_id=$1',[actor])).rows;
+   const finance=Number(req.headers['x-fixture-actor'])===14;
+   data={organization_id:id(1),user_id:actor,properties:pm.length?pm:superAdmin?(await db.query('select id,name from properties')).rows:[],configuration_properties:superAdmin?(await db.query('select id,name from properties')).rows:[],wallet,routes:assignments,caps:{isAdmin:superAdmin,canManageRouting:superAdmin,canAllocate:assigned.some(a=>a.kind==='allocator'),canApprove:assigned.some(a=>a.kind==='approver'),canDisburse:finance}};
+  }else if(url.pathname.endsWith('/assignments')){
+   if(req.method==='PUT')data={routing:await call(db,'pc_configure',[actor,body.property_id,body.allocator_id,body.approver_id])};else{if(!await call(db,'pc_super',[actor,id(1)]))throw Error('Forbidden');data={assignments:(await db.query('select * from petty_cash_property_assignments')).rows};}
+  }else if(url.pathname.endsWith('/candidates')){if(!await call(db,'pc_super',[actor,id(1)]))throw Error('Forbidden');data={users:(await db.query('select id,full_name,email from users where id in ($1,$2,$3,$4)',[id(11),id(12),id(13),id(16)])).rows};
+  }else if(url.pathname.endsWith('/upload')){
+   const request=new Request('http://fixture',{method:'POST',headers:req.headers,body:bytes});const form=await request.formData();const file=form.get('file');const uid=crypto.randomUUID();const path=`${id(1)}/${actor}/${uid}.png`;files.set(path,Buffer.from(await file.arrayBuffer()));await db.query('insert into petty_cash_uploads(id,organization_id,uploaded_by,storage_path,file_name,file_type) values ($1,$2,$3,$4,$5,$6)',[uid,id(1),actor,path,file.name,file.type]);data={upload_id:uid,file_name:file.name,file_type:file.type};
+  }else if(url.pathname.endsWith('/bulk')){
+   const results=[];for(const item of body.items){try{results.push({id:item.id,ok:true,request:await call(db,'pc_action',[actor,item.id,body.action,item])});}catch(e){results.push({id:item.id,ok:false,error:e.message});}}data={results};
+  }else if(url.pathname.endsWith('/tracker'))data=await call(db,'pc_report',[actor,id(1)]);
+  else if(url.pathname==='/api/petty-cash/expenses')data={expenses:(await db.query('select e.*,jsonb_build_object(\'request_no\',r.request_no) request from pc_my_expenses($1,$2)e join petty_cash_requests r on r.id=e.request_id',[actor,id(1)])).rows,total_pages:1};
+  else if(/\/documents\/[^/]+\/download$/.test(url.pathname)){
+   const doc=(await db.query('select * from petty_cash_documents where id=$1',[url.pathname.split('/').at(-2)])).rows[0];if(!doc||!await call(db,'pc_can_read',[actor,doc.request_id]))throw Error('Forbidden');res.setHeader('content-type',doc.file_type);res.end(files.get(doc.storage_path));return;
+  }else if(/\/expenses\/[^/]+$/.test(url.pathname))data={expense:body.action==='correct'?await call(db,'pc_correct_expense',[actor,url.pathname.split('/').at(-1),body]):await call(db,'pc_review_expense',[actor,url.pathname.split('/').at(-1),body.review_status,body.remark||''])};
+  else if(/\/[^/]+\/expenses$/.test(url.pathname))data={expense:await call(db,'pc_expense',[actor,url.pathname.split('/').at(-2),body])};
+  else if(url.pathname==='/api/petty-cash'){
+   if(req.method==='POST')data={request:await call(db,'pc_create_request',[actor,id(1),body])};else{
+    let rows=(await db.query('select * from pc_requests($1,$2) order by created_at desc',[actor,id(1)])).rows;const tab=url.searchParams.get('tab');
+    if(tab==='allocations')rows=rows.filter(r=>r.assigned_allocator_id===actor&&r.status==='submitted');else if(tab==='approvals')rows=rows.filter(r=>r.assigned_approver_id===actor&&r.status==='pending_approval');else if(tab==='disbursements')rows=rows.filter(r=>r.status==='approved');else if(tab==='reconciliation')rows=rows.filter(r=>['paid','settlement_submitted'].includes(r.status));else if(tab==='assigned')rows=rows.filter(r=>r.assigned_allocator_id===actor||r.assigned_approver_id===actor);else if(tab!=='all')rows=rows.filter(r=>r.requester_id===actor);data={requests:await Promise.all(rows.map(reqRow)),pagination:{total_pages:1}};
+   }
+  }else{
+   const rid=url.pathname.split('/').at(-1);
+   if(req.method==='PATCH')data={request:await call(db,'pc_action',[actor,rid,body.action,body])};else{
+    if(!await call(db,'pc_can_read',[actor,rid]))throw Error('Forbidden');const r=(await db.query('select * from petty_cash_requests where id=$1',[rid])).rows[0];data={request:await reqRow(r),balance:await call(db,'pc_balance',[id(1),r.requester_id,rid]),documents:(await db.query('select * from petty_cash_documents where request_id=$1',[rid])).rows,expenses:(await db.query('select * from petty_cash_expenses where request_id=$1',[rid])).rows,activity:(await db.query('select * from petty_cash_activity where request_id=$1',[rid])).rows};
+   }
+  }
+  res.setHeader('content-type','application/json');res.end(JSON.stringify(data));
+ }catch(e){res.statusCode=/Forbidden/i.test(e.message)?403:409;res.setHeader('content-type','application/json');res.end(JSON.stringify({error:e.message}));}});
+ await new Promise(r=>server.listen(0,'127.0.0.1',r));return {server,url:`http://127.0.0.1:${server.address().port}`};
+}
+for(const width of [1440,390])test(`real petty-cash UI + isolated PostgreSQL lifecycle at ${width}px`,{timeout:90000},async()=>{
+ const db=await setup();const {server,url}=await fixture(db);const browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE||'/usr/bin/chromium',args:['--no-sandbox']});const page=await browser.newPage({viewport:{width,height:1000}});const errors=[];page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>d.accept());
+ try{
+  const actor=async n=>{await page.goto(`${url}/?actor=${n}`);await page.getByRole('heading',{name:'Petty Cash',exact:true}).waitFor();};
+  await actor(10);await page.getByRole('button',{name:'Property Routing',exact:true}).click();await page.getByLabel('Allocator',{exact:true}).selectOption(id(12));await page.getByLabel('Approver',{exact:true}).selectOption(id(13));await page.getByRole('button',{name:'Save routing'}).click();await page.getByText(/Routing saved/).waitFor();
+  await actor(11);await page.getByRole('button',{name:'Request Petty Cash',exact:true}).click();const dialog=page.getByRole('dialog');await dialog.waitFor();assert.equal(await dialog.getByLabel('Property',{exact:true}).count(),0);assert.equal(await dialog.locator('select').count(),2);await dialog.getByLabel('Amount (₹)',{exact:true}).fill('100');await dialog.getByLabel('Purpose',{exact:true}).fill('Fixture travel cash');await dialog.getByRole('button',{name:'Submit request'}).click();await dialog.waitFor({state:'detached'});assert.equal(await page.getByRole('button',{name:'Request Petty Cash',exact:true}).isDisabled(),true);
+  await call(db,'pc_create_request',[id(16),id(1),{amount_requested:50,purpose:'Second fixture cash'}]);
+  await actor(12);await page.getByRole('button',{name:'To Allocate',exact:true}).click();await page.getByLabel('Select all visible requests').check();await page.getByRole('button',{name:'Process selected (2)'}).click();await page.getByText(/2 succeeded/).waitFor();
+  await actor(13);await page.getByRole('button',{name:'To Approve',exact:true}).click();await page.getByLabel('Select all visible requests').check();await page.getByRole('button',{name:'Process selected (2)'}).click();await page.getByText(/2 succeeded/).waitFor();
+  await actor(14);await page.getByRole('button',{name:'To Pay',exact:true}).click();await page.getByRole('row').filter({hasText:'Fixture 11'}).getByRole('button',{name:'View'}).click();await page.getByRole('button',{name:'Mark Paid',exact:true}).click();await page.getByRole('dialog').locator('input[type=file]').setInputFiles({name:'fixture-payment.png',mimeType:'image/png',buffer:png});await page.getByText('Attached: fixture-payment.png').waitFor();await page.getByRole('button',{name:'Confirm',exact:true}).click();await page.getByRole('button',{name:'Mark Paid',exact:true}).waitFor({state:'detached'});await page.getByRole('button',{name:'Close dialog'}).click();
+  await actor(11);await page.getByRole('button',{name:'View',exact:true}).first().click();await page.getByRole('button',{name:'Record expense',exact:true}).click();await page.getByRole('dialog').getByLabel('Amount (₹)',{exact:true}).fill('100');await page.getByLabel('Vendor / payee').fill('Fixture taxi');await page.getByLabel('Description / purpose').fill('Fixture travel with receipt');await page.getByRole('dialog').locator('input[type=file]').setInputFiles({name:'fixture-receipt.png',mimeType:'image/png',buffer:png});await page.getByText('Attached: fixture-receipt.png').waitFor();await page.getByRole('button',{name:'Save expense',exact:true}).click();await page.getByRole('button',{name:'Save expense',exact:true}).waitFor({state:'detached'});await page.getByText('fixture-receipt.png',{exact:true}).waitFor();
+  const placement=await page.getByRole('dialog').evaluate(el=>{const overlay=el.parentElement;document.querySelector('aside').style.display='block';return {body:overlay.parentElement===document.body,aboveSidebar:overlay.contains(document.elementFromPoint(20,500))};});assert.equal(placement.body,true);assert.equal(placement.aboveSidebar,true);
+  await page.screenshot({path:join(scratch,`expense-${width}.png`),fullPage:true});await page.locator('aside').evaluate(el=>el.style.removeProperty('display'));await page.getByRole('button',{name:'Close dialog'}).click();assert.equal(await page.getByRole('button',{name:'Request Petty Cash',exact:true}).isEnabled(),true);await page.getByRole('button',{name:'My Expenses',exact:true}).click();await page.getByText('Fixture travel with receipt',{exact:false}).waitFor();
+  await actor(15);await page.getByRole('alert').waitFor();assert.equal(await page.getByRole('link',{name:'Petty Cash',exact:true}).count(),0);assert.equal(await page.getByRole('button',{name:'Request Petty Cash',exact:true}).isDisabled(),true);
+  assert.deepEqual(errors,[]);const wallet=await call(db,'pc_wallet',[id(11),id(1)]);assert.equal(Number(wallet.balance),0);assert.equal(wallet.can_request,true);assert.equal((await db.query('select count(*) n from petty_cash_requests')).rows[0].n,2);console.log(`Screenshots: ${scratch}`);
+ }catch(e){console.log('Browser failure artifacts:',scratch,await page.locator('body').innerText());await page.screenshot({path:join(scratch,`failure-${width}.png`),fullPage:true});throw e;}finally{await browser.close();await new Promise(r=>server.close(r));await db.close();}
+});

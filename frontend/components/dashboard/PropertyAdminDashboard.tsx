@@ -1,5 +1,6 @@
 'use client';
 
+import PettyCashNavLink from '@/frontend/components/pettyCash/PettyCashNavLink';
 import HRTicketsContent from '@/frontend/components/hr/HRTicketsContent';
 import React, { useState, useEffect, useMemo, useCallback, useRef, memo } from 'react';
 import {
@@ -931,6 +932,7 @@ const PropertyAdminDashboard = ({ propertyId: propPropertyId }: PropertyAdminDas
                             </button>
                         </div>
                     </div>
+                <PettyCashNavLink />
                 </nav>
 
                 <div className="px-4 pt-3 pb-12 border-t border-border mt-auto flex-shrink-0 bg-white">

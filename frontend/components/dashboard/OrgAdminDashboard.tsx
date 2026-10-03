@@ -1,5 +1,6 @@
 'use client';
 
+import PettyCashNavLink from '@/frontend/components/pettyCash/PettyCashNavLink';
 import HRTicketsContent from '@/frontend/components/hr/HRTicketsContent';
 import React, { useState, useEffect, useMemo, useCallback, useRef, memo } from 'react';
 import {
@@ -1530,6 +1531,7 @@ const OrgAdminDashboard = () => {
                             </button>
                         </div>
                     </div>
+                <PettyCashNavLink />
                 </nav>
 
                 <div className="pt-3 border-t border-border px-4 pb-6 flex-shrink-0 bg-white">

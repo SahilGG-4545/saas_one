@@ -7,6 +7,7 @@ import { Wallet, IndianRupee, ArrowLeft, LogOut, Menu, X, Lock, Target, Siren } 
 import { useAuth } from '@/frontend/context/AuthContext';
 import { accountsCaps } from '@/frontend/lib/accounts/roles';
 import { canSeeAop } from '@/frontend/lib/aop/access';
+import { pettyCashCaps } from '@/frontend/lib/pettyCash/roles';
 import { FMS_ROLES } from '@/frontend/lib/auth/silos';
 
 /**
@@ -24,10 +25,10 @@ export default function AccountsWorkspace({ children }: { children: React.ReactN
     const { membership, signOut } = useAuth();
     const [mobileOpen, setMobileOpen] = useState(false);
 
+    const pettyCashWorkspace = pathname?.split('/').includes('petty-cash');
     const caps = accountsCaps(membership);
-    const tenantLike = new Set(['tenant', 'tenant_user', 'super_tenant', 'vendor']);
     const roles = [membership?.org_role, ...(membership?.properties?.map((p) => p.role) || [])].filter(Boolean) as string[];
-    const canSeePettyCash = !!membership?.is_master_admin || roles.some((r) => !tenantLike.has(r));
+    const canSeePettyCash = pettyCashCaps(membership, orgId).canSee;
 
     // A siloed finance user has no FMS dashboard to go back to — offering the link would
     // bounce them into a screen they cannot access.
@@ -52,8 +53,8 @@ export default function AccountsWorkspace({ children }: { children: React.ReactN
     const sidebar = (
         <div className="flex flex-col h-full">
             <div className="px-5 py-5 border-b border-border">
-                <p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary">Accounts</p>
-                <p className="text-sm font-bold text-text-primary mt-0.5">Finance workspace</p>
+                <p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary">{pettyCashWorkspace ? 'Petty Cash' : 'Accounts'}</p>
+                <p className="text-sm font-bold text-text-primary mt-0.5">{pettyCashWorkspace ? 'Requests, wallet and spends' : 'Finance workspace'}</p>
             </div>
 
             <nav className="flex-1 px-3 pt-4 space-y-1 overflow-y-auto">
