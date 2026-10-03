@@ -20,11 +20,11 @@ test('complete booking message resolves a real room and books once without dupli
 test('missing details are retained across replies and rooms are never silently selected', async () => {
     const { deps, bookings } = setup();
     let result = await advanceBooking(input('book meeting room'), null, deps);
-    assert.equal(result.reply.key, 'booking_details');
-    assert.match(result.reply.params[1], /date/);
-    assert.match(result.reply.params[1], /room/);
+    assert.equal(result.reply.key, 'booking_update');
+    assert.match(result.reply.params[2], /date/);
+    assert.match(result.reply.params[2], /room/);
     result = await advanceBooking(input('tomorrow 2 to 3 pm'), result.session, deps);
-    assert.match(result.reply.params[1], /Conference Room 1/);
+    assert.match(result.reply.params[2], /Conference Room 1/);
     assert.equal(result.session.date, '2026-10-04');
     result = await advanceBooking(input('Conference Room 2'), result.session, deps);
     assert.equal(bookings[0].roomId, 'r2');
@@ -37,14 +37,14 @@ test('ambiguous meridiem invalid dates past times and reversed ranges do not boo
         const { deps, bookings } = setup();
         const result = await advanceBooking(input(text), null, deps);
         assert.equal(bookings.length, 0, text);
-        assert.equal(result.reply.key, 'booking_details', text);
+        assert.equal(result.reply.key, 'booking_update', text);
     }
 });
 test('multiple properties require explicit resolution even when room names match', async () => {
     const { deps, bookings } = setup({ properties: async () => [...properties, { id: 'p2', name: 'Other Plaza' }] });
     let result = await advanceBooking(input('book Conference Room 1 tomorrow 2pm to 3pm'), null, deps);
     assert.equal(bookings.length, 0);
-    assert.match(result.reply.params[1], /property/);
+    assert.match(result.reply.params[2], /property/);
     result = await advanceBooking(input('SS Plaza'), result.session, deps);
     assert.equal(bookings[0].propertyId, 'p1');
 });
@@ -52,13 +52,13 @@ test('unknown room unavailable room revoked access and insufficient credits do n
     for (const extra of [{ availableRooms: async () => [] }, { bookRange: async () => { throw Object.assign(new Error('credits'), { code: 'INSUFFICIENT_CREDITS' }); } }]) {
         const { deps } = setup(extra);
         const result = await advanceBooking(input('book Conference Room 1 tomorrow 2pm to 3pm'), null, deps);
-        assert.equal(result.reply.key, 'booking_problem');
+        assert.equal(result.reply.key, 'booking_update');
     }
     const { deps, bookings } = setup();
     const unknown = await advanceBooking(input('book Imaginary Room tomorrow 2pm to 3pm'), null, deps);
-    assert.equal(unknown.reply.key, 'booking_details');
+    assert.equal(unknown.reply.key, 'booking_update');
     const revoked = await advanceBooking(input('2pm to 3pm'), { step: 'booking_request', id: 'old', property: { id: 'revoked', name: 'Revoked' } }, deps);
-    assert.equal(revoked.reply.key, 'booking_problem');
+    assert.equal(revoked.reply.key, 'booking_update');
     assert.equal(bookings.length, 0);
 });
 test('parser supports explicit duration, 24-hour times and corrections without inventing missing times', () => {
@@ -72,7 +72,7 @@ test('calendar dates do not hide a later time range and individual missing times
     assert.deepEqual(parseBookingMessage('book Conference Room 1 on 04-10-2026 2pm to 3pm', deps.now()).times, { startTime: '14:00', endTime: '15:00' });
     let result = await advanceBooking(input('book Conference Room 1 tomorrow from 2pm'), null, deps);
     assert.equal(result.session.startTime, '14:00');
-    assert.match(result.reply.params[1], /end time/);
+    assert.match(result.reply.params[2], /end time/);
     result = await advanceBooking(input('3pm'), result.session, deps);
     assert.equal(bookings[0].endTime, '15:00');
 });
@@ -84,7 +84,7 @@ test('alternative rooms or multiple time ranges require clarification rather tha
         const { deps, bookings } = setup({ rooms: async () => [...rooms, { id: 'r3', name: 'Boardroom' }] });
         const result = await advanceBooking(input(text), null, deps);
         assert.equal(bookings.length, 0, text);
-        assert.equal(result.reply.key, 'booking_details', text);
+        assert.equal(result.reply.key, 'booking_update', text);
     }
 });
 test('an explicit unknown room correction clears the prior selected room', async () => {
@@ -92,7 +92,7 @@ test('an explicit unknown room correction clears the prior selected room', async
     let result = await advanceBooking(input('book Conference Room 1 from 2pm to 3pm'), null, deps);
     result = await advanceBooking(input('book Imaginary Room tomorrow'), result.session, deps);
     assert.equal(bookings.length, 0);
-    assert.match(result.reply.params[1], /meeting room/);
+    assert.match(result.reply.params[2], /meeting room/);
 });
 test('retry after committed booking recognizes existing request before its own availability or past-time checks', async () => {
     let availabilityChecks = 0;
@@ -122,7 +122,7 @@ test('multiple durations and independently mentioned nested room names are ambig
         const { deps, bookings } = setup({ rooms: async () => [...rooms, { id: 'r3', name: 'Conference Room' }] });
         const result = await advanceBooking(input(text), null, deps);
         assert.equal(bookings.length, 0, text);
-        assert.equal(result.reply.key, 'booking_details');
+        assert.equal(result.reply.key, 'booking_update');
     }
 });
 
@@ -134,7 +134,7 @@ test('enabled message booking is reached from the existing menu and rechecks use
     assert.equal(bookings.length, 1);
     const denied = await advanceBooking(input('Book Conference Room 1 tomorrow 2pm to 3pm'), null,
         { ...deps, findUser: async () => null });
-    assert.equal(denied.reply.key, 'booking_problem');
+    assert.equal(denied.reply.key, 'booking_update');
     assert.equal(bookings.length, 1);
 });
 
@@ -142,5 +142,20 @@ test('mixed time formats cannot hide an alternative interval', async () => {
     const { deps, bookings } = setup();
     const result = await advanceBooking(input('book Conference Room 1 tomorrow 2pm to 3pm, actually at 4pm for 1 hour'), null, deps);
     assert.equal(bookings.length, 0);
-    assert.equal(result.reply.key, 'booking_details');
+    assert.equal(result.reply.key, 'booking_update');
+});
+
+test('one approved booking update campaign covers missing fields and booking failures', async () => {
+    const { campaignOptions } = await import('../backend/lib/whatsapp/assistant/templates.mjs');
+    const { deps } = setup();
+    const missing = await advanceBooking(input('book meeting room'), null, deps);
+    const unavailable = await advanceBooking(input('book Conference Room 1 tomorrow 2pm to 3pm'), null,
+        { ...deps, availableRooms: async () => [] });
+    for (const result of [missing, unavailable]) {
+        assert.equal(result.reply.key, 'booking_update');
+        assert.equal(campaignOptions('919876543210', result.reply).campaignName, 'fms_whatsapp_booking_update_v1');
+        assert.equal(result.reply.params.length, 3);
+    }
+    assert.match(missing.reply.params[2], /date/);
+    assert.match(unavailable.reply.params[1], /No room is available/);
 });

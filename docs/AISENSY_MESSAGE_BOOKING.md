@@ -32,51 +32,48 @@ assistant booking_created campaign is sent for this new flow. Ensure the booker
 receives the existing booking notification and its campaign is active. Existing
 guided bookings and ticket creation keep their existing behavior.
 
-## Two templates to submit to AiSensy
+## One template to submit to AiSensy
 
+Name and API campaign: `fms_whatsapp_booking_update_v1`.
 Language: English. Suggested category: Utility (Meta decides approval/category).
-No header, footer or buttons are required. Create active API campaigns with the
-same names after approval. The parameter order below is required.
-
-### fms_whatsapp_booking_details_v1
-
-Body:
-
-```text
-To complete your meeting-room booking at {{1}}, please provide {{2}}.
-
-Details received: {{3}}.
-
-Reply with the missing details. Example: Conference Room 1, today, 2 PM to 3 PM.
-```
-
-Samples:
-
-1. `SS Plaza`
-2. `the meeting room (1. Conference Room 1; 2. Conference Room 2)`
-3. `2026-10-03, 14:00 to 15:00 IST`
-
-The same template asks for date, room, property, start/end time, or combinations;
-it retains already supplied values. Room/property choices come from allowed live
-records, with the first ten choices shown. Exact names can also be used.
-
-### fms_whatsapp_booking_problem_v1
+No header, footer or buttons required. Parameter order is property, booking
+information/problem, required response. Variables contain only booking-related
+facts and choices; this is not a workaround for arbitrary AI chat.
 
 Body:
 
 ```text
-We could not complete your meeting-room booking at {{1}}.
+Meeting-room booking update for {{1}}.
 
-Reason: {{2}}
+Booking information: {{2}}
 
 Next step: {{3}}
+
+Reply here with the requested details.
 ```
 
-Samples:
+Approval samples:
 
 1. `SS Plaza`
-2. `The requested room is unavailable.`
-3. `Choose an available room: 1. Conference Room 2`
+2. `Conference Room 1, 2026-10-03, 14:00 to 15:00 IST`
+3. `Please send a future date because the requested time has already passed.`
+
+The same template covers all these cases:
+
+| Case | Booking information (parameter 2) | Required response (parameter 3) |
+|---|---|---|
+| Missing date | Conference Room 1, 14:00 to 15:00 IST | the date: today, tomorrow, or DD-MM-YYYY |
+| Missing room | 2026-10-03, 14:00 to 15:00 IST | the meeting room: 1. Conference Room 1; 2. Conference Room 2 |
+| Missing time | Conference Room 1, 2026-10-03 | start and end times with AM/PM |
+| Multiple properties | Date and time already supplied | the property: 1. SS Plaza; 2. Other Plaza |
+| Unavailable room | The requested room is unavailable | an available room: 1. Conference Room 2 |
+| Insufficient credits | Your allocated credits are insufficient | a shorter duration or contact your property manager |
+| Invalid/past date or time | Valid details already supplied | a future date/time |
+| Unclear alternatives | Valid details already supplied | one room and one unambiguous time interval |
+
+The backend retains supplied values and combines missing fields into one prompt.
+Choices come from allowed live records, with the first ten shown. Exact names
+can also be used. Successful booking notifications remain in the existing outbox.
 
 ## Deployment
 
@@ -86,7 +83,7 @@ Samples:
    This adds a service-only time-range booking RPC. Original assistant migration,
    existing credit deduction function and event_outbox triggers must be present.
    Both new migrations are reapplicable. Do not rerun the original CREATE migration.
-3. Approve the two templates and activate both API campaigns.
+3. Approve this one template and activate its API campaign.
 4. Retain the existing approved greeting/menu campaign and existing notification
    campaigns. Both AISENSY_API_KEY and notification configuration must be ready.
 5. Set `AISENSY_ASSISTANT_ENABLED=true` and
@@ -101,8 +98,7 @@ Optional AISENSY_ASSISTANT_CAMPAIGNS JSON mapping additions:
 
 ```json
 {
-  "booking_details": "fms_whatsapp_booking_details_v1",
-  "booking_problem": "fms_whatsapp_booking_problem_v1"
+  "booking_update": "fms_whatsapp_booking_update_v1"
 }
 ```
 

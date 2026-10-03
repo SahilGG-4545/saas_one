@@ -100,7 +100,7 @@ function named(text, items) {
 
 const labels = items => items.slice(0, 10).map((item, index) => `${index + 1}. ${item.name}`).join('; ');
 const problem = (session, reason, alternatives = 'Reply with another room, date or time, or MENU to start again.') =>
-    ({ session, reply: { key: 'booking_problem', params: [session?.property?.name || 'your property', reason, alternatives] } });
+    ({ session, reply: { key: 'booking_update', params: [session?.property?.name || 'your property', reason, alternatives] } });
 
 export async function advanceBooking(input, current, deps) {
     const user = await deps.findUser(input.phone);
@@ -167,7 +167,7 @@ export async function advanceBooking(input, current, deps) {
         session.awaiting = !session.property ? 'property' : !session.room ? 'room' : session.startTime && !session.endTime ? 'end' : session.endTime && !session.startTime ? 'start' : 'details';
         session.options = session.awaiting === 'property' ? properties : available;
         const summary = [session.room?.name, session.date, session.startTime && session.endTime ? `${session.startTime} to ${session.endTime} IST` : null].filter(Boolean).join(', ') || 'No date, time or room confirmed yet';
-        return { session, reply: { key: 'booking_details', params: [session.property?.name || 'your property', missing.join('; '), summary] } };
+        return { session, reply: { key: 'booking_update', params: [session.property?.name || 'your property', summary, `Please send ${missing.join('; ')}.`] } };
     }
     try {
         await deps.bookRange({ userId: user.id, propertyId: session.property.id, roomId: session.room.id,
