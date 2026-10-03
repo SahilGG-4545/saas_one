@@ -8,6 +8,7 @@ import {
     Sparkles, ArrowRight
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import ModalPortal from '../ui/ModalPortal';
 
 interface BulkApproverUploadModalProps {
     isOpen: boolean;
@@ -134,6 +135,7 @@ export default function BulkApproverUploadModal({
     };
 
     return (
+        <ModalPortal>
         <AnimatePresence>
             <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs overflow-y-auto">
                 <motion.div
@@ -374,5 +376,6 @@ export default function BulkApproverUploadModal({
                 </motion.div>
             </div>
         </AnimatePresence>
+        </ModalPortal>
     );
 }

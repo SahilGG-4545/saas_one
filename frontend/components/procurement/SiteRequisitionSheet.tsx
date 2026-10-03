@@ -7,6 +7,7 @@ import {
     MapPin, IndianRupee, ShieldAlert, Coffee, X, Search
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import ModalPortal from '../ui/ModalPortal';
 
 export interface RequisitionRow {
     id: string;
@@ -983,6 +984,7 @@ export default function SiteRequisitionSheet({
             </div>
 
             {/* Over-Budget Submit Confirmation Modal (Non-Blocking) */}
+            <ModalPortal>
             <AnimatePresence>
                 {showOverBudgetModal && (
                     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs overflow-y-auto">
@@ -1070,8 +1072,10 @@ export default function SiteRequisitionSheet({
                     </div>
                 )}
             </AnimatePresence>
+            </ModalPortal>
 
             {/* Submission Progress Modal Overlay to prevent duplicate clicks during slow network */}
+            <ModalPortal>
             {isSubmitting && (
                 <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
                     <div className="bg-white rounded-2xl p-6 shadow-2xl border border-slate-200 max-w-sm w-full text-center space-y-3 animate-in fade-in zoom-in-95 duration-150">
@@ -1093,6 +1097,7 @@ export default function SiteRequisitionSheet({
                     </div>
                 </div>
             )}
+            </ModalPortal>
         </div>
     );
 }
