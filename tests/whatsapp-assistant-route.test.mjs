@@ -22,6 +22,7 @@ function handler(env, enqueue = async () => 'event-1') {
         '@/backend/lib/whatsapp/processMessage': { processIncomingMessage: async () => {} },
         '@/backend/lib/whatsapp/greeting': { isGreetingMessage: () => false },
         '@/backend/services/AiSensyService': { AiSensyService: { sendGreeting: async () => {} } },
+        '@/whatsapp-test/freeformTest': { handleFreeformTest: async () => false },
     };
     const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
     vm.runInNewContext(compiled, { exports, require: name => { if (!(name in imports)) throw new Error('Unexpected import ' + name); return imports[name]; },

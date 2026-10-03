@@ -4,6 +4,7 @@ import { enqueueAssistantMessage, drainWhatsAppPhone } from '@/backend/lib/whats
 import { processIncomingMessage } from '@/backend/lib/whatsapp/processMessage';
 import { isGreetingMessage } from '@/backend/lib/whatsapp/greeting';
 import { AiSensyService } from '@/backend/services/AiSensyService';
+import { handleFreeformTest } from '@/whatsapp-test/freeformTest';
 
 export const runtime = 'nodejs';
 export const maxDuration = 120;
@@ -39,6 +40,7 @@ export async function POST(req: NextRequest) {
         shape: payloadShape(body),
     }));
     if (!input) return NextResponse.json({ ok: true, ignored: true });
+    if (await handleFreeformTest(input)) return NextResponse.json({ success: true, test: true });
     if (input.mediaUrl) {
         try { if (new URL(input.mediaUrl).protocol !== 'https:') throw new Error('Invalid protocol'); }
         catch { return NextResponse.json({ error: 'Media must use an HTTPS URL' }, { status: 400 }); }
