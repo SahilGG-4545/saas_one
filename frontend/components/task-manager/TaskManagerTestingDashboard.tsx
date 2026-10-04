@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
+import { useAuth } from '@/frontend/context/AuthContext';
 import {
     FlaskConical,
     Save,
@@ -33,6 +34,7 @@ interface TestingConfig {
 }
 
 export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string }) {
+    const { user } = useAuth();
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [sendingDigest, setSendingDigest] = useState(false);
@@ -155,7 +157,8 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
             setEnabled(true);
 
             // Trigger morning notification
-            const res = await fetch('/api/task-manager/cron/morning-notifications?confirm=yes');
+            const actorParam = user?.id ? `&actorId=${user.id}` : '';
+            const res = await fetch(`/api/task-manager/cron/morning-notifications?confirm=yes${actorParam}`);
             const data = await res.json();
 
             if (data.success) {

@@ -17,12 +17,13 @@ async function handleTrigger(request: NextRequest) {
         const { searchParams } = new URL(request.url);
         const authHeader = request.headers.get('authorization');
         const cronSecret = process.env.CRON_SECRET;
+        const urlSecret = searchParams.get('secret');
 
-        const isCronAuthorized = cronSecret && authHeader === `Bearer ${cronSecret}`;
+        const isCronAuthorized = cronSecret && (authHeader === `Bearer ${cronSecret}` || urlSecret === cronSecret);
         const actorId = searchParams.get('actorId') || request.headers.get('x-actor-id');
         const confirmParam = searchParams.get('confirm') === 'yes';
 
-        let isAuthorized = isCronAuthorized;
+        let isAuthorized = Boolean(isCronAuthorized);
 
         // In dev or with actorId check
         if (!isAuthorized && actorId) {
@@ -36,14 +37,17 @@ async function handleTrigger(request: NextRequest) {
             }
         }
 
-        // Allow localhost development test with ?confirm=yes if no secret is configured
-        if (!isAuthorized && confirmParam && process.env.NODE_ENV !== 'production') {
-            isAuthorized = true;
+        if (!isAuthorized && confirmParam) {
+            const { TaskDatabaseService } = await import('@/task-manager/TaskDatabaseService');
+            const testConfig = await TaskDatabaseService.getTestingConfig();
+            if (testConfig?.enabled || process.env.NODE_ENV !== 'production') {
+                isAuthorized = true;
+            }
         }
 
         if (!isAuthorized) {
             return NextResponse.json(
-                { success: false, error: 'Unauthorized. Provide valid Bearer token or authorized actorId.' },
+                { success: false, error: 'Unauthorized. Provide valid Bearer token, ?secret=..., or authorized actorId.' },
                 { status: 401 }
             );
         }
