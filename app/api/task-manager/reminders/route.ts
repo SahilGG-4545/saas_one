@@ -20,7 +20,7 @@ export async function POST(request: NextRequest) {
             }
             const message = `Hello ${name || 'there'}! 👋 This is a quick friendly reminder from your Task Manager. Please review and update your pending tasks for today. Reply "tasks" anytime to see your list.`;
             if (!dryRun) {
-                await TaskMessagingService.sendFreeformMessage(phone, message);
+                await TaskMessagingService.sendMessage(phone, message);
             }
             return NextResponse.json({
                 ok: true,
