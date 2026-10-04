@@ -7,7 +7,7 @@ import {
     Search, Plus, Filter, LogOut, ChevronRight, MapPin, Edit, Trash2, X, Check, UsersRound,
     Coffee, IndianRupee, FileDown, ChevronDown, Fuel, Menu, Upload, FileBarChart, Zap, Package, ClipboardCheck, Scan, Key,
     AlertCircle, CheckCircle2, Clock, GitBranch, DoorOpen, MessageCircle, Send, Loader2, CalendarDays, Calendar, Wrench, ShoppingCart, Sun, Moon, Droplets, TrendingUp, Smartphone,
-    MessageSquarePlus, Bot, Gauge, Cpu, FolderLock, Layers, ShieldCheck, ClipboardList
+    MessageSquarePlus, Bot, Gauge, Cpu, FolderLock, Layers, ShieldCheck, ClipboardList, FlaskConical
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { createClient } from '@/frontend/utils/supabase/client';
@@ -52,6 +52,7 @@ import VendorManagementModal from '@/frontend/components/vendor/VendorManagement
 import GuestExperienceDashboard from '@/frontend/components/guest-experience/GuestExperienceDashboard';
 import AITicketsDashboard from '@/frontend/components/ai-tickets/AITicketsDashboard';
 import TaskManagerSuperuserDashboard from '@/frontend/components/task-manager/TaskManagerSuperuserDashboard';
+import TaskManagerTestingDashboard from '@/frontend/components/task-manager/TaskManagerTestingDashboard';
 
 import { BDQuickStats } from './UnifiedDashboard';
 import FeedbackModal from '@/frontend/components/ui/FeedbackModal';
@@ -63,7 +64,7 @@ import AgentPulse from '@/frontend/components/agents/AgentPulse';
 import type { ModuleKey } from '@/frontend/types/agentRuntime';
 
 // Types
-type Tab = 'overview' | 'properties' | 'requests' | 'reports' | 'visitors' | 'settings' | 'profile' | 'revenue' | 'users' | 'diesel_logger' | 'diesel' | 'electricity_logger' | 'electricity' | 'stock_reports' | 'checklist' | 'super_tenants' | 'escalation' | 'rooms' | 'ppm' | 'vendors' | 'procurement' | 'roster' | 'water_logger' | 'water' | 'guest_experience' | 'ai_tickets' | 'org_progress' | 'org_efficiency' | 'agent_console' | 'document_bank' | 'grievance' | 'assets' | 'tasks';
+type Tab = 'overview' | 'properties' | 'requests' | 'reports' | 'visitors' | 'settings' | 'profile' | 'revenue' | 'users' | 'diesel_logger' | 'diesel' | 'electricity_logger' | 'electricity' | 'stock_reports' | 'checklist' | 'super_tenants' | 'escalation' | 'rooms' | 'ppm' | 'vendors' | 'procurement' | 'roster' | 'water_logger' | 'water' | 'guest_experience' | 'ai_tickets' | 'org_progress' | 'org_efficiency' | 'agent_console' | 'document_bank' | 'grievance' | 'assets' | 'tasks' | 'task_testing';
 
 /**
  * AGENT PULSE MOUNTS — tab -> canonical module slug.
@@ -1495,6 +1496,17 @@ const OrgAdminDashboard = () => {
                                 <span className="flex-1 text-left">Task Manager</span>
                             </button>
                             <button
+                                onClick={() => handleTabChange('task_testing')}
+                                className={`w-full flex items-center gap-3 px-4 py-2 rounded-xl transition-all duration-200 font-bold text-sm group ${activeTab === 'task_testing'
+                                    ? 'bg-primary text-text-inverse shadow-sm'
+                                    : 'text-text-secondary hover:bg-primary/10 hover:text-primary'
+                                    }`}
+                            >
+                                <FlaskConical className={`w-4 h-4 transition-transform ${activeTab === 'task_testing' ? '' : 'group-hover:scale-110 text-amber-500'}`} />
+                                <span className="flex-1 text-left">Task Testing</span>
+                                <span className="text-[10px] uppercase font-extrabold px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-600 dark:text-amber-400">Beta</span>
+                            </button>
+                            <button
                                 onClick={() => handleTabChange('ai_tickets')}
                                 className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl transition-all duration-200 font-bold text-sm group ${activeTab === 'ai_tickets'
                                     ? 'bg-primary text-text-inverse shadow-sm'
@@ -1790,6 +1802,7 @@ const OrgAdminDashboard = () => {
                         {!isOpsSuperAdmin && activeTab === 'agent_console' && <AgentConsole key="agent-console-tab" orgId={org?.id ?? ''} />}
                         {activeTab === 'ai_tickets' && <AITicketsDashboard propertyId={selectedPropertyId === 'all' ? undefined : selectedPropertyId} />}
                         {activeTab === 'tasks' && <TaskManagerSuperuserDashboard orgId={org?.id || ''} />}
+                        {activeTab === 'task_testing' && <TaskManagerTestingDashboard orgId={org?.id || ''} />}
                         {activeTab === 'revenue' && <RevenueTab key="revenue-tab" properties={properties} selectedPropertyId={selectedPropertyId} />}
                         {activeTab === 'properties' && (
                             <PropertiesTab

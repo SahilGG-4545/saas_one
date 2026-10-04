@@ -226,13 +226,12 @@ export async function processIncomingMessage(
         }
 
         // ── Task Manager Interceptor: handle employee task actions ──────────
-        const { handleTaskManagerMessage } = await import('@/task-manager/router');
-        const handledByTaskManager = await handleTaskManagerMessage({
-            senderPhone,
-            messageText,
-            user: userRow,
+        const { TaskMessageRouter } = await import('@/task-manager/TaskMessageRouter');
+        const routeResult = await TaskMessageRouter.routeInboundMessage({
+            phone: senderPhone,
+            text: messageText,
         });
-        if (handledByTaskManager) {
+        if (routeResult.handledByTaskManager) {
             return;
         }
 

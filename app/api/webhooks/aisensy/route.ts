@@ -5,6 +5,8 @@ import { processIncomingMessage } from '@/backend/lib/whatsapp/processMessage';
 import { isGreetingMessage } from '@/backend/lib/whatsapp/greeting';
 import { AiSensyService } from '@/backend/services/AiSensyService';
 import { handleFreeformTest } from '@/whatsapp-test/freeformTest';
+import { TaskMessageRouter } from '@/task-manager/TaskMessageRouter';
+import { TaskIdempotencyService } from '@/task-manager/TaskIdempotencyService';
 
 export const runtime = 'nodejs';
 export const maxDuration = 120;
@@ -40,11 +42,43 @@ export async function POST(req: NextRequest) {
         shape: payloadShape(body),
     }));
     if (!input) return NextResponse.json({ ok: true, ignored: true });
+
+    // Idempotency: Ignore duplicate webhook deliveries (Phase 19)
+    if (input.messageId && await TaskIdempotencyService.isDuplicateWebhook(input.messageId)) {
+        console.info('[AiSensyWebhook] Duplicate delivery ignored', { messageId: input.messageId });
+        return NextResponse.json({ success: true, duplicate: true });
+    }
+    if (input.messageId) {
+        TaskIdempotencyService.recordProcessedWebhook(input.messageId);
+    }
+
     if (await handleFreeformTest(input)) return NextResponse.json({ success: true, test: true });
     if (input.mediaUrl) {
         try { if (new URL(input.mediaUrl).protocol !== 'https:') throw new Error('Invalid protocol'); }
         catch { return NextResponse.json({ error: 'Media must use an HTTPS URL' }, { status: 400 }); }
     }
+
+    // Task Manager WhatsApp Routing (Phase 6)
+    if (input.text) {
+        try {
+            const routeResult = await TaskMessageRouter.routeInboundMessage({
+                phone: input.phone,
+                text: input.text,
+                messageId: input.messageId || undefined
+            });
+
+            if (routeResult.handledByTaskManager) {
+                console.info('[AiSensyWebhook] Inbound routed to TASK_MANAGER', {
+                    phoneMasked: input.phone.replace(/(\d{4})\d+(\d{2})/, '$1****$2'),
+                    command: routeResult.taskResult?.command
+                });
+                return NextResponse.json({ success: true, routedTo: 'TASK_MANAGER' });
+            }
+        } catch (routeError) {
+            console.error('[AiSensyWebhook] Task routing error, falling back to facility:', routeError);
+        }
+    }
+
     if (!enabled) {
         after(async () => {
             try {

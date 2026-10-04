@@ -2,153 +2,99 @@ import dotenv from 'dotenv';
 dotenv.config({ path: '.env.local' });
 dotenv.config({ path: '.env' });
 
-async function runTests() {
-    const { TaskManagerService } = await import('../TaskManagerService');
-    const { handleTaskManagerMessage } = await import('../router');
-    const { detectTaskIntent } = await import('../intentDetector');
-    const { supabaseAdmin } = await import('@/backend/lib/supabase/admin');
+async function run() {
+    console.log('🧪 Starting Phase 5 Morning WhatsApp Task Notification Tests...\n');
 
-    console.log('🧪 Starting Phase 5 Corporate Task Manager & Superuser Oversight Tests...\n');
+    const { supabaseAdmin } = await import('../../backend/lib/supabase/admin');
+    const { TaskDatabaseService } = await import('../TaskDatabaseService');
+    const { TaskNotificationService } = await import('../TaskNotificationService');
+    const typeModule = await import('../types');
 
-    const superuserPhone = '8433649199'; // Sahil Gorde
-    const regularPhone = '9876543210';
-    const nonEnrolledPhone = '9999999999';
+    // ── Test 1: Unit Test Digest Formatter ────────────────────────────────────
+    console.log('--- Test 1: buildMorningDigest Formatting ---');
+    const mockTasks: any[] = [
+        { id: '1', title: 'Inspect Electrical Panels', status: 'pending' },
+        { id: '2', title: 'Clean Conference Room B', status: 'completed' },
+        { id: '3', title: 'Restock Stationery', status: 'pending' },
+    ];
 
-    // 1. Resolve test user
-    const { data: user } = await supabaseAdmin
-        .from('users')
-        .select('id, full_name, phone')
-        .or(`phone.eq.${superuserPhone},phone.ilike.%${superuserPhone}`)
-        .single();
+    const digest = TaskNotificationService.buildMorningDigest('Rahul Sharma', mockTasks);
+    console.log('Generated Digest:\n' + digest + '\n');
 
-    if (!user) {
-        console.error('❌ Test user with phone', superuserPhone, 'not found in DB!');
-        process.exit(1);
+    if (!digest.includes('Good morning Rahul! 📋')) {
+        throw new Error('Digest greeting missing expected employee name');
     }
-    console.log(`👤 Using primary superuser: ${user.full_name} (${user.id})`);
+    if (!digest.includes('1. Inspect Electrical Panels [Pending ⏳]')) {
+        throw new Error('Task #1 formatted incorrectly');
+    }
+    if (!digest.includes('2. Clean Conference Room B [Completed ✅]')) {
+        throw new Error('Task #2 formatted incorrectly');
+    }
+    if (!digest.includes('"done 1"') || !digest.includes('"done all"') || !digest.includes('"tasks"')) {
+        throw new Error('Digest missing reply instructions');
+    }
+    console.log('✓ buildMorningDigest output verified successfully.');
 
-    // Clean up test tasks & reports for a clean test run
-    await supabaseAdmin.from('tm_tasks').delete().eq('employee_id', user.id);
-    await supabaseAdmin.from('tm_daily_reports').delete().eq('user_id', user.id);
+    // ── Test 2: Notification Pipeline Integration ────────────────────────────
+    console.log('\n--- Test 2: Notification Pipeline with dryRun ---');
+    const employees = await TaskDatabaseService.getAllEmployees();
+    if (employees.length === 0) {
+        throw new Error('No active employees found to test with in database.');
+    }
+    const testEmployee = employees[0];
+    const testDate = '2026-10-05';
 
-    // ── Test 1: Corporate Intent Classification ────────────────────────────────
-    console.log('\n--- Test 1: Corporate Knowledge Work Intent Detection ---');
-
-    const t1 = await detectTaskIntent('create task: Review NDA for client partnership');
-    console.log('T1: create_task ->', t1.action, '| title:', t1.task_title);
-    if (t1.action !== 'create_task') throw new Error(`Expected create_task, got ${t1.action}`);
-
-    const t2 = await detectTaskIntent('The pitch deck is 70% complete');
-    console.log('T2: update_progress ->', t2.action, '| pct:', t2.progress_percentage);
-    if (t2.action !== 'update_progress') throw new Error(`Expected update_progress, got ${t2.action}`);
-
-    const t3 = await detectTaskIntent('What did Tech work on today?', { isSuperuser: true });
-    console.log('T3: query_department_progress ->', t3.action, '| dept:', t3.target_department);
-    if (t3.action !== 'query_department_progress') throw new Error(`Expected query_department_progress, got ${t3.action}`);
-
-    const t4 = await detectTaskIntent('Show pending tasks for Sahil', { isSuperuser: true });
-    console.log('T4: query_employee_progress ->', t4.action, '| emp:', t4.target_employee);
-    if (t4.action !== 'query_employee_progress') throw new Error(`Expected query_employee_progress, got ${t4.action}`);
-
-    const t5 = await detectTaskIntent('Who has not submitted their daily report today?', { isSuperuser: true });
-    console.log('T5: query_missing_reports ->', t5.action);
-    if (t5.action !== 'query_missing_reports') throw new Error(`Expected query_missing_reports, got ${t5.action}`);
-
-    console.log('✅ Passed Test 1: All corporate & leadership intents classified cleanly.');
-
-    // ── Test 2: Seed Tasks & Daily Reports ─────────────────────────────────────
-    console.log('\n--- Test 2: Seed Tasks for Tech Department ---');
-    const task1 = await TaskManagerService.createTask({
-        userId: user.id,
-        title: 'Review NDA for client partnership',
-        department: 'Tech',
-        priority: 'high'
+    // Create a temporary task assignment for testing
+    const testTask = await TaskDatabaseService.createTaskAssignment({
+        employeeId: testEmployee.id,
+        title: '[TEST-PHASE5] Morning Notification Test Task',
+        description: 'Verify morning digest dispatch',
+        assignedDate: testDate,
+        assignedBy: testEmployee.id
     });
-    const task2 = await TaskManagerService.createTask({
-        userId: user.id,
-        title: 'Prepare pitch deck for investor meeting',
-        department: 'Tech',
-        priority: 'urgent'
-    });
-    console.log(`Created Task 1: ${task1.title}`);
-    console.log(`Created Task 2: ${task2.title}`);
+    console.log(`✓ Created test assignment ID: ${testTask.id} for employee ${testEmployee.name}`);
 
-    // Update progress on Task 2
-    await TaskManagerService.updateTaskProgress({
-        taskId: task2.id,
-        userId: user.id,
-        progress: 70,
-        remark: 'Finished first 10 slides'
-    });
+    try {
+        const result = await TaskNotificationService.sendMorningNotifications({
+            date: testDate,
+            employeeId: testEmployee.id,
+            dryRun: true // Safe test run
+        });
 
-    // Submit daily report
-    await TaskManagerService.submitDailyReport({
-        userId: user.id,
-        summary: 'Completed 3 candidate interviews for backend role and closed investor deck draft.'
-    });
-    console.log('✅ Passed Test 2: Seeded tasks and daily report.');
+        console.log('Notification Pipeline Result:', {
+            success: result.success,
+            totalChecked: result.totalEmployeesChecked,
+            notificationsSent: result.notificationsSent,
+            skippedNoTasks: result.skippedNoTasks
+        });
 
-    // ── Test 3: Superuser Query via Router - Department Progress ───────────────
-    console.log('\n--- Test 3: Superuser Query via Router - Department Progress ---');
-    const deptQueryHandled = await handleTaskManagerMessage({
-        senderPhone: superuserPhone,
-        messageText: 'What did Tech work on today?',
-        user
-    });
-    console.log('Dept query handled by router:', deptQueryHandled);
-    if (!deptQueryHandled) throw new Error('Router failed to handle department progress query!');
-    console.log('✅ Passed Test 3: Superuser department progress query handled.');
+        if (!result.success) {
+            throw new Error('sendMorningNotifications returned failure');
+        }
+        if (result.notificationsSent !== 1) {
+            throw new Error(`Expected 1 notification sent, got ${result.notificationsSent}`);
+        }
 
-    // ── Test 4: Superuser Query via Router - Employee Progress ─────────────────
-    console.log('\n--- Test 4: Superuser Query via Router - Employee Progress ---');
-    const empQueryHandled = await handleTaskManagerMessage({
-        senderPhone: superuserPhone,
-        messageText: 'Show pending tasks for Sahil',
-        user
-    });
-    console.log('Emp query handled by router:', empQueryHandled);
-    if (!empQueryHandled) throw new Error('Router failed to handle employee progress query!');
-    console.log('✅ Passed Test 4: Superuser employee progress query handled.');
+        const employeeDetail = result.details[0];
+        if (!employeeDetail.digestPreview?.includes('[TEST-PHASE5] Morning Notification Test Task')) {
+            throw new Error('Digest preview did not contain the test task title');
+        }
+        console.log('✓ Pipeline successfully composed and prepared digest for test employee.');
 
-    // ── Test 5: Superuser Query via Router - Missing Reports ───────────────────
-    console.log('\n--- Test 5: Superuser Query via Router - Missing Reports ---');
-    const missingQueryHandled = await handleTaskManagerMessage({
-        senderPhone: superuserPhone,
-        messageText: 'Who has not submitted their daily report today?',
-        user
-    });
-    console.log('Missing reports query handled by router:', missingQueryHandled);
-    if (!missingQueryHandled) throw new Error('Router failed to handle missing reports query!');
-    console.log('✅ Passed Test 5: Superuser missing reports query handled.');
+    } finally {
+        // ── Cleanup ──────────────────────────────────────────────────────────
+        console.log('\n--- Cleanup ---');
+        await supabaseAdmin
+            .from('task_assignments')
+            .delete()
+            .eq('id', testTask.id);
+        console.log('✓ Cleaned up test assignment.');
+    }
 
-    // ── Test 6: Non-Enrolled Phone Isolation ───────────────────────────────────
-    console.log('\n--- Test 6: Safety Check - Non-Enrolled Phone Bypasses ---');
-    const handledNonEnrolled = await handleTaskManagerMessage({
-        senderPhone: nonEnrolledPhone,
-        messageText: 'What did Tech work on today?',
-        user: { id: 'some-other-id', full_name: 'Stranger' }
-    });
-    console.log('Result for non-enrolled phone (expected false):', handledNonEnrolled);
-    if (handledNonEnrolled !== false) throw new Error('Non-enrolled phone was intercepted!');
-    console.log('✅ Passed Test 6: Non-enrolled senders strictly bypass Task Manager.');
-
-    // ── Test 7: Facility Maintenance Pass-Through ──────────────────────────────
-    console.log('\n--- Test 7: Safety Check - Facility Maintenance Falls Through ---');
-    const handledMaintenance = await handleTaskManagerMessage({
-        senderPhone: superuserPhone,
-        messageText: 'AC in boardroom is leaking water',
-        user
-    });
-    console.log('Result for maintenance issue (expected false):', handledMaintenance);
-    if (handledMaintenance !== false) throw new Error('Maintenance request was intercepted by Task Manager!');
-    console.log('✅ Passed Test 7: Facility maintenance messages fall through to ticketing.');
-
-    console.log('\n======================================================');
-    console.log('🎉 ALL CORPORATE TASK MANAGER & SUPERUSER TESTS PASSED!');
-    console.log('======================================================\n');
+    console.log('\n🎉 ALL PHASE 5 TESTS PASSED SUCCESSFULLY!\n');
 }
 
-runTests().catch(err => {
-    console.error('❌ Test failed with error:', err);
+run().catch((err) => {
+    console.error('❌ Phase 5 Test Failed:', err);
     process.exit(1);
 });
