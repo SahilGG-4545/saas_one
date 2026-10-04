@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { TaskReminderService } from '@/task-manager/TaskReminderService';
+import { TaskDailyGeneratorService } from '@/task-manager/TaskDailyGeneratorService';
+import { TaskNotificationService } from '@/task-manager/TaskNotificationService';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /**
- * GET/POST /api/cron/task-manager?action=[eod_nudge|morning_digest|superuser_rollup|auto]
+ * GET/POST /api/cron/task-manager?action=[daily_tasks|morning_digest|auto]
  * Secure automated cron job for Task Manager notifications.
  */
 export async function GET(request: NextRequest) {
@@ -35,19 +36,16 @@ async function handleRequest(request: NextRequest) {
     const dryRun = request.nextUrl.searchParams.get('dryRun') === 'true';
 
     try {
-        if (action === 'eod_nudge') {
-            const result = await TaskReminderService.sendDailyReportNudges({ dryRun });
-            return NextResponse.json({ ok: true, action: 'eod_nudge', result });
+        if (action === 'daily_tasks') {
+            const result = await TaskDailyGeneratorService.generateDailyFixedTasks();
+            return NextResponse.json({ ok: true, action: 'daily_tasks', result });
         }
 
         if (action === 'morning_digest') {
-            const result = await TaskReminderService.sendMorningTaskDigest({ dryRun });
+            // First generate tasks, then send morning notifications
+            await TaskDailyGeneratorService.generateDailyFixedTasks();
+            const result = await TaskNotificationService.sendMorningNotifications({ dryRun });
             return NextResponse.json({ ok: true, action: 'morning_digest', result });
-        }
-
-        if (action === 'superuser_rollup') {
-            const result = await TaskReminderService.sendSuperuserEveningRollup({ dryRun });
-            return NextResponse.json({ ok: true, action: 'superuser_rollup', result });
         }
 
         // Auto mode based on current IST hour
@@ -60,25 +58,18 @@ async function handleRequest(request: NextRequest) {
             10
         );
 
-        if (istHour >= 9 && istHour < 12) {
-            // Morning 9:00 - 12:00 IST -> Morning pending tasks digest
-            const result = await TaskReminderService.sendMorningTaskDigest({ dryRun });
+        if (istHour >= 8 && istHour < 12) {
+            // Morning 8:00 - 12:00 IST -> Fixed task generation + Morning task digest
+            await TaskDailyGeneratorService.generateDailyFixedTasks();
+            const result = await TaskNotificationService.sendMorningNotifications({ dryRun });
             return NextResponse.json({ ok: true, action: 'morning_digest', istHour, result });
-        } else if (istHour >= 18 && istHour < 20) {
-            // Evening 18:00 - 20:00 IST -> EOD Daily report nudges for missing employees
-            const result = await TaskReminderService.sendDailyReportNudges({ dryRun });
-            return NextResponse.json({ ok: true, action: 'eod_nudge', istHour, result });
-        } else if (istHour >= 20 || istHour < 23) {
-            // Night 20:00 - 23:00 IST -> Superuser leadership rollup
-            const result = await TaskReminderService.sendSuperuserEveningRollup({ dryRun });
-            return NextResponse.json({ ok: true, action: 'superuser_rollup', istHour, result });
         }
 
         return NextResponse.json({
             ok: true,
             action: 'idle',
             istHour,
-            message: `Current IST hour (${istHour}:00) is outside scheduled cron dispatch windows (09-12, 18-20, 20-23). Use ?action=... to trigger explicitly.`,
+            message: `Current IST hour (${istHour}:00) is outside scheduled cron dispatch window (08:00-12:00 IST). Use ?action=morning_digest or ?action=daily_tasks to trigger explicitly.`,
         });
     } catch (err: any) {
         console.error('[TaskReminderCron] Error executing action:', err);
