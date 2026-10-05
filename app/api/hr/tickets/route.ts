@@ -698,6 +698,19 @@ export async function POST(request: Request) {
                         .not('user_id', 'is', null)
                         .limit(1);
                     firstLevelOwnerId = hrStaff?.[0]?.user_id || category.default_hr_owner_id || null;
+
+                    if (!firstLevelOwnerId || firstLevelOwnerId === raised_by_user_id) {
+                        const { data: hrStaffMember } = await supabaseAdmin
+                            .from('organization_memberships')
+                            .select('user_id')
+                            .or('role.ilike.%hr%,role.eq.org_super_admin')
+                            .neq('user_id', raised_by_user_id)
+                            .eq('organization_id', effectiveOrgId)
+                            .limit(1);
+                        if (hrStaffMember?.[0]?.user_id) {
+                            firstLevelOwnerId = hrStaffMember[0].user_id;
+                        }
+                    }
                 }
             }
 
