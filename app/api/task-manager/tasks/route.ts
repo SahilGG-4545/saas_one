@@ -75,6 +75,13 @@ export async function GET(request: NextRequest) {
             } else {
                 taskQuery = taskQuery.eq('employee_id', actor.id); // fallback
             }
+        } else if (targetDepartmentId) {
+            const deptUserIds = employees.map(e => e.id);
+            if (deptUserIds.length > 0) {
+                taskQuery = taskQuery.in('employee_id', deptUserIds);
+            } else {
+                taskQuery = taskQuery.eq('employee_id', '00000000-0000-0000-0000-000000000000');
+            }
         }
 
         if (status && ['pending', 'in_progress', 'completed'].includes(status)) {

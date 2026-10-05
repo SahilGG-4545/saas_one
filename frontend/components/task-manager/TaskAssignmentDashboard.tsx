@@ -17,7 +17,6 @@ import {
     X,
     Layers,
     AlertCircle,
-    User,
     Check,
     TrendingUp,
     BarChart3,
@@ -70,24 +69,51 @@ interface TaskAssignmentItem {
     template?: TaskTemplate;
 }
 
-// Count-up hook — rolls a number from 0 to target over ~700ms easeOut cubic
+// Count-up hook — rolls a number from 0 to target over ~750ms easeOut cubic
 function useCountUp(target: number, active: boolean, decimals = 0): string {
     const [display, setDisplay] = useState(0);
+    const startValRef = useRef(0);
     const rafRef = useRef<number | null>(null);
+
     useEffect(() => {
-        if (!active) { setDisplay(0); return; }
+        if (!active) {
+            setDisplay(0);
+            startValRef.current = 0;
+            return;
+        }
+
+        const startVal = startValRef.current;
+        const diff = target - startVal;
+        if (diff === 0) {
+            setDisplay(target);
+            return;
+        }
+
         const start = performance.now();
-        const duration = 700;
+        const duration = 1400;
+
         const tick = (now: number) => {
             const elapsed = now - start;
             const progress = Math.min(elapsed / duration, 1);
+            // Cubic easeOut: 1 - (1 - p)^3
             const eased = 1 - Math.pow(1 - progress, 3);
-            setDisplay(parseFloat((eased * target).toFixed(decimals)));
-            if (progress < 1) rafRef.current = requestAnimationFrame(tick);
+            const current = startVal + diff * eased;
+            setDisplay(parseFloat(current.toFixed(decimals)));
+
+            if (progress < 1) {
+                rafRef.current = requestAnimationFrame(tick);
+            } else {
+                setDisplay(target);
+                startValRef.current = target;
+            }
         };
+
         rafRef.current = requestAnimationFrame(tick);
-        return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); };
-    }, [target, active]);
+        return () => {
+            if (rafRef.current) cancelAnimationFrame(rafRef.current);
+        };
+    }, [target, active, decimals]);
+
     return decimals > 0 ? display.toFixed(decimals) : Math.round(display).toString();
 }
 
@@ -105,20 +131,41 @@ export default function TaskAssignmentDashboard({
     const [refreshing, setRefreshing] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
-    // Animation gate — setTimeout(60) ensures browser paints opacity:0 BEFORE we add tm-visible
-    const [isMounted, setIsMounted] = useState(false);
-    useEffect(() => { const t = setTimeout(() => setIsMounted(true), 60); return () => clearTimeout(t); }, []);
-
-    // Floating CTA card — springs up 1.5s after mount, session-dismissible
-    const [showFloatingCTA, setShowFloatingCTA] = useState(false);
+    // ── 5-Second Staged Waterfall Transition System ──────────────────────────
+    // Step 1 (0.0s – 1.0s): Task Operations Hub (Top Header)
+    // Step 2 (1.0s – 2.0s): 4 KPI Stat Cards + Count-Up Numbers
+    // Step 3 (2.0s – 3.0s): Progress Hierarchy Meter (3-Arc Gauge)
+    // Step 4 (3.0s – 4.0s): Organisation Progress Card & Department Matrix
+    // Step 5 (4.0s – 5.0s): Department Staff & Tasks List
+    // Step 6 (5.0s+):       Floating Quick-Assign CTA Card
+    const [animationStep, setAnimationStep] = useState(0);
     const [floatingCTADismissed, setFloatingCTADismissed] = useState(false);
-    useEffect(() => {
-        const t = setTimeout(() => setShowFloatingCTA(true), 1500);
-        return () => clearTimeout(t);
-    }, []);
 
-    // Animated progress bar — fills from 0 → real% after mount
-    const [animatedPct, setAnimatedPct] = useState(0);
+    useEffect(() => {
+        if (loading) {
+            setAnimationStep(0);
+            return;
+        }
+
+        // Fresh trigger on data load
+        setAnimationStep(0);
+
+        const t1 = setTimeout(() => setAnimationStep(1), 80);    // 0.08s: Header (Top -> Down)
+        const t2 = setTimeout(() => setAnimationStep(2), 1000);  // 1.0s:  4 KPIs (4 Directions)
+        const t3 = setTimeout(() => setAnimationStep(3), 2000);  // 2.0s:  Hierarchy Gauge (Left -> Right, 1.8s)
+        const t4 = setTimeout(() => setAnimationStep(4), 3200);  // 3.2s:  Organisation Progress (Right -> Left, 1.8s)
+        const t5 = setTimeout(() => setAnimationStep(5), 4400);  // 4.4s:  Staff (Left) & Tasks (Right)
+        const t6 = setTimeout(() => setAnimationStep(6), 5500);  // 5.5s:  Floating CTA (Bottom -> Up)
+
+        return () => {
+            clearTimeout(t1);
+            clearTimeout(t2);
+            clearTimeout(t3);
+            clearTimeout(t4);
+            clearTimeout(t5);
+            clearTimeout(t6);
+        };
+    }, [loading]);
 
     // Core Data
     const [actor, setActor] = useState<Employee | null>(null);
@@ -151,11 +198,12 @@ export default function TaskAssignmentDashboard({
     const [newTemplateDesc, setNewTemplateDesc] = useState('');
     const [newTemplateType, setNewTemplateType] = useState<'fixed' | 'assigned'>('fixed');
     const [isSubmittingTemplate, setIsSubmittingTemplate] = useState(false);
+    const hasInitialLoadedRef = useRef(false);
 
     // Fetch dashboard data
     const fetchData = async (isManualRefresh = false) => {
         if (!actorId) return;
-        if (isManualRefresh) setRefreshing(true);
+        if (isManualRefresh || hasInitialLoadedRef.current) setRefreshing(true);
         else setLoading(true);
         setError(null);
 
@@ -174,7 +222,12 @@ export default function TaskAssignmentDashboard({
                 params.set('status', statusFilter);
             }
 
-            const res = await fetch(`/api/task-manager/tasks?${params.toString()}`);
+            // Fire both requests in parallel — previously sequential (tasks first, then progress)
+            const [res, progRes] = await Promise.all([
+                fetch(`/api/task-manager/tasks?${params.toString()}`),
+                fetch(`/api/task-manager/progress?actorId=${actorId}&date=${selectedDate}`).catch(() => null)
+            ]);
+
             const data = await res.json();
 
             if (!res.ok || !data.success) {
@@ -186,16 +239,18 @@ export default function TaskAssignmentDashboard({
             setEmployees(data.employees || []);
             setTasks(data.tasks || []);
             setTemplates(data.templates || []);
+            hasInitialLoadedRef.current = true;
 
-            // Fetch 3-Level Progress Hierarchy
-            try {
-                const progRes = await fetch(`/api/task-manager/progress?actorId=${actorId}&date=${selectedDate}`);
-                const progJson = await progRes.json();
-                if (progJson.success) {
-                    setProgressData(progJson.data);
+            // Process progress response (already resolved in parallel above)
+            if (progRes) {
+                try {
+                    const progJson = await progRes.json();
+                    if (progJson.success) {
+                        setProgressData(progJson.data);
+                    }
+                } catch (progErr) {
+                    console.warn('[TaskAssignmentDashboard] Progress load error:', progErr);
                 }
-            } catch (progErr) {
-                console.warn('[TaskAssignmentDashboard] Progress load error:', progErr);
             }
 
             // Set initial selected department for manager if locked
@@ -434,9 +489,28 @@ export default function TaskAssignmentDashboard({
         }
     };
 
-    // Filtered tasks display
+    // Tasks filtered by current department scope
+    const departmentTasks = useMemo(() => {
+        if (!selectedDeptId || selectedDeptId === 'all') return tasks;
+        const deptEmpIds = new Set(employees.filter(e => e.department_id === selectedDeptId).map(e => e.id));
+        return tasks.filter(t => deptEmpIds.has(t.employee_id) || t.template?.department_id === selectedDeptId);
+    }, [tasks, selectedDeptId, employees]);
+
+    // Filtered tasks display (department, employee, status, and search query)
     const filteredTasks = useMemo(() => {
-        return tasks.filter(t => {
+        return departmentTasks.filter(t => {
+            // Employee filter
+            if (selectedEmployeeId && selectedEmployeeId !== 'all') {
+                if (t.employee_id !== selectedEmployeeId) return false;
+            }
+            // Status filter
+            if (statusFilter === 'pending' && t.status === 'completed') {
+                return false;
+            }
+            if (statusFilter === 'completed' && t.status !== 'completed') {
+                return false;
+            }
+            // Search query filter
             if (searchQuery) {
                 const match = t.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
                               (t.employee?.full_name?.toLowerCase().includes(searchQuery.toLowerCase()));
@@ -444,35 +518,43 @@ export default function TaskAssignmentDashboard({
             }
             return true;
         });
-    }, [tasks, searchQuery]);
+    }, [departmentTasks, selectedEmployeeId, statusFilter, searchQuery]);
 
     const isReportingManager = actor?.role === 'reporting_manager';
-    const isSuperuser = actor?.role === 'superuser' || isSuperuserView;
+    const isSuperuser = actor?.role === 'superuser' || (isSuperuserView && !isReportingManager);
+    const deptDisplayName = actor?.department_name
+        ? (actor.department_name.toLowerCase().endsWith('department') ? actor.department_name : `${actor.department_name} Department`)
+        : 'Department';
 
-    // Derived 3-tier gauge metrics for Super User Dashboard
+    // Derived 3-tier / 2-tier gauge metrics
     const gaugeMetrics = useMemo(() => {
-        // 1. Level 3: Organisation Progress (Outer Arc)
-        const orgCompleted = tasks.length > 0 
-            ? tasks.filter(t => t.status === 'completed').length 
-            : (progressData?.completed ?? 0);
-        const orgTotal = tasks.length > 0 
-            ? tasks.length 
-            : (progressData?.total ?? 0);
-        const orgPct = orgTotal > 0 ? Math.round((orgCompleted / orgTotal) * 100) : (progressData?.percentage ?? 100);
+        // 1. Level 3: Organisation Progress (Outer Arc for Superuser)
+        const orgCompleted = progressData?.completed ?? tasks.filter(t => t.status === 'completed').length;
+        const orgTotal = progressData?.total ?? tasks.length;
+        const orgPct = (progressData?.percentage !== undefined)
+            ? progressData.percentage
+            : (orgTotal > 0 ? Math.round((orgCompleted / orgTotal) * 100) : 100);
 
-        // 2. Level 2: Department Progress (Middle Arc)
+        // 2. Level 2: Department Progress (Outer Arc for Reporting Manager, Middle for Superuser)
         let deptTotal = 0;
         let deptCompleted = 0;
         let deptPct = 100;
         let deptLabel = 'Department Scope';
         let deptSublabel = `${departments.length} Departments`;
 
-        if (selectedDeptId !== 'all') {
+        if (isReportingManager) {
+            const deptName = actor?.department_name || 'Tech';
+            deptLabel = `${deptName} Progress`;
+            deptSublabel = `Filtered: ${deptName}`;
+            deptTotal = departmentTasks.length;
+            deptCompleted = departmentTasks.filter(t => t.status === 'completed').length;
+            deptPct = deptTotal > 0 ? Math.round((deptCompleted / deptTotal) * 100) : 100;
+        } else if (selectedDeptId !== 'all') {
             const dData = progressData?.departmentProgress?.find((dp: any) => dp.departmentId === selectedDeptId);
             const deptObj = departments.find(d => d.id === selectedDeptId);
             deptLabel = dData?.departmentName || deptObj?.name || 'Selected Dept';
             const deptEmpIds = new Set(employees.filter(e => e.department_id === selectedDeptId).map(e => e.id));
-            const deptTasks = tasks.filter(t => deptEmpIds.has(t.employee_id));
+            const deptTasks = tasks.filter(t => deptEmpIds.has(t.employee_id) || t.template?.department_id === selectedDeptId);
             deptTotal = deptTasks.length || (dData?.total ?? 0);
             deptCompleted = deptTasks.filter(t => t.status === 'completed').length;
             deptPct = deptTotal > 0 ? Math.round((deptCompleted / deptTotal) * 100) : (dData?.percentage ?? 100);
@@ -500,11 +582,17 @@ export default function TaskAssignmentDashboard({
         if (selectedEmployeeId !== 'all') {
             const empObj = employees.find(e => e.id === selectedEmployeeId);
             empLabel = empObj?.name || 'Selected Employee';
-            const empTasks = tasks.filter(t => t.employee_id === selectedEmployeeId);
+            const empTasks = departmentTasks.filter(t => t.employee_id === selectedEmployeeId);
             empTotal = empTasks.length;
             empCompleted = empTasks.filter(t => t.status === 'completed').length;
             empPct = empTotal > 0 ? Math.round((empCompleted / empTotal) * 100) : 100;
             empSublabel = `Staff: ${empLabel}`;
+        } else if (isReportingManager) {
+            const deptStaff = employees.filter(e => e.department_id === actor?.department_id);
+            empTotal = departmentTasks.length;
+            empCompleted = departmentTasks.filter(t => t.status === 'completed').length;
+            empPct = empTotal > 0 ? Math.round((empCompleted / empTotal) * 100) : 100;
+            empSublabel = `${deptStaff.length || 1} Staff Members`;
         } else {
             const allEmpProgs = progressData?.departmentProgress?.flatMap((dp: any) => dp.employeeProgress || []) || [];
             const activeEmpProgs = allEmpProgs.filter((ep: any) => ep.total > 0);
@@ -513,9 +601,9 @@ export default function TaskAssignmentDashboard({
                 empCompleted = activeEmpProgs.reduce((sum: number, ep: any) => sum + ep.completed, 0);
                 empPct = Math.round((empCompleted / empTotal) * 100);
                 empSublabel = `Avg across ${activeEmpProgs.length} active staff`;
-            } else if (tasks.length > 0) {
-                empTotal = tasks.length;
-                empCompleted = tasks.filter(t => t.status === 'completed').length;
+            } else if (departmentTasks.length > 0) {
+                empTotal = departmentTasks.length;
+                empCompleted = departmentTasks.filter(t => t.status === 'completed').length;
                 empPct = Math.round((empCompleted / empTotal) * 100);
             }
         }
@@ -543,49 +631,74 @@ export default function TaskAssignmentDashboard({
                 sublabel: empSublabel
             }
         };
-    }, [progressData, tasks, selectedDeptId, selectedEmployeeId, departments, employees]);
+    }, [progressData, tasks, departmentTasks, selectedDeptId, selectedEmployeeId, departments, employees, isReportingManager, actor]);
 
-    // Derived quick-stat numbers
-    const totalTasks = tasks.length;
-    const completedCount = tasks.filter(t => t.status === 'completed').length;
-    const pendingCount = tasks.filter(t => t.status === 'pending' || t.status === 'in_progress').length;
+    // Derived quick-stat numbers (scoped to active department)
+    const totalTasks = departmentTasks.length;
+    const completedCount = departmentTasks.filter(t => t.status === 'completed').length;
+    const pendingCount = departmentTasks.filter(t => t.status === 'pending' || t.status === 'in_progress').length;
     const completionRate = totalTasks > 0 ? Math.round((completedCount / totalTasks) * 100) : 0;
 
-    // Count-up animated values for stat cards (using top-level hook defined above component)
-    const countTotal     = useCountUp(totalTasks,     isMounted);
-    const countCompleted = useCountUp(completedCount, isMounted);
-    const countPending   = useCountUp(pendingCount,   isMounted);
-    const countRate      = useCountUp(completionRate, isMounted);
+    // Count-up animated values for stat cards (rolls smoothly in Step 2: animationStep >= 2)
+    const countTotal     = useCountUp(totalTasks,     animationStep >= 2);
+    const countCompleted = useCountUp(completedCount, animationStep >= 2);
+    const countPending   = useCountUp(pendingCount,   animationStep >= 2);
+    const countRate      = useCountUp(completionRate, animationStep >= 2);
 
-    // Animated progress bar \u2014 fills from 0 \u2192 real% after progressData loads
-    useEffect(() => {
-        if (!progressData) return;
-        const target = Math.min(100, progressData.percentage ?? 0);
-        setAnimatedPct(0);
-        const t = setTimeout(() => setAnimatedPct(target), 120);
-        return () => clearTimeout(t);
-    }, [progressData]);
+    // Derived progress card stats (tier 4)
+    const progressCardStats = useMemo(() => {
+        const total = isReportingManager ? departmentTasks.length : (progressData?.total ?? tasks.length);
+        const done = isReportingManager ? departmentTasks.filter(t => t.status === 'completed').length : (progressData?.completed ?? 0);
+        const pending = isReportingManager ? departmentTasks.filter(t => t.status !== 'completed').length : (progressData?.pending ?? 0);
+        const pct = total > 0 ? Math.round((done / total) * 100) : 100;
+        return { total, done, pending, pct };
+    }, [isReportingManager, departmentTasks, progressData, tasks]);
+
+    // Loading State: Display a sleek loading indicator until all data is loaded
+    if (loading) {
+        return (
+            <div className="w-full min-h-[480px] flex flex-col items-center justify-center p-8 text-center space-y-4">
+                <div className="relative flex items-center justify-center">
+                    <div className="w-16 h-16 rounded-2xl bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200/60 dark:border-indigo-800/40 flex items-center justify-center shadow-xl shadow-indigo-500/10">
+                        <ClipboardList className="w-8 h-8 text-indigo-600 dark:text-indigo-400 animate-pulse" />
+                    </div>
+                    <div className="absolute -inset-2.5 border-2 border-indigo-500/20 border-t-indigo-600 rounded-3xl animate-spin" />
+                </div>
+                <div className="space-y-1">
+                    <h3 className="text-base font-bold text-zinc-800 dark:text-zinc-200">
+                        Loading Task Operations Hub...
+                    </h3>
+                    <p className="text-xs text-zinc-400 dark:text-zinc-500">
+                        Syncing real-time deliverables & operational progress
+                    </p>
+                </div>
+            </div>
+        );
+    }
 
     return (
-        <div className="w-full space-y-5 p-4 sm:p-6 tm-root">
+        <div 
+            className="w-full space-y-2 sm:space-y-2.5 p-1 sm:p-2.5 tm-root overflow-x-hidden max-w-[1600px] mx-auto"
+            style={{ zoom: '0.85' }}
+        >
 
-            {/* ── Top Header Bar ──────────────────────────────────────────────── */}
-            <div className={`flex flex-col sm:flex-row sm:items-center justify-between gap-4 tm-slide-up ${isMounted ? 'tm-visible' : ''}`} style={{ transitionDelay: '0ms' }}>
+            {/* ── Tier 1 (0.0s – 1.0s): Top Header Bar (Top -> Down Slide) ────────── */}
+            <div className={`flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-2.5 ${animationStep >= 1 ? 'tm-slide-down-visible' : 'tm-slide-down-hidden'}`}>
                 {/* Left: Title + Role badge */}
-                <div className="flex items-center gap-3.5 min-w-0">
-                    <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-indigo-500 to-indigo-700 text-white flex items-center justify-center shadow-lg shadow-indigo-500/25 flex-shrink-0">
-                        <ClipboardList className="w-5 h-5" />
+                <div className="flex items-center gap-2 min-w-0">
+                    <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-indigo-500 to-indigo-700 text-white flex items-center justify-center shadow-xs flex-shrink-0">
+                        <ClipboardList className="w-3.5 h-3.5" />
                     </div>
                     <div className="min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                            <h1 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 leading-tight truncate">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                            <h1 className="text-sm sm:text-base font-bold text-zinc-900 dark:text-zinc-100 leading-tight truncate">
                                 {isReportingManager
                                     ? 'Manager Task Console'
                                     : isSuperuser
                                     ? 'Task Operations Hub'
                                     : 'Daily Task Console'}
                             </h1>
-                            <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold tracking-wide flex-shrink-0 ${
+                            <span className={`inline-flex items-center gap-1 px-1.5 py-0.2 rounded-full text-[9px] font-bold tracking-wide flex-shrink-0 ${
                                 isSuperuser
                                     ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 border border-amber-200/60 dark:border-amber-800/40'
                                     : isReportingManager
@@ -596,7 +709,7 @@ export default function TaskAssignmentDashboard({
                                 {actor?.role ? actor.role.replace('_', ' ').toUpperCase() : 'USER'}
                             </span>
                         </div>
-                        <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
+                        <p className="text-[10px] text-zinc-500 dark:text-zinc-400 mt-0.5">
                             {isReportingManager
                                 ? `Managing: ${actor?.department_name || 'My Department'}`
                                 : isSuperuser
@@ -607,26 +720,36 @@ export default function TaskAssignmentDashboard({
                 </div>
 
                 {/* Right: Controls */}
-                <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap flex-shrink-0">
+                <div className="flex items-center gap-1.5 flex-wrap sm:flex-nowrap flex-shrink-0">
                     {/* Date Picker */}
-                    <div className="flex items-center gap-2 bg-white dark:bg-zinc-900 px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-800 text-sm shadow-sm hover:border-zinc-300 dark:hover:border-zinc-700 transition-all duration-200 hover:shadow-md">
-                        <Calendar className="w-3.5 h-3.5 text-zinc-400 flex-shrink-0" />
+                    <div className="flex items-center gap-1 bg-white dark:bg-zinc-900 px-2 py-1 rounded-lg border border-zinc-200 dark:border-zinc-800 text-xs shadow-xs hover:border-zinc-300 dark:hover:border-zinc-700 transition-all duration-200">
+                        <Calendar className="w-3 h-3 text-zinc-400 flex-shrink-0" />
                         <input
                             type="date"
                             value={selectedDate}
                             onChange={(e) => setSelectedDate(e.target.value)}
-                            className="bg-transparent border-none text-zinc-700 dark:text-zinc-200 text-sm font-medium focus:outline-none cursor-pointer"
+                            className="bg-transparent border-none text-zinc-700 dark:text-zinc-200 text-xs font-medium focus:outline-none cursor-pointer"
                         />
                     </div>
 
                     {/* Refresh */}
                     <button
-                        onClick={() => fetchData(true)}
+                        onClick={() => {
+                            setAnimationStep(0);
+                            fetchData(true).then(() => {
+                                setTimeout(() => setAnimationStep(1), 80);
+                                setTimeout(() => setAnimationStep(2), 1000);
+                                setTimeout(() => setAnimationStep(3), 2000);
+                                setTimeout(() => setAnimationStep(4), 3200);
+                                setTimeout(() => setAnimationStep(5), 4400);
+                                setTimeout(() => setAnimationStep(6), 5500);
+                            });
+                        }}
                         disabled={refreshing}
-                        className="p-2 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:border-zinc-300 dark:hover:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-all duration-200 shadow-sm disabled:opacity-50 hover:scale-105 active:scale-95"
-                        title="Refresh data"
+                        className="p-1 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:border-zinc-300 dark:hover:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-all duration-200 shadow-xs disabled:opacity-50 hover:scale-105 active:scale-95"
+                        title="Refresh data & replay sequence"
                     >
-                        <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+                        <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
                     </button>
 
                     {/* Action Buttons */}
@@ -634,9 +757,9 @@ export default function TaskAssignmentDashboard({
                         <>
                             <button
                                 onClick={() => setShowTemplateModal(true)}
-                                className="flex items-center gap-1.5 px-3.5 py-2 text-sm font-semibold rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-600 transition-all duration-200 shadow-sm hover:shadow-md hover:-translate-y-px active:scale-[0.97] active:shadow-none"
+                                className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-600 transition-all duration-200 shadow-xs active:scale-[0.97]"
                             >
-                                <Layers className="w-3.5 h-3.5 text-zinc-400" />
+                                <Layers className="w-3 h-3 text-zinc-400" />
                                 Template
                             </button>
                             <button
@@ -644,9 +767,9 @@ export default function TaskAssignmentDashboard({
                                     setAssignTargetEmpId(assignableEmployees[0]?.id || '');
                                     setShowAssignModal(true);
                                 }}
-                                className="flex items-center gap-1.5 px-4 py-2 text-sm font-bold rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white shadow-md shadow-indigo-500/25 hover:shadow-lg hover:shadow-indigo-500/40 transition-all duration-200 hover:-translate-y-px active:scale-[0.96] active:shadow-none"
+                                className="flex items-center gap-1 px-3 py-1 text-xs font-bold rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white shadow-xs transition-all duration-200 active:scale-[0.96]"
                             >
-                                <Plus className="w-4 h-4" />
+                                <Plus className="w-3 h-3" />
                                 Assign Task
                             </button>
                         </>
@@ -656,7 +779,7 @@ export default function TaskAssignmentDashboard({
 
             {/* ── Error Banner ────────────────────────────────────────────────── */}
             {error && (
-                <div className="flex items-center gap-3 p-4 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800/60 rounded-2xl text-red-700 dark:text-red-300 text-sm">
+                <div className="flex items-center gap-3 p-3 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800/60 rounded-xl text-red-700 dark:text-red-300 text-xs">
                     <AlertCircle className="w-4 h-4 flex-shrink-0" />
                     <span className="flex-1">{error}</span>
                     <button onClick={() => setError(null)} className="text-red-400 hover:text-red-600 transition-colors">
@@ -665,125 +788,137 @@ export default function TaskAssignmentDashboard({
                 </div>
             )}
 
-            {/* ── Quick Stats Row ──────────────────────────────────────────────── */}
-            {!loading && totalTasks > 0 && (
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {/* ── Quick Stats Row (4-Direction Convergence) ──────────────────── */}
+            {!loading && (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                     {[
                         {
                             label: 'Total Tasks',
                             displayValue: countTotal,
-                            icon: <ClipboardList className="w-4 h-4" />,
+                            icon: <ClipboardList className="w-3 h-3" />,
                             color: 'text-zinc-600 dark:text-zinc-300',
                             bg: 'bg-zinc-50 dark:bg-zinc-800/60',
                             iconBg: 'bg-zinc-200/70 dark:bg-zinc-700',
+                            animClass: 'tm-slide-left', // Card 0: from Left
                         },
                         {
                             label: 'Completed',
                             displayValue: countCompleted,
-                            icon: <CheckCircle2 className="w-4 h-4" />,
+                            icon: <CheckCircle2 className="w-3 h-3" />,
                             color: 'text-emerald-700 dark:text-emerald-400',
                             bg: 'bg-emerald-50 dark:bg-emerald-950/30',
                             iconBg: 'bg-emerald-200/70 dark:bg-emerald-900/60',
+                            animClass: 'tm-slide-down', // Card 1: from Top
                         },
                         {
                             label: 'Pending',
                             displayValue: countPending,
-                            icon: <Clock className="w-4 h-4" />,
+                            icon: <Clock className="w-3 h-3" />,
                             color: 'text-amber-700 dark:text-amber-400',
                             bg: 'bg-amber-50 dark:bg-amber-950/30',
                             iconBg: 'bg-amber-200/70 dark:bg-amber-900/60',
+                            animClass: 'tm-slide-up', // Card 2: from Bottom
                         },
                         {
                             label: 'Completion Rate',
                             displayValue: `${countRate}%`,
-                            icon: <TrendingUp className="w-4 h-4" />,
+                            icon: <TrendingUp className="w-3 h-3" />,
                             color: completionRate >= 80 ? 'text-indigo-700 dark:text-indigo-400' : 'text-orange-700 dark:text-orange-400',
                             bg: completionRate >= 80 ? 'bg-indigo-50 dark:bg-indigo-950/30' : 'bg-orange-50 dark:bg-orange-950/30',
                             iconBg: completionRate >= 80 ? 'bg-indigo-200/70 dark:bg-indigo-900/60' : 'bg-orange-200/70 dark:bg-orange-900/60',
+                            animClass: 'tm-slide-right', // Card 3: from Right
                         },
                     ].map((stat, i) => (
                         <div
                             key={i}
-                            className={`${stat.bg} rounded-2xl p-4 border border-transparent flex items-center gap-3 tm-slide-up ${isMounted ? 'tm-visible' : ''}`}
-                            style={{ transitionDelay: `${100 + i * 70}ms` }}
+                            className={`${stat.bg} rounded-lg p-2 sm:p-2.5 border border-transparent flex items-center gap-2 ${
+                                animationStep >= 2 ? `${stat.animClass}-visible` : `${stat.animClass}-hidden`
+                            }`}
+                            style={{ transitionDelay: `${i * 120}ms` }}
                         >
-                            <div className={`${stat.iconBg} ${stat.color} w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0`}>
+                            <div className={`${stat.iconBg} ${stat.color} w-6 h-6 rounded-md flex items-center justify-center flex-shrink-0`}>
                                 {stat.icon}
                             </div>
                             <div className="min-w-0">
-                                <div className={`text-xl font-bold tabular-nums ${stat.color} leading-tight`}>{stat.displayValue}</div>
-                                <div className="text-xs text-zinc-500 dark:text-zinc-400 font-medium">{stat.label}</div>
+                                <div className={`text-sm sm:text-base font-bold tabular-nums ${stat.color} leading-tight`}>{stat.displayValue}</div>
+                                <div className="text-[10px] text-zinc-500 dark:text-zinc-400 font-medium">{stat.label}</div>
                             </div>
                         </div>
                     ))}
                 </div>
             )}
 
-            {/* ── 3-Arc Dynamic Progress Gauge (Superuser only) ───────────────── */}
-            {isSuperuser && (
-                <div className={`tm-slide-up ${isMounted ? 'tm-visible' : ''}`} style={{ transitionDelay: '160ms' }}>
+            {/* ── Tier 3 (2.0s – 3.0s): Progress Hierarchy Meter (Superuser or Reporting Manager) ── */}
+            {(isSuperuser || isReportingManager) && (
+                <div className={`w-full overflow-hidden ${animationStep >= 3 ? 'tm-slide-left-visible' : 'tm-slide-left-hidden'}`}>
                     <TaskProgressGauge
                         orgProgress={gaugeMetrics.org}
                         deptProgress={gaugeMetrics.dept}
                         employeeProgress={gaugeMetrics.employee}
+                        active={animationStep >= 3}
+                        isReportingManager={isReportingManager}
+                        departmentName={deptDisplayName}
+                        className={animationStep >= 3 ? 'tm-slide-left-visible' : 'tm-slide-left-hidden'}
                     />
                 </div>
             )}
 
-            {/* ── Progress Overview Card ───────────────────────────────────────── */}
+            {/* ── Tier 4 (3.2s – 4.4s): Progress Card (Right -> Left) ── */}
             {progressData && (
-                <div className={`bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl overflow-hidden shadow-sm tm-slide-up ${isMounted ? 'tm-visible' : ''}`} style={{ transitionDelay: '200ms' }}>
+                <div className={`bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl overflow-hidden shadow-xs ${animationStep >= 4 ? 'tm-slide-right-visible' : 'tm-slide-right-hidden'}`}>
                     {/* Card Header */}
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-5 py-4 border-b border-zinc-100 dark:border-zinc-800/80">
-                        <div className="flex items-center gap-3">
-                            <div className="p-2 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400">
-                                <TrendingUp className="w-4 h-4" />
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 px-3 py-1.5 border-b border-zinc-100 dark:border-zinc-800/80">
+                        <div className="flex items-center gap-2">
+                            <div className="p-1 rounded-md bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400">
+                                <TrendingUp className="w-3 h-3" />
                             </div>
                             <div>
-                                <h2 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
+                                <h2 className="text-xs font-bold text-zinc-900 dark:text-zinc-100">
                                     {isSuperuser
                                         ? 'Organisation Progress'
                                         : isReportingManager
-                                        ? `${actor?.department_name || 'Department'} Progress`
+                                        ? `${deptDisplayName} Progress`
                                         : 'Your Task Progress'}
                                 </h2>
-                                <p className="text-xs text-zinc-400 mt-0.5">
+                                <p className="text-[10px] text-zinc-400">
                                     {isSuperuser
                                         ? `Consolidated across ${progressData.totalDepartments ?? departments.length} departments`
+                                        : isReportingManager
+                                        ? `Real-time daily task completion for ${deptDisplayName}`
                                         : 'Real-time daily task completion status'}
                                 </p>
                             </div>
                         </div>
 
                         {/* Metric badges */}
-                        <div className="flex items-center gap-2 text-xs font-semibold flex-wrap">
-                            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300">
-                                <Layers className="w-3 h-3 text-zinc-400" />
-                                <span>{progressData.total ?? tasks.length} Total</span>
+                        <div className="flex items-center gap-1 text-[10px] font-semibold flex-wrap">
+                            <div className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300">
+                                <Layers className="w-2.5 h-2.5 text-zinc-400" />
+                                <span>{progressCardStats.total} Total</span>
                             </div>
-                            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300">
-                                <CheckCircle2 className="w-3 h-3 text-emerald-500" />
-                                <span>{progressData.completed ?? 0} Done</span>
+                            <div className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300">
+                                <CheckCircle2 className="w-2.5 h-2.5 text-emerald-500" />
+                                <span>{progressCardStats.done} Done</span>
                             </div>
-                            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300">
-                                <Clock className="w-3 h-3 text-amber-500" />
-                                <span>{progressData.pending ?? 0} Pending</span>
+                            <div className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300">
+                                <Clock className="w-2.5 h-2.5 text-amber-500" />
+                                <span>{progressCardStats.pending} Pending</span>
                             </div>
-                            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 font-bold">
-                                <BarChart3 className="w-3 h-3 text-indigo-500" />
-                                <span>{progressData.percentage ?? 0}%</span>
+                            <div className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 font-bold">
+                                <BarChart3 className="w-2.5 h-2.5 text-indigo-500" />
+                                <span>{progressCardStats.pct}%</span>
                             </div>
                         </div>
                     </div>
 
-                    {/* Progress Bar — animates from 0 → real% on mount */}
-                    <div className="px-5 pt-4 pb-1">
-                        <div className="w-full bg-zinc-100 dark:bg-zinc-800 h-2.5 rounded-full overflow-hidden">
+                    {/* Progress Bar — fills smoothly from 0% */}
+                    <div className="px-3 pt-1.5 pb-0.5">
+                        <div className="w-full bg-zinc-100 dark:bg-zinc-800 h-1.5 rounded-full overflow-hidden">
                             <div
                                 className="bg-gradient-to-r from-indigo-500 via-emerald-500 to-teal-400 h-full rounded-full"
                                 style={{
-                                    width: `${animatedPct}%`,
-                                    transition: 'width 900ms cubic-bezier(0.16, 1, 0.3, 1)'
+                                    width: animationStep >= 4 ? `${Math.min(100, Math.max(0, progressCardStats.pct))}%` : '0%',
+                                    transition: 'width 1000ms cubic-bezier(0.16, 1, 0.3, 1) 250ms',
                                 }}
                             />
                         </div>
@@ -791,14 +926,14 @@ export default function TaskAssignmentDashboard({
 
                     {/* Department Progress Matrix (Superuser View) */}
                     {isSuperuser && progressData.departmentProgress && progressData.departmentProgress.length > 0 && (
-                        <div className="px-5 pb-5 pt-4">
-                            <div className="flex items-center justify-between mb-3">
-                                <span className="text-[11px] font-bold uppercase tracking-widest text-zinc-400">
+                        <div className="px-3 pb-2 pt-1.5">
+                            <div className="flex items-center justify-between mb-1.5">
+                                <span className="text-[9px] font-bold uppercase tracking-wider text-zinc-400">
                                     Department Breakdown · {progressData.departmentProgress.length} depts
                                 </span>
-                                <span className="text-[11px] text-zinc-400">Click to filter</span>
+                                <span className="text-[9px] text-zinc-400">Click to filter</span>
                             </div>
-                            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-7 gap-2">
+                            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-7 gap-1.5">
                                 {progressData.departmentProgress.map((dp: any, dIdx: number) => {
                                     const isDeptActive = selectedDeptId === dp.departmentId;
                                     const isComplete = dp.percentage === 100;
@@ -809,29 +944,29 @@ export default function TaskAssignmentDashboard({
                                                 setSelectedDeptId(isDeptActive ? 'all' : dp.departmentId);
                                                 setSelectedEmployeeId('all');
                                             }}
-                                            className={`group p-3 rounded-xl border text-left transition-all duration-200 text-xs flex flex-col justify-between gap-2 hover:scale-[1.03] hover:-translate-y-px active:scale-[0.97] tm-slide-up ${isMounted ? 'tm-visible' : ''} ${
+                                            className={`group p-1.5 rounded-md border text-left text-[10px] flex flex-col justify-between gap-1 hover:scale-[1.01] active:scale-[0.98] ${animationStep >= 4 ? 'tm-slide-right-visible' : 'tm-slide-right-hidden'} ${
                                                 isDeptActive
-                                                    ? 'bg-indigo-50 dark:bg-indigo-950/50 border-indigo-300 dark:border-indigo-700 ring-1 ring-indigo-400/30 shadow-sm'
-                                                    : 'bg-zinc-50 dark:bg-zinc-800/40 border-zinc-200 dark:border-zinc-700/60 hover:border-zinc-300 dark:hover:border-zinc-600 hover:bg-white dark:hover:bg-zinc-800/80 hover:shadow-md'
+                                                    ? 'bg-indigo-50 dark:bg-indigo-950/50 border-indigo-300 dark:border-indigo-700 ring-1 ring-indigo-400/30 shadow-xs'
+                                                    : 'bg-zinc-50 dark:bg-zinc-800/40 border-zinc-200 dark:border-zinc-700/60 hover:border-zinc-300 dark:hover:border-zinc-600 hover:bg-white dark:hover:bg-zinc-800/80'
                                             }`}
-                                            style={{ transitionDelay: `${220 + dIdx * 55}ms` }}
+                                            style={{ transitionDelay: `${150 + Math.min(dIdx * 50, 450)}ms` }}
                                         >
                                             <div className={`font-semibold leading-tight truncate ${isDeptActive ? 'text-indigo-800 dark:text-indigo-200' : 'text-zinc-700 dark:text-zinc-300'}`}>
                                                 {dp.departmentName}
                                             </div>
-                                            <div className="space-y-1.5">
-                                                <div className="flex items-center justify-between">
+                                            <div className="space-y-0.5">
+                                                <div className="flex items-center justify-between text-[9px]">
                                                     <span className="text-zinc-400 dark:text-zinc-500">{dp.completed}/{dp.total}</span>
                                                     <span className={`font-bold ${isComplete ? 'text-emerald-600 dark:text-emerald-400' : isDeptActive ? 'text-indigo-600 dark:text-indigo-400' : 'text-zinc-500 dark:text-zinc-400'}`}>
                                                         {dp.percentage}%
                                                     </span>
                                                 </div>
-                                                <div className="w-full bg-zinc-200 dark:bg-zinc-700 h-1 rounded-full overflow-hidden">
+                                                <div className="w-full bg-zinc-200 dark:bg-zinc-700 h-0.5 rounded-full overflow-hidden">
                                                     <div
                                                         className={`h-full rounded-full ${isComplete ? 'bg-emerald-500' : 'bg-indigo-500'}`}
                                                         style={{
-                                                            width: isMounted ? `${dp.percentage}%` : '0%',
-                                                            transition: `width 600ms cubic-bezier(0.16, 1, 0.3, 1) ${240 + dIdx * 55}ms`
+                                                            width: animationStep >= 4 ? `${dp.percentage}%` : '0%',
+                                                            transition: `width 800ms cubic-bezier(0.16, 1, 0.3, 1) ${300 + Math.min(dIdx * 50, 450)}ms`,
                                                         }}
                                                     />
                                                 </div>
@@ -846,46 +981,46 @@ export default function TaskAssignmentDashboard({
             )}
 
             {/* ── Main Content Grid ────────────────────────────────────────────── */}
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-2.5 sm:gap-3">
 
-                {/* Left Column: Scope Selectors */}
-                <div className={`lg:col-span-4 xl:col-span-3 space-y-4 tm-slide-up ${isMounted ? 'tm-visible' : ''}`} style={{ transitionDelay: '240ms' }}>
+                {/* ── Tier 5 (4.4s – 5.5s): Left Column (Staff from Left) ─────────── */}
+                <div className={`lg:col-span-4 xl:col-span-3 space-y-2.5 ${animationStep >= 5 ? 'tm-slide-left-visible' : 'tm-slide-left-hidden'}`}>
 
                     {/* Department Scope Card */}
-                    <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl overflow-hidden shadow-sm">
-                        <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-100 dark:border-zinc-800/80">
-                            <div className="flex items-center gap-2">
-                                <Building2 className="w-3.5 h-3.5 text-zinc-400" />
-                                <span className="text-[11px] font-bold uppercase tracking-widest text-zinc-400">Department</span>
+                    <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl overflow-hidden shadow-xs">
+                        <div className="flex items-center justify-between px-3 py-1.5 border-b border-zinc-100 dark:border-zinc-800/80">
+                            <div className="flex items-center gap-1.5">
+                                <Building2 className="w-3 h-3 text-zinc-400" />
+                                <span className="text-[9px] font-bold uppercase tracking-wider text-zinc-400">Department</span>
                             </div>
-                            <span className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/40 px-2 py-0.5 rounded-full">
+                            <span className="text-[9px] font-semibold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/40 px-1.5 py-0.2 rounded-full">
                                 Step 1
                             </span>
                         </div>
 
-                        <div className="p-4">
+                        <div className="p-2">
                             {isReportingManager ? (
-                                <div className="flex items-center gap-3 p-3 bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-100 dark:border-indigo-900/60 rounded-xl">
-                                    <div className="w-8 h-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center flex-shrink-0">
-                                        <Building2 className="w-4 h-4" />
+                                <div className="flex items-center gap-2 p-1.5 bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-100 dark:border-indigo-900/60 rounded-lg">
+                                    <div className="w-6 h-6 rounded-md bg-indigo-600 text-white flex items-center justify-center flex-shrink-0">
+                                        <Building2 className="w-3 h-3" />
                                     </div>
                                     <div className="min-w-0">
-                                        <div className="text-sm font-bold text-zinc-900 dark:text-zinc-100 leading-tight truncate">
+                                        <div className="text-xs font-bold text-zinc-900 dark:text-zinc-100 leading-tight truncate">
                                             {actor?.department_name || 'My Department'}
                                         </div>
-                                        <div className="text-[11px] text-indigo-500 dark:text-indigo-400 mt-0.5">Scope locked to your department</div>
+                                        <div className="text-[9px] text-indigo-500 dark:text-indigo-400">Scope locked to department</div>
                                     </div>
                                 </div>
                             ) : isSuperuser ? (
-                                <div className="space-y-2">
-                                    <label className="text-xs text-zinc-500 dark:text-zinc-400 font-medium">Filter by department</label>
+                                <div className="space-y-1">
+                                    <label className="text-[10px] text-zinc-500 dark:text-zinc-400 font-medium">Filter by department</label>
                                     <select
                                         value={selectedDeptId}
                                         onChange={(e) => {
                                             setSelectedDeptId(e.target.value);
                                             setSelectedEmployeeId('all');
                                         }}
-                                        className="w-full bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-xl px-3 py-2.5 text-sm text-zinc-800 dark:text-zinc-200 font-medium focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-400 focus:outline-none transition-all cursor-pointer"
+                                        className="w-full bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg px-2 py-1 text-xs text-zinc-800 dark:text-zinc-200 font-medium focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-400 focus:outline-none transition-all cursor-pointer"
                                     >
                                         <option value="all">All Departments ({departments.length})</option>
                                         {departments.map(d => (
@@ -898,53 +1033,53 @@ export default function TaskAssignmentDashboard({
                     </div>
 
                     {/* Employee Selector Card */}
-                    <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl overflow-hidden shadow-sm">
-                        <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-100 dark:border-zinc-800/80">
-                            <div className="flex items-center gap-2">
-                                <UserCheck className="w-3.5 h-3.5 text-zinc-400" />
-                                <span className="text-[11px] font-bold uppercase tracking-widest text-zinc-400">Staff</span>
+                    <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl overflow-hidden shadow-xs">
+                        <div className="flex items-center justify-between px-3 py-1.5 border-b border-zinc-100 dark:border-zinc-800/80">
+                            <div className="flex items-center gap-1.5">
+                                <UserCheck className="w-3 h-3 text-zinc-400" />
+                                <span className="text-[9px] font-bold uppercase tracking-wider text-zinc-400">Staff</span>
                             </div>
-                            <span className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/40 px-2 py-0.5 rounded-full">
+                            <span className="text-[9px] font-semibold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/40 px-1.5 py-0.2 rounded-full">
                                 {assignableEmployees.length}
                             </span>
                         </div>
 
-                        <div className="max-h-[420px] overflow-y-auto">
-                            <div className="p-2 space-y-0.5">
+                        <div className="max-h-[260px] overflow-y-auto">
+                            <div className="p-1 space-y-0.5">
                                 {/* All Staff button */}
                                 <button
                                     onClick={() => setSelectedEmployeeId('all')}
-                                    className={`w-full text-left px-3 py-2.5 rounded-xl transition-all duration-150 flex items-center justify-between hover:translate-x-0.5 active:scale-[0.98] ${
+                                    className={`w-full text-left px-2 py-1 rounded-lg transition-all duration-150 flex items-center justify-between hover:translate-x-0.5 active:scale-[0.98] ${
                                         selectedEmployeeId === 'all'
                                             ? 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300'
                                             : 'hover:bg-zinc-50 dark:hover:bg-zinc-800/60 text-zinc-600 dark:text-zinc-400'
                                     }`}
                                 >
-                                    <span className="flex items-center gap-2.5 text-sm">
-                                        <span className={`w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 ${
+                                    <span className="flex items-center gap-1.5 text-xs">
+                                        <span className={`w-5 h-5 rounded-md flex items-center justify-center flex-shrink-0 ${
                                             selectedEmployeeId === 'all' ? 'bg-indigo-600 text-white' : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400'
                                         }`}>
-                                            <Layers className="w-3.5 h-3.5" />
+                                            <Layers className="w-2.5 h-2.5" />
                                         </span>
                                         <span className="font-semibold">All Staff</span>
                                     </span>
-                                    <span className={`text-[11px] px-2 py-0.5 rounded-full font-bold ${
+                                    <span className={`text-[9px] px-1.5 py-0.2 rounded-full font-bold ${
                                         selectedEmployeeId === 'all'
                                             ? 'bg-indigo-100 dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300'
                                             : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400'
                                     }`}>
-                                        {tasks.length}
+                                        {departmentTasks.length}
                                     </span>
                                 </button>
 
                                 {/* Divider */}
                                 {assignableEmployees.length > 0 && (
-                                    <div className="my-1 border-t border-zinc-100 dark:border-zinc-800/80 mx-2" />
+                                    <div className="my-0.5 border-t border-zinc-100 dark:border-zinc-800/80 mx-1.5" />
                                 )}
 
                                 {/* Employee list */}
                                 {assignableEmployees.map(emp => {
-                                    const empTasks = tasks.filter(t => t.employee_id === emp.id);
+                                    const empTasks = departmentTasks.filter(t => t.employee_id === emp.id);
                                     const empCompleted = empTasks.filter(t => t.status === 'completed').length;
                                     const empPct = empTasks.length > 0 ? Math.round((empCompleted / empTasks.length) * 100) : null;
                                     const isSelected = selectedEmployeeId === emp.id;
@@ -954,14 +1089,14 @@ export default function TaskAssignmentDashboard({
                                         <button
                                             key={emp.id}
                                             onClick={() => setSelectedEmployeeId(emp.id)}
-                                            className={`w-full text-left px-3 py-2.5 rounded-xl transition-all duration-150 flex items-center justify-between hover:translate-x-0.5 active:scale-[0.98] ${
+                                            className={`w-full text-left px-2 py-1 rounded-lg transition-all duration-150 flex items-center justify-between hover:translate-x-0.5 active:scale-[0.98] ${
                                                 isSelected
                                                     ? 'bg-indigo-50 dark:bg-indigo-950/40'
                                                     : 'hover:bg-zinc-50 dark:hover:bg-zinc-800/60'
                                             }`}
                                         >
-                                            <div className="flex items-center gap-2.5 min-w-0">
-                                                <div className={`w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 text-[11px] font-black ${
+                                            <div className="flex items-center gap-1.5 min-w-0">
+                                                <div className={`w-5 h-5 rounded-md flex items-center justify-center flex-shrink-0 text-[9px] font-black ${
                                                     isSelected
                                                         ? 'bg-indigo-600 text-white'
                                                         : 'bg-zinc-200 dark:bg-zinc-700 text-zinc-600 dark:text-zinc-300'
@@ -969,16 +1104,16 @@ export default function TaskAssignmentDashboard({
                                                     {initials}
                                                 </div>
                                                 <div className="min-w-0">
-                                                    <div className={`text-sm font-semibold leading-tight truncate ${isSelected ? 'text-indigo-800 dark:text-indigo-200' : 'text-zinc-800 dark:text-zinc-200'}`}>
+                                                    <div className={`text-xs font-semibold leading-tight truncate ${isSelected ? 'text-indigo-800 dark:text-indigo-200' : 'text-zinc-800 dark:text-zinc-200'}`}>
                                                         {emp.name}
                                                     </div>
-                                                    <div className="text-[11px] text-zinc-400 leading-tight truncate">
+                                                    <div className="text-[9px] text-zinc-400 leading-tight truncate">
                                                         {emp.department_name || 'Staff'}
                                                     </div>
                                                 </div>
                                             </div>
                                             {empPct !== null ? (
-                                                <span className={`text-[11px] px-2 py-0.5 rounded-full font-bold flex-shrink-0 ${
+                                                <span className={`text-[9px] px-1.5 py-0.2 rounded-full font-bold flex-shrink-0 ${
                                                     empPct === 100
                                                         ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
                                                         : isSelected
@@ -988,7 +1123,7 @@ export default function TaskAssignmentDashboard({
                                                     {empPct}%
                                                 </span>
                                             ) : (
-                                                <span className="text-[11px] text-zinc-300 dark:text-zinc-600 font-medium flex-shrink-0">—</span>
+                                                <span className="text-[9px] text-zinc-300 dark:text-zinc-600 font-medium flex-shrink-0">—</span>
                                             )}
                                         </button>
                                     );
@@ -998,32 +1133,35 @@ export default function TaskAssignmentDashboard({
                     </div>
                 </div>
 
-                {/* Right Column: Task List */}
-                <div className={`lg:col-span-8 xl:col-span-9 space-y-4 tm-slide-up ${isMounted ? 'tm-visible' : ''}`} style={{ transitionDelay: '280ms' }}>
+                {/* ── Tier 5 (4.4s – 5.5s): Right Column (Tasks from Right) ───────── */}
+                <div
+                    className={`lg:col-span-8 xl:col-span-9 space-y-3 ${animationStep >= 5 ? 'tm-slide-right-visible' : 'tm-slide-right-hidden'}`}
+                    style={{ transitionDelay: '150ms' }}
+                >
 
                     {/* Filter / Search Bar */}
-                    <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl px-4 py-3 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-                        <div className="flex items-center gap-3 w-full sm:w-auto">
-                            <Filter className="w-3.5 h-3.5 text-zinc-400 flex-shrink-0" />
+                    <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl px-2.5 py-1.5 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 w-full sm:w-auto">
+                            <Filter className="w-3 h-3 text-zinc-400 flex-shrink-0" />
                             {/* Status tab switcher */}
-                            <div className="flex bg-zinc-100 dark:bg-zinc-800 p-1 rounded-xl gap-0.5">
+                            <div className="flex bg-zinc-100 dark:bg-zinc-800 p-0.5 rounded-lg gap-0.5">
                                 {([
-                                    { key: 'all' as const, label: 'All', count: tasks.length },
+                                    { key: 'all' as const, label: 'All', count: departmentTasks.length },
                                     { key: 'pending' as const, label: 'Pending', count: pendingCount },
                                     { key: 'completed' as const, label: 'Done', count: completedCount },
                                 ]).map(tab => (
                                     <button
                                         key={tab.key}
                                         onClick={() => setStatusFilter(tab.key)}
-                                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all duration-150 active:scale-95 ${
+                                        className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold transition-all duration-150 active:scale-95 ${
                                             statusFilter === tab.key
-                                                ? 'bg-white dark:bg-zinc-700 text-zinc-900 dark:text-zinc-100 shadow-sm'
+                                                ? 'bg-white dark:bg-zinc-700 text-zinc-900 dark:text-zinc-100 shadow-xs'
                                                 : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200'
                                         }`}
                                     >
                                         {tab.label}
                                         {tab.count > 0 && (
-                                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
+                                            <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded-full ${
                                                 statusFilter === tab.key
                                                     ? tab.key === 'completed' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
                                                     : tab.key === 'pending' ? 'bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300'
@@ -1039,19 +1177,19 @@ export default function TaskAssignmentDashboard({
                         </div>
 
                         {/* Search input */}
-                        <div className="relative w-full sm:w-60">
-                            <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 pointer-events-none" />
+                        <div className="relative w-full sm:w-52">
+                            <Search className="w-3 h-3 absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400 pointer-events-none" />
                             <input
                                 type="text"
                                 placeholder="Search tasks or staff..."
                                 value={searchQuery}
                                 onChange={(e) => setSearchQuery(e.target.value)}
-                                className="w-full pl-9 pr-3 py-2 bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-xl text-xs text-zinc-800 dark:text-zinc-200 placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-400 transition-all"
+                                className="w-full pl-7 pr-2.5 py-1 bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-xs text-zinc-800 dark:text-zinc-200 placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-400 transition-all"
                             />
                             {searchQuery && (
                                 <button
                                     onClick={() => setSearchQuery('')}
-                                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 transition-colors"
+                                    className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 transition-colors"
                                 >
                                     <X className="w-3 h-3" />
                                 </button>
@@ -1062,31 +1200,31 @@ export default function TaskAssignmentDashboard({
                     {/* Task Cards Area */}
                     {loading ? (
                         /* Loading skeleton */
-                        <div className="space-y-3">
+                        <div className="space-y-2">
                             {[1, 2, 3].map(i => (
-                                <div key={i} className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-4 shadow-sm animate-pulse">
-                                    <div className="flex items-start gap-3">
-                                        <div className="w-5 h-5 rounded-md bg-zinc-200 dark:bg-zinc-700 flex-shrink-0 mt-0.5" />
-                                        <div className="flex-1 space-y-2">
-                                            <div className="h-4 bg-zinc-200 dark:bg-zinc-700 rounded-lg w-2/3" />
-                                            <div className="h-3 bg-zinc-100 dark:bg-zinc-800 rounded-lg w-1/3" />
+                                <div key={i} className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg p-2.5 shadow-xs animate-pulse">
+                                    <div className="flex items-start gap-2">
+                                        <div className="w-4 h-4 rounded bg-zinc-200 dark:bg-zinc-700 flex-shrink-0 mt-0.5" />
+                                        <div className="flex-1 space-y-1">
+                                            <div className="h-3 bg-zinc-200 dark:bg-zinc-700 rounded w-2/3" />
+                                            <div className="h-2 bg-zinc-100 dark:bg-zinc-800 rounded w-1/3" />
                                         </div>
-                                        <div className="h-6 w-16 bg-zinc-100 dark:bg-zinc-800 rounded-full" />
+                                        <div className="h-4 w-12 bg-zinc-100 dark:bg-zinc-800 rounded-full" />
                                     </div>
                                 </div>
                             ))}
                         </div>
                     ) : filteredTasks.length === 0 ? (
                         /* Empty state */
-                        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-12 shadow-sm text-center flex flex-col items-center gap-3">
-                            <div className="w-14 h-14 rounded-2xl bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center">
-                                <ClipboardList className="w-7 h-7 text-zinc-300 dark:text-zinc-600" />
+                        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-6 shadow-xs text-center flex flex-col items-center gap-2">
+                            <div className="w-10 h-10 rounded-lg bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center">
+                                <ClipboardList className="w-5 h-5 text-zinc-300 dark:text-zinc-600" />
                             </div>
                             <div>
-                                <div className="text-sm font-bold text-zinc-700 dark:text-zinc-300">
+                                <div className="text-xs sm:text-xs font-bold text-zinc-700 dark:text-zinc-300">
                                     {searchQuery ? 'No matching tasks' : 'No tasks for this date'}
                                 </div>
-                                <p className="text-xs text-zinc-400 mt-1">
+                                <p className="text-[10px] text-zinc-400 mt-0.5">
                                     {searchQuery
                                         ? 'Try a different search term or clear the filter.'
                                         : 'Use "Assign Task" to delegate a deliverable to a staff member.'}
@@ -1098,49 +1236,51 @@ export default function TaskAssignmentDashboard({
                                         setAssignTargetEmpId(assignableEmployees[0]?.id || '');
                                         setShowAssignModal(true);
                                     }}
-                                    className="mt-1 flex items-center gap-1.5 px-4 py-2 text-sm font-semibold rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white shadow-md shadow-indigo-500/20 transition-all"
+                                    className="mt-1 flex items-center gap-1 px-3 py-1 text-xs font-semibold rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white shadow-xs transition-all"
                                 >
-                                    <Plus className="w-4 h-4" />
+                                    <Plus className="w-3 h-3" />
                                     Assign First Task
                                 </button>
                             )}
                         </div>
                     ) : (
                         /* Task list */
-                        <div className="space-y-2">
+                        <div className="space-y-1.5">
                             {filteredTasks.map((task, tIdx) => {
                                 const isDone = task.status === 'completed';
                                 const isDeleting = deletingTaskId === task.id;
                                 return (
                                     <div
                                         key={task.id}
-                                        className={`group bg-white dark:bg-zinc-900 border rounded-2xl px-4 py-3.5 shadow-sm hover:shadow-md transition-all duration-200 hover:-translate-y-px tm-slide-up ${isMounted ? 'tm-visible' : ''} ${
+                                        className={`group bg-white dark:bg-zinc-900 border rounded-lg px-3 py-2 shadow-xs hover:border-zinc-300 dark:hover:border-zinc-700 ${
+                                            animationStep >= 5 ? 'tm-slide-right-visible' : 'tm-slide-right-hidden'
+                                        } ${
                                             isDone
                                                 ? 'border-emerald-200/80 dark:border-emerald-900/60 bg-emerald-50/20 dark:bg-emerald-950/10'
-                                                : 'border-zinc-200 dark:border-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-700'
+                                                : 'border-zinc-200 dark:border-zinc-800'
                                         }`}
-                                        style={{ transitionDelay: `${320 + tIdx * 45}ms` }}
+                                        style={{ transitionDelay: `${250 + Math.min(tIdx * 50, 450)}ms` }}
                                     >
-                                        <div className="flex items-start gap-3">
+                                        <div className="flex items-start gap-2">
                                             {/* Checkbox */}
                                             <button
                                                 onClick={() => handleToggleTaskStatus(task.id, task.status)}
-                                                className={`mt-0.5 w-5 h-5 rounded-md border-2 flex items-center justify-center transition-all duration-200 flex-shrink-0 hover:scale-110 active:scale-90 ${
+                                                className={`mt-0.5 w-4 h-4 rounded-md border-2 flex items-center justify-center transition-all duration-200 flex-shrink-0 hover:scale-110 active:scale-90 ${
                                                     isDone
-                                                        ? 'bg-emerald-500 border-emerald-500 text-white shadow-sm shadow-emerald-500/30'
+                                                        ? 'bg-emerald-500 border-emerald-500 text-white shadow-xs'
                                                         : 'border-zinc-300 dark:border-zinc-600 hover:border-indigo-400 dark:hover:border-indigo-500 text-transparent hover:bg-indigo-50 dark:hover:bg-indigo-950/30'
                                                 }`}
                                                 title={isDone ? 'Mark as pending' : 'Mark as completed'}
                                             >
-                                                <Check className="w-3 h-3" />
+                                                <Check className="w-2.5 h-2.5" />
                                             </button>
 
                                             {/* Task content */}
                                             <div className="flex-1 min-w-0">
-                                                <div className="flex items-start justify-between gap-3">
+                                                <div className="flex items-start justify-between gap-2">
                                                     <div className="flex-1 min-w-0">
-                                                        <div className="flex items-center gap-2 flex-wrap">
-                                                            <span className={`text-sm font-semibold leading-snug transition-all duration-300 ${
+                                                        <div className="flex items-center gap-1.5 flex-wrap">
+                                                            <span className={`text-xs font-semibold leading-snug transition-all duration-300 ${
                                                                 isDone
                                                                     ? 'line-through text-zinc-400 dark:text-zinc-500'
                                                                     : 'text-zinc-900 dark:text-zinc-100'
@@ -1148,25 +1288,25 @@ export default function TaskAssignmentDashboard({
                                                                 {task.title}
                                                             </span>
                                                             {task.template && (
-                                                                <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-300 border border-blue-200/60 dark:border-blue-900/60 flex-shrink-0">
+                                                                <span className="inline-flex items-center gap-0.5 text-[8px] font-bold px-1.5 py-0.2 rounded-full bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-300 border border-blue-200/60 dark:border-blue-900/60 flex-shrink-0">
                                                                     {task.template.task_type === 'fixed'
-                                                                        ? <Zap className="w-2.5 h-2.5" />
-                                                                        : <Layers className="w-2.5 h-2.5" />}
+                                                                        ? <Zap className="w-2 h-2" />
+                                                                        : <Layers className="w-2 h-2" />}
                                                                     {task.template.task_type.toUpperCase()}
                                                                 </span>
                                                             )}
                                                         </div>
 
                                                         {task.description && (
-                                                            <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1 line-clamp-1">
+                                                            <p className="text-[10px] text-zinc-500 dark:text-zinc-400 mt-0.5 line-clamp-1">
                                                                 {task.description}
                                                             </p>
                                                         )}
 
                                                         {/* Meta row */}
-                                                        <div className="flex items-center gap-2 mt-2 flex-wrap">
-                                                            <div className="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
-                                                                <div className="w-4 h-4 rounded-md bg-zinc-200 dark:bg-zinc-700 flex items-center justify-center text-[9px] font-black text-zinc-600 dark:text-zinc-300 flex-shrink-0">
+                                                        <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                                                            <div className="flex items-center gap-1 text-[10px] text-zinc-500 dark:text-zinc-400">
+                                                                <div className="w-3 h-3 rounded bg-zinc-200 dark:bg-zinc-700 flex items-center justify-center text-[7px] font-black text-zinc-600 dark:text-zinc-300 flex-shrink-0">
                                                                     {(task.employee?.full_name || 'S').charAt(0).toUpperCase()}
                                                                 </div>
                                                                 <span className="font-medium text-zinc-600 dark:text-zinc-300">
@@ -1174,12 +1314,12 @@ export default function TaskAssignmentDashboard({
                                                                 </span>
                                                             </div>
                                                             <span className="text-zinc-300 dark:text-zinc-700">·</span>
-                                                            <span className="text-xs text-zinc-400">{task.assigned_date}</span>
+                                                            <span className="text-[10px] text-zinc-400">{task.assigned_date}</span>
                                                             {task.completed_at && (
                                                                 <>
                                                                     <span className="text-zinc-300 dark:text-zinc-700">·</span>
-                                                                    <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
-                                                                        <CheckCircle2 className="w-3 h-3" />
+                                                                    <span className="text-[10px] font-medium text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                                                                        <CheckCircle2 className="w-2.5 h-2.5" />
                                                                         {new Date(task.completed_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                                                                     </span>
                                                                 </>
@@ -1188,13 +1328,13 @@ export default function TaskAssignmentDashboard({
                                                     </div>
 
                                                     {/* Status + delete */}
-                                                    <div className="flex items-center gap-2 flex-shrink-0">
-                                                        <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold transition-all duration-300 ${
+                                                    <div className="flex items-center gap-1 flex-shrink-0">
+                                                        <span className={`inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded-full text-[9px] font-bold transition-all duration-300 ${
                                                             isDone
                                                                 ? 'bg-emerald-100 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300'
                                                                 : 'bg-amber-100 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300'
                                                         }`}>
-                                                            {isDone ? <CheckCircle2 className="w-2.5 h-2.5" /> : <Clock className="w-2.5 h-2.5" />}
+                                                            {isDone ? <CheckCircle2 className="w-2 h-2" /> : <Clock className="w-2 h-2" />}
                                                             {isDone ? 'Done' : 'Pending'}
                                                         </span>
 
@@ -1203,13 +1343,13 @@ export default function TaskAssignmentDashboard({
                                                                 type="button"
                                                                 disabled={isDeleting}
                                                                 onClick={() => handleDeleteTask(task.id, task.title)}
-                                                                className="opacity-0 scale-75 group-hover:opacity-100 group-hover:scale-100 p-1.5 text-zinc-300 dark:text-zinc-600 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg transition-all duration-200 disabled:opacity-30 hover:scale-110 active:scale-90"
+                                                                className="opacity-0 scale-75 group-hover:opacity-100 group-hover:scale-100 p-0.5 text-zinc-300 dark:text-zinc-600 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded transition-all duration-200 disabled:opacity-30 active:scale-90"
                                                                 title="Delete task"
                                                             >
                                                                 {isDeleting ? (
-                                                                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                                                                    <RefreshCw className="w-2.5 h-2.5 animate-spin" />
                                                                 ) : (
-                                                                    <Trash2 className="w-3.5 h-3.5" />
+                                                                    <Trash2 className="w-2.5 h-2.5" />
                                                                 )}
                                                             </button>
                                                         )}
@@ -1495,24 +1635,17 @@ export default function TaskAssignmentDashboard({
             )}
 
             {/* ── Floating Quick-Assign CTA Card ─────────────────────────────── */}
-            {(isReportingManager || isSuperuser) && !floatingCTADismissed && (
+            {(isReportingManager || isSuperuser) && !floatingCTADismissed && animationStep >= 6 && (
                 <div
-                    className="fixed bottom-6 right-6 z-40 w-72"
-                    style={{
-                        animation: showFloatingCTA
-                            ? 'tmFloatIn 0.55s cubic-bezier(0.34, 1.56, 0.64, 1) forwards'
-                            : 'none',
-                        opacity: showFloatingCTA ? 1 : 0,
-                        pointerEvents: showFloatingCTA ? 'auto' : 'none',
-                    }}
+                    className="fixed bottom-4 right-4 z-40 w-64 tm-float-in"
                 >
-                    <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-2xl shadow-black/10 overflow-hidden">
+                    <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-xl shadow-black/10 overflow-hidden">
                         {/* Gradient accent strip */}
-                        <div className="h-1 w-full bg-gradient-to-r from-indigo-500 via-violet-500 to-indigo-600" />
-                        <div className="p-4">
-                            <div className="flex items-start justify-between mb-3">
-                                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-md shadow-indigo-500/25 flex-shrink-0">
-                                    <Plus className="w-5 h-5 text-white" />
+                        <div className="h-0.5 w-full bg-gradient-to-r from-indigo-500 via-violet-500 to-indigo-600" />
+                        <div className="p-3 sm:p-3.5">
+                            <div className="flex items-start justify-between mb-2">
+                                <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-sm shadow-indigo-500/25 flex-shrink-0">
+                                    <Plus className="w-4 h-4 text-white" />
                                 </div>
                                 <button
                                     onClick={() => setFloatingCTADismissed(true)}
@@ -1521,22 +1654,22 @@ export default function TaskAssignmentDashboard({
                                     <X className="w-3.5 h-3.5" />
                                 </button>
                             </div>
-                            <div className="mb-3">
-                                <h4 className="text-sm font-bold text-zinc-900 dark:text-zinc-100 leading-tight">
+                            <div className="mb-2">
+                                <h4 className="text-xs sm:text-sm font-bold text-zinc-900 dark:text-zinc-100 leading-tight">
                                     Ready to assign tasks?
                                 </h4>
-                                <p className="text-xs text-zinc-400 mt-1 leading-relaxed">
-                                    Delegate daily deliverables to your team in seconds.
+                                <p className="text-[11px] text-zinc-400 mt-0.5 leading-snug">
+                                    Delegate daily deliverables in seconds.
                                 </p>
                             </div>
-                            <div className="space-y-1.5 mb-4">
+                            <div className="space-y-1 mb-3">
                                 {[
-                                    { icon: <Check className="w-3 h-3" />, text: 'Pick an employee' },
-                                    { icon: <Check className="w-3 h-3" />, text: 'Set task title & notes' },
-                                    { icon: <Check className="w-3 h-3" />, text: 'Track completion live' },
+                                    { icon: <Check className="w-2.5 h-2.5" />, text: 'Pick an employee' },
+                                    { icon: <Check className="w-2.5 h-2.5" />, text: 'Set task title & notes' },
+                                    { icon: <Check className="w-2.5 h-2.5" />, text: 'Track completion live' },
                                 ].map((item, i) => (
-                                    <div key={i} className="flex items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400">
-                                        <span className="w-4 h-4 rounded-full bg-indigo-100 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center flex-shrink-0">
+                                    <div key={i} className="flex items-center gap-1.5 text-[11px] text-zinc-500 dark:text-zinc-400">
+                                        <span className="w-3.5 h-3.5 rounded-full bg-indigo-100 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center flex-shrink-0">
                                             {item.icon}
                                         </span>
                                         {item.text}
@@ -1549,9 +1682,9 @@ export default function TaskAssignmentDashboard({
                                     setShowAssignModal(true);
                                     setFloatingCTADismissed(true);
                                 }}
-                                className="w-full flex items-center justify-center gap-1.5 px-4 py-2.5 text-sm font-bold rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white shadow-md shadow-indigo-500/25 hover:shadow-lg hover:shadow-indigo-500/35 transition-all duration-200 hover:-translate-y-px active:scale-[0.97]"
+                                className="w-full flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-bold rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm shadow-indigo-500/25 hover:shadow hover:shadow-indigo-500/35 transition-all duration-200 hover:-translate-y-px active:scale-[0.97]"
                             >
-                                <Plus className="w-4 h-4" />
+                                <Plus className="w-3.5 h-3.5" />
                                 Assign First Task
                             </button>
                         </div>
@@ -1561,44 +1694,71 @@ export default function TaskAssignmentDashboard({
 
             {/* Animation system */}
             <style>{`
-                /* ── Entrance: fade + slide-up ─────────────────────────────────── */
-                .tm-slide-up {
-                    opacity: 0;
-                    transform: translateY(18px);
-                    transition:
-                        opacity 480ms cubic-bezier(0.16, 1, 0.3, 1),
-                        transform 480ms cubic-bezier(0.16, 1, 0.3, 1);
+                .tm-root {
+                    zoom: 0.85;
                 }
-                .tm-slide-up.tm-visible {
-                    opacity: 1;
-                    transform: translateY(0);
+                @media (max-width: 640px) {
+                    .tm-root {
+                        zoom: 0.92;
+                    }
                 }
 
-                /* ── Modal spring-in ──────────────────────────────────────────── */
+                /* ── Slide Transitions (Shared Base) ─────────────────────────── */
+                .tm-slide-left-hidden, .tm-slide-right-hidden,
+                .tm-slide-down-hidden, .tm-slide-up-hidden {
+                    opacity: 0 !important;
+                    pointer-events: none !important;
+                    will-change: opacity, transform;
+                }
+
+                .tm-slide-left-visible, .tm-slide-right-visible,
+                .tm-slide-down-visible, .tm-slide-up-visible {
+                    opacity: 1 !important;
+                    transform: translate(0, 0) !important;
+                    pointer-events: auto !important;
+                    will-change: opacity, transform;
+                }
+
+                /* Horizontal slides */
+                .tm-slide-left-hidden, .tm-slide-left-visible,
+                .tm-slide-right-hidden, .tm-slide-right-visible {
+                    transition: opacity 1400ms cubic-bezier(0.16, 1, 0.3, 1), transform 1800ms cubic-bezier(0.16, 1, 0.3, 1) !important;
+                }
+                .tm-slide-left-hidden  { transform: translateX(-100px) !important; }
+                .tm-slide-right-hidden { transform: translateX(100px) !important; }
+
+                /* Vertical slides */
+                .tm-slide-down-hidden, .tm-slide-down-visible,
+                .tm-slide-up-hidden, .tm-slide-up-visible {
+                    transition: opacity 1300ms cubic-bezier(0.16, 1, 0.3, 1), transform 1600ms cubic-bezier(0.16, 1, 0.3, 1) !important;
+                }
+                .tm-slide-down-hidden { transform: translateY(-50px) !important; }
+                .tm-slide-up-hidden   { transform: translateY(50px) !important; }
+
+                /* ── Modal Spring-in ──────────────────────────────────────────── */
                 @keyframes tmModalIn {
                     from { opacity: 0; transform: scale(0.93) translateY(10px); }
                     to   { opacity: 1; transform: scale(1) translateY(0); }
                 }
 
-                /* ── Floating CTA card spring-up from bottom ──────────────────── */
+                /* ── Floating CTA Spring-in ──────────────────────────────────── */
                 @keyframes tmFloatIn {
-                    0%   { opacity: 0; transform: translateY(60px) scale(0.92); }
-                    60%  { opacity: 1; }
-                    100% { opacity: 1; transform: translateY(0) scale(1); }
+                    0% {
+                        opacity: 0;
+                        transform: translateY(40px) scale(0.94);
+                    }
+                    60% {
+                        opacity: 1;
+                        transform: translateY(-4px) scale(1.02);
+                    }
+                    100% {
+                        opacity: 1;
+                        transform: translateY(0) scale(1);
+                    }
                 }
 
-                /* ── prefers-reduced-motion: kill all entrance + micro-animations ── */
-                @media (prefers-reduced-motion: reduce) {
-                    .tm-slide-up,
-                    .tm-slide-up.tm-visible {
-                        opacity: 1 !important;
-                        transform: none !important;
-                        transition: none !important;
-                    }
-                    .tm-root * {
-                        transition-duration: 0.01ms !important;
-                        animation-duration: 0.01ms !important;
-                    }
+                .tm-float-in {
+                    animation: tmFloatIn 650ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
                 }
             `}</style>
         </div>
