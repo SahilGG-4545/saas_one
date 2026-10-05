@@ -82,10 +82,17 @@ function getReporteesRecursive(
     return all;
 }
 
+let lastSlaCheckTimestamp = 0;
+const SLA_THROTTLE_MS = 5 * 60 * 1000; // Check at most once every 5 minutes in background
+
 export async function GET(request: Request) {
     try {
-        // Run SLA breach auto-escalation check in real-time on ticket fetch
-        await runAutoSlaEscalation().catch(err => console.error('[HR SLA Auto Check Error]:', err));
+        // Run SLA breach auto-escalation check throttled in background without blocking GET response
+        const nowMs = Date.now();
+        if (nowMs - lastSlaCheckTimestamp > SLA_THROTTLE_MS) {
+            lastSlaCheckTimestamp = nowMs;
+            runAutoSlaEscalation().catch(err => console.error('[HR SLA Auto Check Error]:', err));
+        }
 
         const { searchParams } = new URL(request.url);
 
@@ -128,7 +135,7 @@ export async function GET(request: Request) {
 
         // Granular Role Scoping: Exactly 3 Tiers
         // 1. Org Super Admin: Sees ALL types of tickets across entire organization (grievance, hr_query, confidential, anonymous)
-        // 2. HR & HR-related roles: Sees ALL tickets across org EXCEPT anonymous tickets
+        // 2. HR & HR-related roles: Sees ALL tickets across org EXCEPT anonymous tickets (unless raised by or assigned to them)
         // 3. Property Admin, Ops Super Admin, and all other roles: Sees ONLY tickets assigned to them,
         //    assigned to their direct & indirect sub-reportees, or raised by them.
         //
@@ -143,6 +150,14 @@ export async function GET(request: Request) {
         let myProfile: any = null;
 
         if (userId) {
+            // Fetch caller profile early for identity matching and HR authority checks
+            const { data: profile } = await supabaseAdmin
+                .from('employee_profiles')
+                .select('id, user_id, employee_code, first_name, last_name, email, reporting_manager_id, reporting_manager_code, is_hr_authority, is_hr_manager_authority, designation, department, location')
+                .eq('user_id', userId)
+                .maybeSingle();
+            myProfile = profile;
+
             // Check organization_memberships for authoritative org role
             const { data: mems } = await supabaseAdmin
                 .from('organization_memberships')
@@ -158,14 +173,8 @@ export async function GET(request: Request) {
             }
 
             // Check employee_profiles for HR authority flags
-            if (!isOrgSuperAdmin && !isHrRole) {
-                const { data: hrEmps } = await supabaseAdmin
-                    .from('employee_profiles')
-                    .select('is_hr_authority, is_hr_manager_authority')
-                    .eq('user_id', userId)
-                    .eq('organization_id', orgId);
-
-                if (hrEmps && hrEmps.some(e => e.is_hr_authority || e.is_hr_manager_authority)) {
+            if (!isOrgSuperAdmin && !isHrRole && myProfile) {
+                if (myProfile.is_hr_authority || myProfile.is_hr_manager_authority) {
                     isHrRole = true;
                 }
             }
@@ -176,15 +185,18 @@ export async function GET(request: Request) {
             // (grievance, hr_query, confidential_feedback, anonymous_feedback)
         } else if (isHrRole) {
             // TIER 2: HR and HR-related roles view standard tickets across the org.
-            // Anonymous tickets are NEVER visible to HR.
-            // Confidential tickets are strictly hidden from HR unless explicitly assigned to that HR user as per admin config.
+            // Anonymous & confidential tickets across the org are hidden unless raised by or assigned to this HR user.
             const hrConditions = [
                 'and(is_anonymous.not.is.true,is_confidential.not.is.true,ticket_type.not.in.(anonymous_feedback,confidential_feedback,confidential))'
             ];
             if (userId) {
                 hrConditions.push(`assigned_to_user_id.eq.${userId}`);
                 hrConditions.push(`assigned_history.cs.["${userId}"]`);
-                hrConditions.push(`and(is_anonymous.not.is.true,raised_by_user_id.eq.${userId})`);
+                // Crucial: The submitter can ALWAYS view their own tickets (including anonymous & confidential) in My Raised
+                hrConditions.push(`raised_by_user_id.eq.${userId}`);
+                if (myProfile?.id) {
+                    hrConditions.push(`raised_by_user_id.eq.${myProfile.id}`);
+                }
             }
             query = query.or(hrConditions.join(','));
         } else if (userId) {
@@ -449,6 +461,7 @@ export async function GET(request: Request) {
                     photo_url: t.assigned_to.user_photo_url || null,
                     location: assignedEmp?.location || 'Head Office',
                     department: assignedEmp?.department || 'Operations',
+                    designation: assignedEmp?.designation || assignedEmp?.job_title || 'Level Owner',
                     employee_role: assignedEmp?.designation || 'Level Owner',
                     app_role: assignedEmp?.designation || 'Level Owner',
                     employee_code: assignedEmp?.employee_code || 'N/A'

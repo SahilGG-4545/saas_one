@@ -394,6 +394,7 @@ export async function GET(
                     avatar_url: photoUrl,
                     location: handlerLocation,
                     department: assignedProfile?.department || 'Operations',
+                    designation: assignedProfile?.designation || assignedProfile?.job_title || 'Level Owner',
                     employee_role: assignedProfile?.designation || 'Level Owner',
                     app_role: appRole,
                     employee_code: handlerEmpCode
@@ -635,6 +636,18 @@ export async function PATCH(
             if (!isSuperOrHr) {
                 return NextResponse.json({ success: false, error: 'This ticket has been escalated. Only the current level assignee (or HR authority) can resolve or advance it.' }, { status: 403 });
             }
+        }
+
+        // MANDATORY RESOLUTION NOTE: A ticket cannot be resolved or closed without a non-empty resolution note
+        if (status === 'resolved' || status === 'pending_acknowledgement' || action === 'resolve' || status === 'closed') {
+            const effectiveResolutionNote = (resolution_note !== undefined ? resolution_note : existing.resolution_note)?.trim();
+            if (!effectiveResolutionNote) {
+                return NextResponse.json({
+                    success: false,
+                    error: 'A resolution note is strictly mandatory before resolving or closing this ticket.'
+                }, { status: 400 });
+            }
+            updates.resolution_note = effectiveResolutionNote;
         }
 
         if (status === 'resolved' || status === 'pending_acknowledgement' || action === 'resolve') {

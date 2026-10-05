@@ -256,19 +256,29 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
         fetchTickets();
     }, [orgId, user?.id, userRole, selectedPropertyId]);
 
-    // Real-time automatic background data refresh (every 10s & on window focus)
+    // Real-time automatic background data refresh (every 30s, on window focus, and on ticket events)
     useEffect(() => {
         if (!user?.id) return;
         const interval = setInterval(() => {
             fetchTickets(true);
-        }, 10000);
+        }, 30000);
 
         const handleFocus = () => fetchTickets(true);
+        const handleTicketUpdated = (e: any) => {
+            const { ticketId, status } = e?.detail || {};
+            if (ticketId && status) {
+                setTickets(prev => prev.map(t => t.id === ticketId ? { ...t, status } : t));
+            }
+            fetchTickets(true);
+        };
+
         window.addEventListener('focus', handleFocus);
+        window.addEventListener('hr-ticket-updated', handleTicketUpdated);
 
         return () => {
             clearInterval(interval);
             window.removeEventListener('focus', handleFocus);
+            window.removeEventListener('hr-ticket-updated', handleTicketUpdated);
         };
     }, [orgId, user?.id, userRole, selectedPropertyId]);
 
@@ -338,6 +348,8 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
     };
 
     const handleUpdateStatus = async (ticketId: string, newStatus: string) => {
+        // Optimistic UI update
+        setTickets(prev => prev.map(t => t.id === ticketId ? { ...t, status: newStatus } : t));
         try {
             const res = await fetch(`/api/hr/tickets/${ticketId}`, {
                 method: 'PATCH',
@@ -352,9 +364,12 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
             try { data = text ? JSON.parse(text) : {}; } catch {}
             if (data.success) {
                 fetchTickets(true);
+            } else {
+                fetchTickets(true);
             }
         } catch (err) {
             console.error('Error updating status:', err);
+            fetchTickets(true);
         }
     };
 
@@ -475,9 +490,13 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
         const overdue = tickets.filter(t => t.sla_due_at && new Date(t.sla_due_at) < new Date() && !['resolved', 'closed'].includes(t.status)).length;
 
         const myRaised = tickets.filter(t => 
-            t.raised_by_user_id === user?.id || 
-            t.raised_by?.email === user?.email ||
-            (userEmpProfile && (t.raised_by_user_id === userEmpProfile.id || (userEmpProfile.employee_code && t.employee_snapshot?.code === userEmpProfile.employee_code)))
+            Boolean(
+                (user?.id && t.raised_by_user_id === user.id) || 
+                (user?.email && t.raised_by?.email && t.raised_by.email.toLowerCase() === user.email.toLowerCase()) ||
+                (userEmpProfile?.id && t.raised_by_user_id === userEmpProfile.id) ||
+                (userEmpProfile?.employee_code && t.employee_snapshot?.code === userEmpProfile.employee_code) ||
+                (user?.email && t.employee_snapshot?.email && t.employee_snapshot.email.toLowerCase() === user.email.toLowerCase())
+            )
         ).length;
 
         const teamTickets = tickets.filter(t => 
@@ -512,9 +531,13 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
     // Filter tickets based on UI search, scope, type, and status filters
     const filteredTickets = tickets.filter(t => {
         if (scopeFilter === 'my_raised') {
-            const isMyRaised = t.raised_by_user_id === user?.id || 
-                               t.raised_by?.email === user?.email ||
-                               (userEmpProfile && (t.raised_by_user_id === userEmpProfile.id || (userEmpProfile.employee_code && t.employee_snapshot?.code === userEmpProfile.employee_code)));
+            const isMyRaised = Boolean(
+                (user?.id && t.raised_by_user_id === user.id) || 
+                (user?.email && t.raised_by?.email && t.raised_by.email.toLowerCase() === user.email.toLowerCase()) ||
+                (userEmpProfile?.id && t.raised_by_user_id === userEmpProfile.id) ||
+                (userEmpProfile?.employee_code && t.employee_snapshot?.code === userEmpProfile.employee_code) ||
+                (user?.email && t.employee_snapshot?.email && t.employee_snapshot.email.toLowerCase() === user.email.toLowerCase())
+            );
             if (!isMyRaised) return false;
         }
         if (scopeFilter === 'assigned_to_me' && !isDirectlyAssignedToMe(t)) return false;
@@ -1706,7 +1729,12 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
 
                             <button
                                 type="button"
-                                onClick={() => { setScopeFilter('my_raised'); setStatusFilter('all'); }}
+                                onClick={() => {
+                                    setScopeFilter('my_raised');
+                                    setStatusFilter('all');
+                                    setTicketTypeFilter('all');
+                                    setSelectedAssigneeFilter('all');
+                                }}
                                 className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all shrink-0 ${
                                     scopeFilter === 'my_raised' ? 'bg-[#587e85] text-white shadow-xs' : 'text-slate-500 hover:text-slate-800'
                                 }`}
@@ -1807,7 +1835,8 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
                         </div>
                     ) : (
                         <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xs overflow-hidden">
-                            <div className="overflow-x-auto">
+                            {/* Desktop Table View */}
+                            <div className="hidden lg:block overflow-x-auto">
                                 <table className="w-full text-left text-xs">
                                     <thead>
                                         <tr className="bg-slate-50/90 dark:bg-slate-800/80 text-[10px] font-black uppercase tracking-wider text-slate-500 border-b border-slate-200 dark:border-slate-800">
@@ -2052,6 +2081,107 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
                                         )}
                                     </tbody>
                                 </table>
+                            </div>
+
+                            {/* Mobile Card List (< lg) */}
+                            <div className="block lg:hidden divide-y divide-slate-100 dark:divide-slate-800/80">
+                                {filteredTickets.length === 0 ? (
+                                    <div className="py-12 px-4 text-center">
+                                        <div className="w-10 h-10 rounded-xl bg-[#587e85]/10 text-[#587e85] flex items-center justify-center mx-auto mb-2.5">
+                                            {scopeFilter === 'my_team_assigned' ? <Users className="w-5 h-5" /> : <Ticket className="w-5 h-5" />}
+                                        </div>
+                                        <h3 className="text-xs font-extrabold text-slate-800 dark:text-slate-200">
+                                            No Tickets Found
+                                        </h3>
+                                        <p className="text-[11px] text-slate-500 mt-0.5">
+                                            No HR requests or grievances matched your filter criteria.
+                                        </p>
+                                    </div>
+                                ) : (
+                                    filteredTickets.map((t) => {
+                                        const isAnon = Boolean(t.is_anonymous);
+                                        const emp = !isAnon ? employeesList.find(e => 
+                                            (e.user_id && e.user_id === t.raised_by_user_id) || 
+                                            (e.id && e.id === t.raised_by_user_id) || 
+                                            (e.email && e.email.toLowerCase() === t.raised_by?.email?.toLowerCase()) ||
+                                            (e.employee_code && e.employee_code === t.employee_snapshot?.code)
+                                        ) : null;
+                                        const sName = isAnon ? 'Anonymous Employee' : (t.employee_snapshot?.name || (emp ? `${emp.first_name || ''} ${emp.last_name || ''}`.trim() || emp.full_name || emp.name : t.raised_by?.full_name || 'Employee'));
+                                        const handlerUserId = t.assigned_to_user_id || t.assigned_to_id;
+                                        const hEmp = employeesList.find(e => 
+                                            (handlerUserId && (e.user_id === handlerUserId || e.id === handlerUserId)) ||
+                                            (t.assigned_to?.email && e.email?.toLowerCase() === t.assigned_to.email.toLowerCase())
+                                        );
+                                        const hName = t.current_level_owner || t.assigned_to_details?.full_name || t.assigned_to?.full_name || (hEmp ? `${hEmp.first_name || ''} ${hEmp.last_name || ''}`.trim() || hEmp.full_name || hEmp.name : 'Manager / HR');
+
+                                        return (
+                                            <div 
+                                                key={t.id}
+                                                onClick={() => setSelectedTicketId(t.id)}
+                                                className="p-3.5 space-y-2.5 active:bg-slate-50 dark:active:bg-slate-800/60 transition-colors cursor-pointer"
+                                            >
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <span className="font-mono text-xs font-bold text-[#587e85]">
+                                                        #{t.ticket_number}
+                                                    </span>
+                                                    <span className={`px-2 py-0.5 rounded-full text-[9.5px] font-black uppercase tracking-wider inline-flex items-center gap-1 border ${
+                                                        t.status === 'closed'
+                                                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-300'
+                                                            : t.status === 'pending_acknowledgement' || t.status === 'resolved'
+                                                            ? 'bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950/60 dark:text-amber-300'
+                                                            : t.status === 'in_progress'
+                                                            ? 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/60 dark:text-blue-300'
+                                                            : t.status === 'escalated'
+                                                            ? 'bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-950/60 dark:text-purple-300'
+                                                            : 'bg-indigo-50 text-indigo-700 border-indigo-200 dark:bg-indigo-950/60 dark:text-indigo-300'
+                                                    }`}>
+                                                        {t.status === 'pending_acknowledgement' ? 'Pending Ack' : t.status.replace(/_/g, ' ')}
+                                                    </span>
+                                                </div>
+
+                                                <div>
+                                                    <h4 className="text-xs font-bold text-slate-900 dark:text-white line-clamp-2">
+                                                        {t.subject}
+                                                    </h4>
+                                                    <div className="flex flex-wrap items-center gap-1.5 mt-1 text-[10.5px]">
+                                                        <span className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-semibold">
+                                                            {t.category?.category_name || t.category_name || 'Grievance'}
+                                                        </span>
+                                                        <span className="text-indigo-600 dark:text-indigo-400 font-bold">
+                                                            Level {t.current_level}
+                                                        </span>
+                                                    </div>
+                                                </div>
+
+                                                <div className="flex items-center justify-between text-[11px] text-slate-500 pt-1 border-t border-slate-100 dark:border-slate-800/80">
+                                                    <div className="flex items-center gap-1.5 truncate max-w-[55%]">
+                                                        <span className="text-slate-400">By:</span>
+                                                        <span className="font-semibold text-slate-800 dark:text-slate-200 truncate">{sName}</span>
+                                                    </div>
+                                                    <div className="flex items-center gap-1.5 truncate max-w-[45%] text-right justify-end">
+                                                        <span className="text-slate-400">Assigned:</span>
+                                                        <span className="font-semibold text-slate-800 dark:text-slate-200 truncate">{hName}</span>
+                                                    </div>
+                                                </div>
+
+                                                <div className="flex items-center justify-between pt-1">
+                                                    <SLALiveTimer slaDueAt={t.sla_due_at} status={t.status} />
+                                                    <button
+                                                        type="button"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            setSelectedTicketId(t.id);
+                                                        }}
+                                                        className="inline-flex items-center gap-1 px-3 py-1 bg-[#587e85] text-white rounded-lg text-xs font-bold shadow-xs active:scale-95"
+                                                    >
+                                                        <span>Inspect</span>
+                                                        <ArrowUpRight className="w-3 h-3" />
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        );
+                                    })
+                                )}
                             </div>
                         </div>
                     )}
