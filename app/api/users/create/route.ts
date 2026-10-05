@@ -59,7 +59,7 @@ export async function POST(request: NextRequest) {
         // Role enum guard — reject any value not in the allowed set to prevent privilege escalation
         const ALLOWED_ROLES = [
             'master_admin', 'org_super_admin', 'ops_super_admin', 'property_admin',
-            'staff', 'mst', 'tenant', 'procurement', 'vendor', 'super_tenant',
+            'staff', 'mst', 'tenant', 'procurement', 'accounts', 'vendor', 'super_tenant',
             'hr', 'hr_head', 'security', 'soft_service_staff', 'soft_service_supervisor', 'soft_service_manager'
         ] as const;
         if (!ALLOWED_ROLES.includes(role as any)) {
@@ -113,7 +113,7 @@ export async function POST(request: NextRequest) {
                 // 2. Check Property Admin role (if property_id is provided)
                 let isPropertyAdmin = false;
                 const { property_id } = body;
-                if (property_id) {
+                if (property_id && role !== 'accounts') {
                     const { data: propMembership } = await supabase
                         .from('property_memberships')
                         .select('role')
@@ -193,22 +193,23 @@ export async function POST(request: NextRequest) {
             }
         }
 
-        const { property_id } = body
+        // Accounts is organization-wide, even if an old client supplies a property.
+        const property_id = role === 'accounts' ? undefined : body.property_id
 
         // Membership logic:
-        // org_super_admin, ops_super_admin, procurement, hr, hr_head & super_tenant → organization_memberships
+        // org_super_admin, ops_super_admin, procurement, accounts, hr, hr_head & super_tenant → organization_memberships
         // all other roles               → property_memberships
         // On failure: delete the auth user to avoid stranded accounts (partial state cleanup)
-        const IS_ORG_WIDE_ROLE = ['org_super_admin', 'ops_super_admin', 'procurement', 'hr', 'hr_head', 'super_tenant'].includes(role);
+        const IS_ORG_WIDE_ROLE = ['org_super_admin', 'ops_super_admin', 'procurement', 'accounts', 'hr', 'hr_head', 'super_tenant'].includes(role);
 
         if (IS_ORG_WIDE_ROLE) {
             if (organization_id) {
                 let { error: memberError } = await adminClient
                     .from('organization_memberships')
-                    .insert({ organization_id, user_id: userData.user.id, role });
+                    .insert({ organization_id, user_id: userData.user.id, role, is_active: true });
 
                 // If DB enum public.app_role doesn't contain 'hr' or 'hr_head' yet, fallback to 'staff' membership so creation succeeds!
-                if (memberError && memberError.message.includes('enum app_role')) {
+                if (memberError && role !== 'accounts' && memberError.message.includes('enum app_role')) {
                     console.warn(`Role "${role}" not found in app_role enum, falling back to "staff" in organization_memberships`);
                     const fallback = await adminClient
                         .from('organization_memberships')

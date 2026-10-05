@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "lint:sql": "node scripts/lint_sql_migrations.js",
+    "test:accounts": "node --test --test-isolation=none tests/accounts-onboarding.test.mjs tests/accounts-onboarding-ui.test.mjs",
     "test:whatsapp": "node --test --test-isolation=none tests/aisensy-greetings.test.mjs tests/whatsapp-assistant.test.mjs tests/whatsapp-assistant-worker.test.mjs tests/whatsapp-assistant-route.test.mjs tests/whatsapp-assistant-db.test.mjs tests/whatsapp-assistant-access.test.mjs tests/whatsapp-message-booking.test.mjs"
   },
   "dependencies": {
