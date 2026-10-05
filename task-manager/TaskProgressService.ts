@@ -90,8 +90,11 @@ export class TaskProgressService {
     static async getDepartmentProgress(departmentId: string, date?: string): Promise<DepartmentProgress> {
         const targetDate = date || new Date().toISOString().slice(0, 10);
 
-        const dept = await TaskDatabaseService.getDepartmentById(departmentId);
-        const employees = await TaskDatabaseService.getEmployeesByDepartment(departmentId);
+        // Fetch dept metadata and employees in parallel (was 2 sequential round trips)
+        const [dept, employees] = await Promise.all([
+            TaskDatabaseService.getDepartmentById(departmentId),
+            TaskDatabaseService.getEmployeesByDepartment(departmentId)
+        ]);
 
         if (employees.length === 0) {
             return {
@@ -197,12 +200,12 @@ export class TaskProgressService {
         let orgInProgress = 0;
         let totalEmployees = 0;
 
-        const deptProgressList: DepartmentProgress[] = [];
+        // Fetch all department progress in parallel (was N sequential round trips)
+        const deptProgressList = await Promise.all(
+            departments.map(dept => this.getDepartmentProgress(dept.id, targetDate))
+        );
 
-        for (const dept of departments) {
-            const deptProg = await this.getDepartmentProgress(dept.id, targetDate);
-            deptProgressList.push(deptProg);
-
+        for (const deptProg of deptProgressList) {
             orgTotal += deptProg.total;
             orgCompleted += deptProg.completed;
             orgPending += deptProg.pending;
