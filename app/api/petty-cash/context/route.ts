@@ -11,7 +11,7 @@ export async function GET(request: NextRequest) {
     const [properties, wallet, routes, configurationProperties] = await Promise.all([
         query.order('name'),
         access.isMasterAdmin && !access.roles.length ? Promise.resolve({ data: { balance: 0, received: 0, spent: 0, returned: 0, can_request: false, blocker: 'An active internal membership is required to request cash.' }, error: null }) : supabaseAdmin.rpc('pc_wallet', { actor: access.user.id, org: access.organizationId }),
-        supabaseAdmin.from('petty_cash_property_assignments').select('property_id,user_id,kind,user:users(id,full_name,email)').eq('organization_id', access.organizationId).eq('is_active', true).eq('is_primary', true),
+        supabaseAdmin.from('petty_cash_property_assignments').select('property_id,user_id,kind,user:users!user_id(id,full_name,email)').eq('organization_id', access.organizationId).eq('is_active', true).eq('is_primary', true),
         access.canManageRouting ? supabaseAdmin.from('properties').select('id,name,code').eq('organization_id', access.organizationId).is('deleted_at', null).eq('is_active', true).order('name') : Promise.resolve({ data: [], error: null }),
     ]);
     const error = properties.error || wallet.error || routes.error || configurationProperties.error;

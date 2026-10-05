@@ -2,11 +2,51 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { NextRequest } from 'next/server.js';
 import sharp from 'sharp';
+import { createClient } from '@supabase/supabase-js';
 import { loadTs } from './load-ts.mjs';
 const user='00000000-0000-0000-0000-000000000011',org='00000000-0000-0000-0000-000000000001',id='00000000-0000-0000-0000-000000000030';
 const access={user:{id:user},organizationId:org,canManageRouting:false};
 const auth={'@/backend/lib/pettyCash/access':{resolvePettyCashAccess:async()=>access,isPettyCashAccessError:()=>false,readOrgId:()=>org}};
 const request=(body)=>new NextRequest('http://fixture/api/petty-cash',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+
+for (const route of ['context', 'assignments']) {
+ test(`${route} returns the assigned user when routing also references its updater`, async () => {
+  const property='00000000-0000-0000-0000-000000000003';
+  const allocator={id:'00000000-0000-0000-0000-000000000012',full_name:'Assigned allocator',email:'allocator@example.test'};
+  const updater={id:user,full_name:'Routing administrator',email:'admin@example.test'};
+  const relationships=[
+   {column:'user_id',constraint:'petty_cash_property_assignments_user_id_fkey',user:allocator},
+   {column:'updated_by',constraint:'petty_cash_property_assignments_updated_by_fkey',user:updater},
+  ];
+  // Model PostgREST's ambiguous-FK response at the HTTP boundary, using the real client.
+  const fetch=async input=>{
+   const url=new URL(typeof input==='string'?input:input.url);
+   let data;
+   if(url.pathname.endsWith('/petty_cash_property_assignments')){
+    const embed=url.searchParams.get('select').match(/user:users(?:!([^()]+))?\(/);
+    const hint=embed?.[1];
+    const matches=relationships.filter(r=>!hint||hint===r.column||hint===r.constraint);
+    if(matches.length!==1)return new Response(JSON.stringify({code:'PGRST201',message:"Could not embed because more than one relationship was found for 'petty_cash_property_assignments' and 'users'"}),{status:300});
+    data=[{property_id:property,user_id:allocator.id,updated_by:updater.id,kind:'allocator',user:matches[0].user}];
+   }else if(url.pathname.endsWith('/rpc/pc_wallet')){
+    data={balance:0,can_request:true};
+   }else{
+    data=[{id:property,name:'Fixture property',code:'FIX'}];
+   }
+   return new Response(JSON.stringify(data),{status:200});
+  };
+  const database=createClient('http://fixture.supabase.test','fixture-key',{global:{fetch},auth:{persistSession:false,autoRefreshToken:false}});
+  const scopedAccess={...access,propertyIds:[property],roles:['ops_super_admin'],canManageRouting:true,isAdmin:true};
+  const {GET}=loadTs(`app/api/petty-cash/${route}/route.ts`,{
+   ...auth,'@/backend/lib/pettyCash/access':{...auth['@/backend/lib/pettyCash/access'],resolvePettyCashAccess:async()=>scopedAccess},
+   '@/backend/lib/supabase/admin':{supabaseAdmin:database},
+  });
+  const response=await GET(new NextRequest(`http://fixture/api/petty-cash/${route}?org_id=${org}`));
+  const body=await response.json();
+  assert.equal(response.status,200,body.error);
+  assert.deepEqual((route==='context'?body.routes:body.assignments)[0].user,allocator);
+ });
+}
 test('bulk action accepts only allocation/approval and reports independent failures without deleting anything',async()=>{
  const called=[];const mocks={...auth,'@/backend/lib/pettyCash/api':{pcRequest:async(_a,rid)=>rid===id?{id}:null,isUuid:x=>typeof x==='string'&&x.length===36},'@/backend/lib/pettyCash/actions':{applyPettyCashAction:async(a,rid,action,body)=>{called.push({rid,action,body});return {data:{id:rid},error:null};}}};
  const {POST}=loadTs('app/api/petty-cash/bulk/route.ts',mocks);

@@ -6,7 +6,7 @@ export async function GET(request: NextRequest) {
     const access = await resolvePettyCashAccess(request, readOrgId(request));
     if (isPettyCashAccessError(access)) return access;
     if (!access.canManageRouting) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    const { data, error } = await supabaseAdmin.from('petty_cash_property_assignments').select('*,user:users(id,full_name,email),property:properties(name)').eq('organization_id', access.organizationId).eq('is_active', true).order('updated_at');
+    const { data, error } = await supabaseAdmin.from('petty_cash_property_assignments').select('*,user:users!user_id(id,full_name,email),property:properties(name)').eq('organization_id', access.organizationId).eq('is_active', true).order('updated_at');
     return error ? pcError(error) : NextResponse.json({ assignments: data });
 }
 export async function PUT(request: NextRequest) {
