@@ -4,7 +4,9 @@ export const draftSchema = z.object({
     floorTag: z.string().trim().min(1).max(100), month: z.number().int().min(1).max(12),
     year: z.number().int().min(2000).max(2200), siteNotes: z.string().max(20000),
     items: z.array(z.object({
-        id: z.string().min(1).max(200), category: z.enum(['HK', 'Beverages', 'Technical', 'General']),
+        // Catalog categories are free text (including older/custom labels).
+        // A draft must preserve them rather than reject the entire unfinished sheet.
+        id: z.string().min(1).max(200), category: z.string().max(1000),
         name: z.string().max(1000), brand: z.string().max(500), details: z.string().max(2000),
         requested_qty: z.number().finite().nonnegative(), available_stock_qty: z.number().finite().nonnegative(),
         unit: z.string().max(100), unit_price: z.number().finite().nonnegative(),

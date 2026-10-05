@@ -14,7 +14,7 @@ import ModalPortal from '../ui/ModalPortal';
 
 export interface RequisitionRow {
     id: string;
-    category: 'HK' | 'Beverages' | 'Technical' | 'General';
+    category: string;
     name: string;
     brand: string;
     details: string; // color, size

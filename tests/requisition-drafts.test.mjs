@@ -14,3 +14,13 @@ test('draft validation preserves incomplete lines and isolates user/property sto
     assert.equal(draftSchema.safeParse({ ...payload, month: 13 }).success, false);
     assert.equal(draftSchema.safeParse({ ...payload, items: [{ ...payload.items[0], requested_qty: -1 }] }).success, false);
 });
+
+test('drafts preserve catalog categories outside the four menu labels', async () => {
+    const { draftSchema } = await import('../frontend/lib/requisitionDrafts.ts');
+    const payload = { floorTag: 'All Floors', month: 10, year: 2026, siteNotes: '',
+        items: ['Custom', 'Housekeeping', 'HK / Stationery', 'Pantry', ''].map((category, i) => ({
+            id: `cat-${i}`, category, name: '', brand: '', details: '', requested_qty: 4,
+            available_stock_qty: 2, unit: '', unit_price: 0,
+        })) };
+    assert.deepEqual(draftSchema.parse(payload), payload, 'Saving an unfinished sheet must not rewrite or reject catalog categories');
+});

@@ -8,6 +8,9 @@ for a property restores its most recently edited draft. The selector can resume
 another saved month/floor. Quantities, available stock, custom lines and notes
 are included. Current catalog prices replace matching restored row prices;
 submission still uses the existing server-side price validation and workflow.
+Drafts accept existing free-text catalog categories, including custom or older
+labels, and preserve incomplete rows. Category differences must not prevent
+quantities from being saved. Submission checks remain separate.
 
 Drafts are private to their creator. Separate keys isolate users, organizations,
 properties, months, years and floors. They are stored in a separate table and do
@@ -55,8 +58,10 @@ node --max-old-space-size=6144 node_modules/typescript/bin/tsc --noEmit --increm
 Tests cover incomplete entries, storage scope, RLS ownership and revoked access,
 leaving before the debounce finishes, resuming browser edits, manual save,
 network failure/retry, field reversions, preservation of another tab's offline
-edits during submission cleanup, and concurrent-version conflict recovery. The React hook
-tests run the production hook in React's test renderer; SQL tests use the actual
+edits during submission cleanup, and concurrent-version conflict recovery.
+Tests also cover autosaving free-text catalog categories and restoring October
+from the cloud in November with no browser backup. The hook tests run the
+production hook in React's test renderer; SQL tests use the actual
 migration in an isolated database. A live deployed browser acceptance test is
 still needed after migration.
 

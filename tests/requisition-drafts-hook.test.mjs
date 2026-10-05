@@ -16,6 +16,51 @@ const { useRequisitionDraft } = hookModule.exports;
 
 const initial = { month: 10, year: 2026, floorTag: 'All Floors', siteNotes: '', items: [] };
 
+test('autosave preserves edits with existing free-text catalog categories and restores them from the cloud', async () => {
+    const previous = { fetch: globalThis.fetch, storage: globalThis.localStorage, act: globalThis.IS_REACT_ACT_ENVIRONMENT };
+    globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+    const values = new Map();
+    globalThis.localStorage = { getItem: key => values.get(key) || null, setItem: (key, value) => values.set(key, value) };
+    const catalog = { ...initial, items: [{ id: 'cat-existing', category: 'Custom', name: 'Soap', brand: '', details: '',
+        requested_qty: 0, available_stock_qty: 0, unit: 'Piece', unit_price: 5 }] };
+    let saved;
+    globalThis.fetch = async (_url, options = {}) => {
+        if (options.method === 'PUT') {
+            const parsed = draftHelpers.draftSchema.safeParse(JSON.parse(options.body).payload);
+            if (!parsed.success) return Response.json({ error: 'Invalid draft data' }, { status: 400 });
+            saved = { payload: parsed.data, updated_at: '2026-10-05T12:00:00.000Z' };
+            return Response.json({ draft: saved });
+        }
+        return Response.json({ drafts: saved ? [saved] : [] });
+    };
+    let controls;
+    function Harness({ month = 10 }) {
+        const [payload, setPayload] = React.useState({ ...catalog, month });
+        const onRestore = React.useCallback(value => setPayload(value), []);
+        controls = { ...useRequisitionDraft({ userId: 'u1', orgId: 'o1', propertyId: 'p1', ready: true, payload, onRestore }), payload, setPayload };
+        return null;
+    }
+    let tree;
+    try {
+        await act(async () => { tree = create(React.createElement(Harness)); });
+        const edited = { ...catalog, items: [{ ...catalog.items[0], requested_qty: 12, available_stock_qty: 3 }] };
+        await act(async () => { controls.setPayload(edited); });
+        await act(async () => { await new Promise(resolve => setTimeout(resolve, 900)); });
+        assert.deepEqual(saved?.payload, edited, 'Typing quantities must save automatically with real catalog metadata');
+        assert.match(controls.status, /Draft saved at/);
+        await act(async () => { tree.unmount(); });
+        values.clear(); // Simulate returning on another browser after logout, without its local backup.
+        await act(async () => { tree = create(React.createElement(Harness, { month: 11 })); });
+        assert.deepEqual(controls.payload, edited, 'Returning in November must restore October from the cloud with the original category and quantities');
+        assert.equal(controls.drafts.length, 1);
+    } finally {
+        if (tree) await act(async () => { tree.unmount(); });
+        globalThis.fetch = previous.fetch;
+        if (previous.storage === undefined) delete globalThis.localStorage; else globalThis.localStorage = previous.storage;
+        globalThis.IS_REACT_ACT_ENVIRONMENT = previous.act;
+    }
+});
+
 test('actual draft hook restores unsaved browser edits after leaving and saves changes online', async () => {
     const previous = { fetch: globalThis.fetch, storage: globalThis.localStorage, act: globalThis.IS_REACT_ACT_ENVIRONMENT };
     globalThis.IS_REACT_ACT_ENVIRONMENT = true;
