@@ -11,7 +11,7 @@ Changes are prepared on `feat/petty-cash-allocation-wallet`. After local verific
 5. The requester records dated expenses, category/purpose, vendor where relevant and receipt evidence. An expense and its wallet debit are atomic and idempotent. Overspending fails.
 6. A new advance is permitted when the wallet is exactly zero, expense proofs are complete and not rejected, and no earlier request is pending. Pending review of complete proofs does not require accounts closure. An acknowledgement cannot bypass the gate.
 
-Drafts do not reserve a pending pipeline; submission enforces the gate. Sent-back changes of property resolve the new property's routing and restart allocation. Admins can explicitly reassign to eligible primary/backup actors; changing routing settings never silently changes existing requests. Before/after activity records retain previous decisions when reassignment resets them.
+Drafts do not reserve a pending pipeline; submission enforces the gate. Sent-back changes of property resolve the new property's routing and restart allocation. Admins can explicitly reassign to the eligible configured allocator and approver; changing routing settings never silently changes existing requests. Before/after activity records retain previous decisions when reassignment resets them.
 
 Historical requests, documents, activity and settlement records remain readable. Pending legacy advances require explicit reassignment into the allocation workflow. Historical reimbursements remain read-only history and do not contribute to advance wallet balances or blockers.
 
@@ -27,11 +27,11 @@ Membership roles can be stored as the PostgreSQL `app_role` enum. Petty Cash SQL
 | Configured allocator | Own data plus requests specifically assigned to them within eligible scope | Allocate; bulk allocate; supported reject/send-back |
 | Configured approver | Own data plus requests specifically assigned to them within eligible scope | Approve; bulk approve; reject/send-back |
 | Accounts | Own data and organization-scoped finance queue/records | Pay, review evidence, confirm returns, reconcile/close |
-| Org super admin / ops super admin | Selected organization consolidated requests, wallets, expenses, proofs and summaries | Configure property routing/backups; explicit reassignment; reports |
+| Org super admin / ops super admin | Selected organization consolidated requests, wallets, expenses, proofs and summaries | Configure property routing; explicit reassignment; reports |
 | Master admin | Established support access to the selected organization, audited server-side | Support visibility/reassignment; does not acquire accounts authority merely through master status |
 | Tenant / tenant_user / super_tenant / vendor / food_vendor and related variants | None | None |
 
-Property-admin status alone does not expose coworkers' petty cash. A configured backup receives no primary request visibility until explicitly assigned. Removed property memberships revoke assignment access.
+Property-admin status alone does not expose coworkers' petty cash. Historical backup configuration remains compatible with the database, but backup controls are no longer exposed in routing or reassignment. Saving a property’s routing clears its old backup selections and keeps only the allocator and approver. Removed property memberships revoke assignment access.
 
 Petty Cash appears under **Management Hub** in the user's existing role dashboard shell. Desktop/mobile navigation, direct links and history retain role navigation. **Payment Tracker** uses its own accounts/procurement/finance-admin rules. Petty-cash eligibility never grants tracker access. Tracker UI capability checks are scoped to the selected organization, and its APIs retain their existing independent enforcement.
 
@@ -54,7 +54,7 @@ Apply these files in chronological order only when explicitly authorized:
 5. `supabase/migrations/20261004000001_petty_cash_plan_completion.sql`
 6. `supabase/migrations/20261005000001_membership_approval_scope.sql`
 
-Do not replay already-applied migrations. Review pending migrations using `supabase migration list`, inspect schema/backups and apply through the project's normal manually approved migration process. The first new migration adds routing, assignment/audit fields, upload ownership, expenses, wallet ledger, atomic functions, RLS and indexes; the second additive migration completes backup/reassignment, draft, legacy, date and audit rules. Neither drops/recreates financial tables or erases historical data. After application, configure eligible primary actors and optional backups for each property from Workflow settings before submitting new requests.
+Do not replay already-applied migrations. Review pending migrations using `supabase migration list`, inspect schema/backups and apply through the project's normal manually approved migration process. The first new migration adds routing, assignment/audit fields, upload ownership, expenses, wallet ledger, atomic functions, RLS and indexes; the second additive migration completes backup/reassignment, draft, legacy, date and audit rules. Neither drops/recreates financial tables or erases historical data. After application, configure one eligible allocator and one eligible approver for each property from Property Routing before submitting new requests. Property, Allocator and Approver dropdowns each support independent search; users can be found by name, email or membership information. The two actors must be different. No additional migration is needed for this UI update.
 
 The membership migration adds approval state to existing organization/property membership rows so approval in one workspace cannot hide pending membership in another. It requires existing `users.is_approved` and `users.approval_status` columns. Active grants remain active, pending inactive rows retain pending state, and existing removals stay inactive through membership triggers. No new membership is created and no row is activated by the migration. Historical inactive rows whose shared profile is already approved cannot safely be inferred as pending; they remain inactive for administrator review. This adds no organization column to the shared profile. Apply this migration before using the updated user-management endpoints.
 

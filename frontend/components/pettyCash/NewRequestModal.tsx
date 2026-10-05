@@ -27,6 +27,6 @@ export default function NewRequestModal({ open, properties, organizationId, rout
         <ProofUpload org={organizationId || ''} value={proofs} onChange={setProofs} disabled={busy} onBusyChange={setUploading} />
         {error && <p role="alert" className="text-red-600">{error}</p>}
         {blocker && <p role="status">Submission unavailable: {blocker}. You can save a draft.</p>}
-        <div className="flex gap-3"><button className="pc-button" disabled={busy || uploading || !property || !configured || !canSubmit}>{busy ? 'Saving…' : 'Submit request'}</button><button className="pc-button" type="submit" value="draft" disabled={busy || uploading || !property}>Save draft</button></div>
+        <div className="flex flex-wrap gap-3 border-t border-border pt-4"><button className="pc-button" disabled={busy || uploading || !property || !configured || !canSubmit}>{busy ? 'Saving…' : 'Submit request'}</button><button className="pc-button pc-button-secondary" type="submit" value="draft" disabled={busy || uploading || !property}>Save draft</button></div>
     </form></WorkflowModal>;
 }

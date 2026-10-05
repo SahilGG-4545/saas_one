@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useRef, useSyncExternalStore, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { X } from 'lucide-react';
 const subscribe = () => () => {};
 export default function WorkflowModal({ title, children, onClose, busy = false }: { title: string; children: ReactNode; onClose: () => void; busy?: boolean }) {
     const mounted = useSyncExternalStore(subscribe, () => true, () => false);
@@ -26,9 +27,9 @@ export default function WorkflowModal({ title, children, onClose, busy = false }
     }, [onClose, busy]);
     if (!mounted) return null;
     return createPortal(<div className="fixed inset-0 z-[100] bg-black/60 flex items-center justify-center p-3 sm:p-6" role="presentation">
-        <section ref={panel} tabIndex={-1} role="dialog" aria-modal="true" aria-label={title} className="w-full max-w-4xl max-h-[90dvh] overflow-y-auto rounded-2xl bg-surface text-text-primary shadow-2xl p-4 sm:p-6 space-y-4">
-            <div className="flex justify-between items-center gap-4"><h2 className="text-xl font-bold">{title}</h2><button type="button" disabled={busy} onClick={onClose} aria-label="Close dialog" className="p-2 rounded-lg border border-border">Close</button></div>
-            {children}
+        <section ref={panel} tabIndex={-1} role="dialog" aria-modal="true" aria-label={title} className="petty-cash-workflow w-full max-w-3xl max-h-[90dvh] overflow-y-auto rounded-2xl bg-surface text-text-primary shadow-2xl">
+            <div className="sticky top-0 z-10 flex justify-between items-center gap-4 bg-surface border-b border-border px-5 py-4 sm:px-6"><h2 className="text-lg font-semibold">{title}</h2><button type="button" disabled={busy} onClick={onClose} aria-label="Close dialog" className="flex items-center justify-center w-9 h-9 rounded-lg border border-border text-text-secondary hover:bg-surface-elevated"><X size={18} /></button></div>
+            <div className="pc-modal-body space-y-4">{children}</div>
         </section>
     </div>, document.body);
 }

@@ -4,7 +4,7 @@ import { pcFetch, type Upload } from './workflowTypes';
 export default function ProofUpload({ org, value, onChange, disabled = false, onBusyChange }: { org: string; value: Upload[]; onChange: (files: Upload[]) => void; disabled?: boolean; onBusyChange?: (busy: boolean) => void }) {
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState('');
-    return <div className="space-y-2"><label className="block text-sm font-semibold">Proofs (PDF, JPEG, PNG or WebP; up to 15MB each)
+    return <div className="pc-upload space-y-2"><label className="block text-sm font-semibold">Proofs (PDF, JPEG, PNG or WebP; up to 15MB each)
         <input type="file" multiple disabled={busy || disabled} accept="application/pdf,image/png,image/jpeg,image/webp" className="block mt-2 w-full" onChange={async event => {
             const files = Array.from(event.target.files || []); event.target.value = ''; setBusy(true); onBusyChange?.(true); setError('');
             const uploaded = [...value];
