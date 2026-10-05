@@ -23,7 +23,8 @@ import {
     Zap,
     Play,
     Check,
-    Settings2
+    Settings2,
+    RotateCcw
 } from 'lucide-react';
 
 interface EmployeeItem {
@@ -459,6 +460,41 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
         }
     };
 
+    const [resettingRun, setResettingRun] = useState(false);
+
+    const handleResetRunDate = async () => {
+        setResettingRun(true);
+        setStatusMessage(null);
+        try {
+            const res = await fetch('/api/task-manager/testing-config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    cronLastRunDate: null,
+                    cronLastRunSummary: null
+                })
+            });
+            const data = await res.json();
+            if (!res.ok || !data.success) throw new Error(data.error || 'Failed to reset run date');
+
+            setStatusMessage({
+                type: 'success',
+                title: 'Schedule Armed for Retesting',
+                details: 'Today\'s run stamp has been cleared. The automated cron is now ready to trigger again!'
+            });
+
+            await fetchData();
+        } catch (err: any) {
+            setStatusMessage({
+                type: 'error',
+                title: 'Reset Failed',
+                details: err.message
+            });
+        } finally {
+            setResettingRun(false);
+        }
+    };
+
     const [animationStep, setAnimationStep] = useState(0);
 
     useEffect(() => {
@@ -889,8 +925,8 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
                 </div>
 
                 {/* Execution Status Bar */}
-                <div className="p-3.5 bg-slate-100/80 border border-slate-200 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
-                    <div className="flex items-center gap-2">
+                <div className="p-3.5 bg-slate-100/80 border border-slate-200 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                    <div className="flex items-center gap-2 flex-wrap">
                         <span className="font-bold text-slate-600">Latest Run Today:</span>
                         <span className={`px-2 py-0.5 rounded font-mono font-bold text-[11px] ${
                             cronLastRunDate === new Date().toISOString().slice(0, 10)
@@ -901,6 +937,23 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
                                 ? `✅ Dispatched (${cronLastRunDate})`
                                 : `⏳ Pending / Ready for ${cronTiming} IST`}
                         </span>
+
+                        {cronLastRunDate === new Date().toISOString().slice(0, 10) && (
+                            <button
+                                type="button"
+                                disabled={resettingRun}
+                                onClick={handleResetRunDate}
+                                className="inline-flex items-center gap-1.5 px-2.5 py-0.5 bg-white hover:bg-slate-50 border border-slate-300 hover:border-slate-400 text-slate-700 hover:text-slate-900 rounded-md font-bold text-[11px] shadow-2xs transition-all disabled:opacity-50 cursor-pointer"
+                                title="Reset today's run status so you can test the cron again today"
+                            >
+                                {resettingRun ? (
+                                    <RefreshCw className="w-3 h-3 animate-spin text-primary" />
+                                ) : (
+                                    <RotateCcw className="w-3 h-3 text-amber-600" />
+                                )}
+                                {resettingRun ? 'Resetting...' : 'Reset Run for Retesting'}
+                            </button>
+                        )}
                     </div>
 
                     <div className="text-slate-500 font-mono text-[11px] truncate max-w-md">
