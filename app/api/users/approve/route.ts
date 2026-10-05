@@ -50,6 +50,18 @@ export async function POST(request: NextRequest) {
 
         let targetOrgId = targetPropMemb?.organization_id || targetOrgMemb?.organization_id || null;
         const targetPropId = propertyId || targetPropMemb?.property_id || null;
+        // Older Accounts signups had a property membership; an earlier approval
+        // could also have added an accidental Staff organization membership.
+        const hasLegacyAccountsRole = targetPropMemb?.role === 'accounts' &&
+            (!targetOrgMemb || targetOrgMemb.role === 'staff');
+        const targetRole = role || (hasLegacyAccountsRole ? 'accounts' : targetOrgMemb?.role) || 'staff';
+        const isAccountsApproval = targetRole === 'accounts';
+        const isAccountsApplication = targetOrgMemb?.role === 'accounts' || targetPropMemb?.role === 'accounts';
+        if (targetOrgMemb?.role === 'accounts') {
+            // An unrelated property membership must not move finance access to
+            // another organization during approval.
+            targetOrgId = targetOrgMemb.organization_id;
+        }
 
         // If organization_id is not directly on property_membership, resolve it from properties table
         if (!targetOrgId && targetPropId) {
@@ -85,7 +97,7 @@ export async function POST(request: NextRequest) {
             }
 
             // Check if Property Admin for the user's property
-            if (!isAuthorized && targetPropId) {
+            if (!isAuthorized && targetPropId && !isAccountsApproval && !isAccountsApplication) {
                 const { data: propMemb } = await adminClient
                     .from('property_memberships')
                     .select('role')
@@ -110,6 +122,30 @@ export async function POST(request: NextRequest) {
         const now = new Date().toISOString();
 
         if (action === 'approve') {
+            if (isAccountsApproval) {
+                if (!targetOrgId) {
+                    return NextResponse.json({ error: 'Accounts approval requires an organization.' }, { status: 400 });
+                }
+                // Persist finance access before marking the applicant approved.
+                const { error: orgError } = await adminClient
+                    .from('organization_memberships')
+                    .upsert({
+                        organization_id: targetOrgId,
+                        user_id: userId,
+                        role: 'accounts',
+                        is_active: true
+                    }, { onConflict: 'organization_id,user_id' });
+                if (orgError) throw orgError;
+
+                const { error: legacyError } = await adminClient
+                    .from('property_memberships')
+                    .delete()
+                    .eq('user_id', userId)
+                    .eq('organization_id', targetOrgId)
+                    .eq('role', 'accounts');
+                if (legacyError) throw legacyError;
+            }
+
             // Update users table
             const { error: userUpdateErr } = await adminClient
                 .from('users')
@@ -131,30 +167,33 @@ export async function POST(request: NextRequest) {
             const propUpdate: any = { is_active: true };
             if (role && targetPropId) propUpdate.role = role;
 
-            await adminClient
-                .from('property_memberships')
-                .update(propUpdate)
-                .eq('user_id', userId);
+            if (!isAccountsApproval) {
+                await adminClient
+                    .from('property_memberships')
+                    .update(propUpdate)
+                    .eq('user_id', userId);
+            }
 
             // Activate or create org membership
             if (targetOrgId) {
-                const targetRole = role || targetOrgMemb?.role || 'staff';
-                await adminClient
-                    .from('organization_memberships')
-                    .upsert({
-                        organization_id: targetOrgId,
-                        user_id: userId,
-                        role: targetRole,
-                        is_active: true
-                    }, { onConflict: 'organization_id,user_id' });
+                if (!isAccountsApproval) {
+                    await adminClient
+                        .from('organization_memberships')
+                        .upsert({
+                            organization_id: targetOrgId,
+                            user_id: userId,
+                            role: targetRole,
+                            is_active: true
+                        }, { onConflict: 'organization_id,user_id' });
+                }
 
                 try {
                     await adminClient.auth.admin.updateUserById(userId, {
                         user_metadata: {
                             organization_id: targetOrgId,
                             role: targetRole,
-                            property_id: targetPropId || undefined,
-                            property_role: role || undefined
+                            property_id: isAccountsApproval ? null : targetPropId || undefined,
+                            property_role: isAccountsApproval ? null : role || undefined
                         }
                     });
                 } catch (metaErr) {
