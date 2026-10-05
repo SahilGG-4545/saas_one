@@ -18,7 +18,12 @@ import {
     Sparkles,
     ArrowRight,
     MessageSquare,
-    HelpCircle
+    HelpCircle,
+    Clock,
+    Zap,
+    Play,
+    Check,
+    Settings2
 } from 'lucide-react';
 
 interface EmployeeItem {
@@ -47,6 +52,17 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
     const [searchQuery, setSearchQuery] = useState('');
     const [selectedEmployeeId, setSelectedEmployeeId] = useState<string>('');
     const [sendKickoff, setSendKickoff] = useState(true);
+
+    // Cron Schedule & Immediate Trigger State
+    const [cronTiming, setCronTiming] = useState('09:00');
+    const [cronEnabled, setCronEnabled] = useState(true);
+    const [whitelistEnabled, setWhitelistEnabled] = useState(false);
+    const [cronLastRunDate, setCronLastRunDate] = useState<string | null>(null);
+    const [cronLastRunSummary, setCronLastRunSummary] = useState<string | null>(null);
+    const [savingSchedule, setSavingSchedule] = useState(false);
+    const [triggerLoading, setTriggerLoading] = useState(false);
+    const [dryRunMode, setDryRunMode] = useState(true);
+
     const [statusMessage, setStatusMessage] = useState<{
         type: 'success' | 'error';
         title: string;
@@ -72,6 +88,21 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
                     else if (data.employees?.[0]) setSelectedEmployeeId(data.employees[0].id);
                 }
             }
+
+            // Also load Testing & Cron Configuration
+            try {
+                const configRes = await fetch('/api/task-manager/testing-config');
+                const configData = await configRes.json();
+                if (configData.success && configData.config) {
+                    setCronTiming(configData.config.cronTiming || '09:00');
+                    setCronEnabled(configData.config.cronEnabled !== false);
+                    setWhitelistEnabled(Boolean(configData.config.enabled));
+                    setCronLastRunDate(configData.config.cronLastRunDate || null);
+                    setCronLastRunSummary(configData.config.cronLastRunSummary || null);
+                }
+            } catch (cfgErr) {
+                console.warn('[TaskManagerTestingDashboard] Failed to load testing config:', cfgErr);
+            }
         } catch (err: any) {
             console.error('Failed to load employee list:', err);
             setStatusMessage({
@@ -81,6 +112,74 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
             });
         } finally {
             setLoading(false);
+        }
+    };
+
+    const handleSaveSchedule = async () => {
+        setSavingSchedule(true);
+        setStatusMessage(null);
+        try {
+            const res = await fetch('/api/task-manager/testing-config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    cronTiming,
+                    cronEnabled,
+                    enabled: whitelistEnabled,
+                    employees: whitelistEnabled
+                        ? [{ name: 'Sahil Gorde', phone: '8433649199' }]
+                        : []
+                })
+            });
+            const data = await res.json();
+            if (!res.ok || !data.success) throw new Error(data.error || 'Failed to save schedule');
+            setStatusMessage({
+                type: 'success',
+                title: 'Schedule Updated Successfully',
+                details: `Cron timing set to ${cronTiming} IST. Master status: ${cronEnabled ? 'Active' : 'Paused'}. Whitelist: ${whitelistEnabled ? 'ON (Only Sahil Gorde)' : 'OFF (All Tech Staff)'}.`
+            });
+        } catch (err: any) {
+            setStatusMessage({
+                type: 'error',
+                title: 'Failed to update schedule',
+                details: err.message
+            });
+        } finally {
+            setSavingSchedule(false);
+        }
+    };
+
+    const handleManualTrigger = async (action: 'trigger_generate' | 'trigger_dispatch') => {
+        setTriggerLoading(true);
+        setStatusMessage(null);
+        try {
+            const res = await fetch('/api/task-manager/testing-config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    action,
+                    dryRun: dryRunMode
+                })
+            });
+            const data = await res.json();
+            if (!res.ok || !data.success) throw new Error(data.error || 'Failed to trigger run');
+
+            setStatusMessage({
+                type: 'success',
+                title: action === 'trigger_generate' ? 'Task Generation Completed' : 'Morning Notification Run Completed',
+                details: data.message
+            });
+
+            // Refresh to update latest run date and summary
+            await fetchData();
+        } catch (err: any) {
+            setStatusMessage({
+                type: 'error',
+                title: 'Trigger Execution Failed',
+                details: err.message
+            });
+        } finally {
+            setTriggerLoading(false);
         }
     };
 
@@ -261,6 +360,192 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
                                 </span>
                             </button>
                         ))}
+                    </div>
+                </div>
+            </div>
+
+            {/* Automated Daily Routine & Cron Timing Card (Phase 3 & 4) */}
+            <div className="bg-white border border-slate-200 rounded-3xl p-6 md:p-8 shadow-sm space-y-6">
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div>
+                        <div className="flex items-center gap-2">
+                            <Clock className="w-5 h-5 text-amber-500" />
+                            <h2 className="text-lg font-black text-slate-900 tracking-tight">
+                                Automated Daily Routine & Cron Timing
+                            </h2>
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-100 text-amber-800 border border-amber-200">
+                                In-App Schedule
+                            </span>
+                        </div>
+                        <p className="text-xs text-slate-500 mt-1">
+                            Configure when daily fixed tasks and morning digests are sent to the Tech department. Modifying the time here applies immediately without redeploying.
+                        </p>
+                    </div>
+
+                    {/* Master Active / Paused Pill */}
+                    <div className="flex items-center gap-2">
+                        <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold ${
+                            cronEnabled
+                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                : 'bg-slate-100 text-slate-600 border border-slate-200'
+                        }`}>
+                            <span className={`w-2 h-2 rounded-full ${cronEnabled ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
+                            {cronEnabled ? 'Heartbeat Active' : 'Automation Paused'}
+                        </span>
+                    </div>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pt-2 border-t border-slate-100">
+                    {/* Left: Schedule Configuration */}
+                    <div className="space-y-4 bg-slate-50/70 border border-slate-200 rounded-2xl p-5">
+                        <h3 className="text-xs font-black text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                            <Settings2 className="w-3.5 h-3.5 text-primary" />
+                            Schedule Settings
+                        </h3>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-xs font-bold text-slate-600 mb-1.5">
+                                    Target Dispatch Time (IST)
+                                </label>
+                                <select
+                                    value={cronTiming}
+                                    onChange={(e) => setCronTiming(e.target.value)}
+                                    className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-sm font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all"
+                                >
+                                    <option value="08:00">08:00 AM IST (Early Shift)</option>
+                                    <option value="08:30">08:30 AM IST</option>
+                                    <option value="09:00">09:00 AM IST (Standard)</option>
+                                    <option value="09:15">09:15 AM IST</option>
+                                    <option value="09:30">09:30 AM IST</option>
+                                    <option value="10:00">10:00 AM IST</option>
+                                    <option value="10:30">10:30 AM IST</option>
+                                    <option value="11:00">11:00 AM IST (Testing)</option>
+                                    <option value="11:15">11:15 AM IST (Testing)</option>
+                                    <option value="11:30">11:30 AM IST (Testing)</option>
+                                    <option value="12:00">12:00 PM IST (Noon)</option>
+                                    <option value="14:00">02:00 PM IST (Afternoon)</option>
+                                </select>
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-bold text-slate-600 mb-1.5">
+                                    Automation State
+                                </label>
+                                <button
+                                    type="button"
+                                    onClick={() => setCronEnabled(!cronEnabled)}
+                                    className={`w-full px-3.5 py-2.5 rounded-xl border text-sm font-bold transition-all flex items-center justify-between ${
+                                        cronEnabled
+                                            ? 'bg-emerald-50 border-emerald-300 text-emerald-800'
+                                            : 'bg-rose-50 border-rose-300 text-rose-800'
+                                    }`}
+                                >
+                                    <span>{cronEnabled ? '🟢 Enabled' : '⏸️ Paused'}</span>
+                                    <span className="text-[11px] underline opacity-70">
+                                        {cronEnabled ? 'Click to Pause' : 'Click to Enable'}
+                                    </span>
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Whitelist Protection Toggle */}
+                        <div className="pt-1">
+                            <label className="flex items-center justify-between p-3 bg-white border border-slate-200 rounded-xl cursor-pointer hover:bg-slate-100/70 transition-colors">
+                                <div>
+                                    <span className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                                        <Shield className="w-3.5 h-3.5 text-primary" />
+                                        Testing Whitelist Protection (Sandbox)
+                                    </span>
+                                    <span className="text-[11px] text-slate-500 block mt-0.5">
+                                        {whitelistEnabled ? '🔒 ON: Digests go ONLY to you (Sahil Gorde).' : '👥 OFF: Digests go to all 3 Tech staff (Sahil, Lohit, Harsh).'}
+                                    </span>
+                                </div>
+                                <input
+                                    type="checkbox"
+                                    checked={whitelistEnabled}
+                                    onChange={(e) => setWhitelistEnabled(e.target.checked)}
+                                    className="w-4 h-4 text-primary rounded border-slate-300 focus:ring-primary ml-3 flex-shrink-0"
+                                />
+                            </label>
+                        </div>
+
+                        <button
+                            type="button"
+                            disabled={savingSchedule}
+                            onClick={handleSaveSchedule}
+                            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-bold text-xs shadow-sm transition-all disabled:opacity-50"
+                        >
+                            <Check className="w-3.5 h-3.5" />
+                            {savingSchedule ? 'Saving Schedule...' : 'Save Schedule (Applies Instantly)'}
+                        </button>
+                    </div>
+
+                    {/* Right: Immediate Manual Trigger Actions */}
+                    <div className="space-y-4 bg-slate-50/70 border border-slate-200 rounded-2xl p-5">
+                        <div className="flex items-center justify-between">
+                            <h3 className="text-xs font-black text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                                <Zap className="w-3.5 h-3.5 text-amber-500" />
+                                Instant Test Actions (Zero-Wait)
+                            </h3>
+
+                            {/* Dry-run safety toggle */}
+                            <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-slate-600">
+                                <input
+                                    type="checkbox"
+                                    checked={dryRunMode}
+                                    onChange={(e) => setDryRunMode(e.target.checked)}
+                                    className="w-3.5 h-3.5 text-primary rounded border-slate-300"
+                                />
+                                <span>Dry-Run (Simulate)</span>
+                            </label>
+                        </div>
+
+                        <p className="text-xs text-slate-500">
+                            Trigger generation or outbound notification immediately without waiting for the scheduled time. {dryRunMode ? '🛡️ Dry-Run active (simulates digest, 0 WhatsApp messages sent).' : '⚠️ Live Mode: Real WhatsApp messages will be dispatched!'}
+                        </p>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                            <button
+                                type="button"
+                                disabled={triggerLoading}
+                                onClick={() => handleManualTrigger('trigger_generate')}
+                                className="flex items-center justify-center gap-2 px-4 py-2.5 bg-white border border-slate-300 hover:bg-slate-100 text-slate-800 rounded-xl font-bold text-xs shadow-sm transition-all disabled:opacity-50"
+                            >
+                                <Play className="w-3.5 h-3.5 text-primary" />
+                                {triggerLoading ? 'Processing...' : '⚡ Generate Tasks Now'}
+                            </button>
+
+                            <button
+                                type="button"
+                                disabled={triggerLoading}
+                                onClick={() => handleManualTrigger('trigger_dispatch')}
+                                className="flex items-center justify-center gap-2 px-4 py-2.5 bg-primary hover:bg-primary/90 text-white rounded-xl font-bold text-xs shadow-sm transition-all disabled:opacity-50"
+                            >
+                                <Send className="w-3.5 h-3.5" />
+                                {triggerLoading ? 'Dispatching...' : '📤 Send Digest Now'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Execution Status Bar */}
+                <div className="p-3.5 bg-slate-100/80 border border-slate-200 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                    <div className="flex items-center gap-2">
+                        <span className="font-bold text-slate-600">Latest Run Today:</span>
+                        <span className={`px-2 py-0.5 rounded font-mono font-bold text-[11px] ${
+                            cronLastRunDate === new Date().toISOString().slice(0, 10)
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : 'bg-slate-200 text-slate-700'
+                        }`}>
+                            {cronLastRunDate === new Date().toISOString().slice(0, 10)
+                                ? `✅ Dispatched (${cronLastRunDate})`
+                                : `⏳ Pending / Ready for ${cronTiming} IST`}
+                        </span>
+                    </div>
+
+                    <div className="text-slate-500 font-mono text-[11px] truncate max-w-md">
+                        {cronLastRunSummary || 'No runs recorded for today.'}
                     </div>
                 </div>
             </div>

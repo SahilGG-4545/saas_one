@@ -10,6 +10,7 @@ import {
     TaskStatus,
     TaskType,
     EmployeeRole,
+    TestingConfig,
 } from './types';
 
 function mapProfileToEmployee(profile: any): Employee {
@@ -429,13 +430,8 @@ export class TaskDatabaseService {
         }
     }
 
-    // ── Testing Whitelist Config ──────────────────────────────────────────────
-    static async getTestingConfig(): Promise<{
-        enabled: boolean;
-        manager?: { name: string; phone: string };
-        notifyManager?: boolean;
-        employees?: Array<{ name: string; phone: string }>;
-    }> {
+    // ── Testing Whitelist & Cron Schedule Config ────────────────────────────
+    static async getTestingConfig(): Promise<TestingConfig> {
         const { data } = await supabaseAdmin
             .from('conversation_context')
             .select('context_data')
@@ -443,15 +439,26 @@ export class TaskDatabaseService {
             .eq('system', 'TASK_MANAGER')
             .maybeSingle();
 
-        return (data?.context_data as any) || { enabled: false, employees: [] };
+        const raw = (data?.context_data as any) || {};
+        return {
+            enabled: Boolean(raw.enabled),
+            manager: raw.manager,
+            notifyManager: raw.notifyManager,
+            employees: Array.isArray(raw.employees) ? raw.employees : [],
+            cronTiming: raw.cronTiming || '09:00',
+            cronEnabled: raw.cronEnabled !== undefined ? Boolean(raw.cronEnabled) : true,
+            cronLastRunDate: raw.cronLastRunDate || null,
+            cronLastRunSummary: raw.cronLastRunSummary || null,
+        };
     }
 
-    static async saveTestingConfig(config: {
-        enabled: boolean;
-        manager?: { name: string; phone: string };
-        notifyManager?: boolean;
-        employees?: Array<{ name: string; phone: string }>;
-    }): Promise<void> {
+    static async saveTestingConfig(config: Partial<TestingConfig>): Promise<TestingConfig> {
+        const existing = await this.getTestingConfig();
+        const merged: TestingConfig = {
+            ...existing,
+            ...config,
+        };
+
         const expiresAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
         await supabaseAdmin
             .from('conversation_context')
@@ -459,11 +466,13 @@ export class TaskDatabaseService {
                 phone_number: 'TEST_CONFIG',
                 system: 'TASK_MANAGER',
                 context_type: 'TEST_WHITELIST',
-                context_data: config,
+                context_data: merged,
                 expires_at: expiresAt,
                 updated_at: new Date().toISOString()
             }, {
                 onConflict: 'phone_number,system'
             });
+
+        return merged;
     }
 }

@@ -203,6 +203,25 @@ export class TaskMessageRouter {
             }
         });
 
+        // Check test whitelist if active (Testing phase safeguard)
+        const testingConfig = await TaskDatabaseService.getTestingConfig();
+        if (testingConfig?.enabled) {
+            const senderLast10 = params.phone.replace(/\D/g, '').slice(-10);
+            const isManager = testingConfig.manager?.phone && testingConfig.manager.phone.replace(/\D/g, '').slice(-10) === senderLast10;
+            const isTestEmp = (testingConfig.employees || []).some(e => e.phone?.replace(/\D/g, '').slice(-10) === senderLast10);
+            if (!isManager && !isTestEmp) {
+                return {
+                    handledByTaskManager: false,
+                    system: 'FACILITY',
+                    classification: {
+                        system: 'FACILITY',
+                        reason: 'not_in_test_whitelist',
+                        isExplicitSwitch: false,
+                        confidence: 1.0
+                    }
+                };
+            }
+        }
 
         // ── Case A: Ambiguous Prompt (Phase 16 Specification) ─────────────────
         if (classification.system === 'AMBIGUOUS') {
