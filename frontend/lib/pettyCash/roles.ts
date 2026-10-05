@@ -88,6 +88,7 @@ export interface PettyCashRequest {
     paid_mode?: string | null;
     payment_ref?: string | null;
     paid_at?: string | null;
+    payment_date?: string | null;
     actual_spent?: number | null;
     amount_returned?: number | null;
     extra_claimed?: number | null;

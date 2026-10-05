@@ -16,6 +16,11 @@ export async function PUT(request: NextRequest) {
     if (!access.canManageRouting || !body || ![body.property_id, body.allocator_id, body.approver_id].every(isUuid)) return NextResponse.json({ error: 'Forbidden or invalid routing' }, { status: 403 });
     const { data: property } = await supabaseAdmin.from('properties').select('id').eq('id', body.property_id).eq('organization_id', access.organizationId).maybeSingle();
     if (!property) return NextResponse.json({ error: 'Forbidden property' }, { status: 403 });
-    const { data, error } = await supabaseAdmin.rpc('pc_configure', { actor: access.user.id, prop: body.property_id, allocator: body.allocator_id, approver: body.approver_id });
+    const allocatorBackups = body.allocator_backups ?? [];
+    const approverBackups = body.approver_backups ?? [];
+    if (![allocatorBackups, approverBackups].every(ids => Array.isArray(ids) && ids.length <= 25 && ids.every(isUuid) && new Set(ids).size === ids.length)) {
+        return NextResponse.json({ error: 'Select up to 25 distinct eligible backups per stage' }, { status: 400 });
+    }
+    const { data, error } = await supabaseAdmin.rpc('pc_set_routing', { actor: access.user.id, prop: body.property_id, allocator: body.allocator_id, approver: body.approver_id, allocator_backups: allocatorBackups, approver_backups: approverBackups });
     return error ? pcError(error) : NextResponse.json({ routing: data });
 }

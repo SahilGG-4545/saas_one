@@ -12,7 +12,7 @@ export async function GET(request: NextRequest) {
     let query = supabaseAdmin.rpc('pc_requests', { actor: access.user.id, org: access.organizationId }, { count: 'exact' }).select(PC_SELECT);
     switch (q.get('tab')) {
         case 'allocations': query = query.eq('assigned_allocator_id', access.user.id).eq('status', 'submitted'); break;
-        case 'approvals': query = query.eq('assigned_approver_id', access.user.id).or('and(workflow_version.eq.2,status.eq.pending_approval),and(workflow_version.eq.1,status.eq.submitted)'); break;
+        case 'approvals': query = query.eq('assigned_approver_id', access.user.id).eq('workflow_version', 2).eq('status', 'pending_approval'); break;
         case 'disbursements':
             if (!access.canDisburse) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
             query = query.eq('status', 'approved'); break;
@@ -39,6 +39,6 @@ export async function POST(request: NextRequest) {
     if (isPettyCashAccessError(access)) return access;
     const { data, error } = await supabaseAdmin.rpc('pc_create_request', { actor: access.user.id, org: access.organizationId, body });
     if (error) return pcError(error);
-    void notifyPettyCash('submitted', data).catch(() => {});
+    if (data.status === 'submitted') void notifyPettyCash('submitted', data).catch(() => {});
     return NextResponse.json({ request: data }, { status: 201 });
 }

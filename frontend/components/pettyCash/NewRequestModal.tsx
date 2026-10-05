@@ -4,7 +4,7 @@ import { PC_CATEGORIES, PC_DEPARTMENTS } from '@/frontend/lib/pettyCash/roles';
 import WorkflowModal from './WorkflowModal';
 import ProofUpload from './ProofUpload';
 import { pcFetch, pcJson, type Property, type Route, type Upload } from './workflowTypes';
-export default function NewRequestModal({ open, properties, organizationId, routes = [], onClose, onCreated }: { open: boolean; properties: Property[]; organizationId?: string; routes?: Route[]; onClose: () => void; onCreated: () => void }) {
+export default function NewRequestModal({ open, properties, organizationId, routes = [], canSubmit = true, blocker, onClose, onCreated }: { open: boolean; properties: Property[]; organizationId?: string; routes?: Route[]; canSubmit?: boolean; blocker?: string | null; onClose: () => void; onCreated: () => void }) {
     const [property, setProperty] = useState(properties.length === 1 ? properties[0].id : '');
     const [proofs, setProofs] = useState<Upload[]>([]); const [uploading, setUploading] = useState(false);
     const [busy, setBusy] = useState(false);
@@ -14,7 +14,8 @@ export default function NewRequestModal({ open, properties, organizationId, rout
     const configured = actors.some(r => r.kind === 'allocator') && actors.some(r => r.kind === 'approver');
     return <WorkflowModal title="Request Petty Cash" onClose={onClose} busy={busy || uploading}><form className="space-y-4" onSubmit={async event => {
         event.preventDefault(); setBusy(true); setError(''); const form = new FormData(event.currentTarget);
-        try { await pcFetch('/api/petty-cash', pcJson({ organization_id: organizationId, property_id: property, amount_requested: form.get('amount'), purpose: form.get('purpose'), department: form.get('department'), category: form.get('category'), payment_mode: 'Cash', documents: proofs })); onCreated(); }
+        const saveDraft = ((event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement)?.value === 'draft';
+        try { await pcFetch('/api/petty-cash', pcJson({ organization_id: organizationId, property_id: property, amount_requested: form.get('amount'), purpose: form.get('purpose'), department: form.get('department'), category: form.get('category'), payment_mode: 'Cash', documents: proofs, save_draft: saveDraft })); onCreated(); }
         catch (e) { setError(e instanceof Error ? e.message : 'Request failed'); } finally { setBusy(false); }
     }}>
         {properties.length === 1 ? <p>Property: <strong>{properties[0].name}</strong></p> : <label className="block">Property<select aria-label="Property" required className="pc-input" value={property} onChange={e => setProperty(e.target.value)}><option value="">Select assigned property</option>{properties.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>}
@@ -25,6 +26,7 @@ export default function NewRequestModal({ open, properties, organizationId, rout
         <div className="grid sm:grid-cols-2 gap-3"><label>Category<select className="pc-input" name="category">{PC_CATEGORIES.map(c => <option key={c}>{c}</option>)}</select></label><label>Department<select className="pc-input" name="department">{PC_DEPARTMENTS.map(c => <option key={c}>{c}</option>)}</select></label></div>
         <ProofUpload org={organizationId || ''} value={proofs} onChange={setProofs} disabled={busy} onBusyChange={setUploading} />
         {error && <p role="alert" className="text-red-600">{error}</p>}
-        <button className="pc-button" disabled={busy || uploading || !property || !configured}>{busy ? 'Submitting…' : 'Submit request'}</button>
+        {blocker && <p role="status">Submission unavailable: {blocker}. You can save a draft.</p>}
+        <div className="flex gap-3"><button className="pc-button" disabled={busy || uploading || !property || !configured || !canSubmit}>{busy ? 'Saving…' : 'Submit request'}</button><button className="pc-button" type="submit" value="draft" disabled={busy || uploading || !property}>Save draft</button></div>
     </form></WorkflowModal>;
 }

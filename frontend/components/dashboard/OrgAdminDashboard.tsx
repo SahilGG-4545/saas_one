@@ -1,5 +1,7 @@
 'use client';
 
+import { resolveOrgDashboardTab, pushDashboardNavigation, type OrgDashboardTab } from '@/frontend/lib/dashboard/orgTabs';
+import { useDashboardContent } from '@/frontend/components/layout/DashboardContentSlot';
 import PettyCashNavLink from '@/frontend/components/pettyCash/PettyCashNavLink';
 import HRTicketsContent from '@/frontend/components/hr/HRTicketsContent';
 import React, { useState, useEffect, useMemo, useCallback, useRef, memo } from 'react';
@@ -63,7 +65,7 @@ import AgentPulse from '@/frontend/components/agents/AgentPulse';
 import type { ModuleKey } from '@/frontend/types/agentRuntime';
 
 // Types
-type Tab = 'overview' | 'properties' | 'requests' | 'reports' | 'visitors' | 'settings' | 'profile' | 'revenue' | 'users' | 'diesel_logger' | 'diesel' | 'electricity_logger' | 'electricity' | 'stock_reports' | 'checklist' | 'super_tenants' | 'escalation' | 'rooms' | 'ppm' | 'vendors' | 'procurement' | 'roster' | 'water_logger' | 'water' | 'guest_experience' | 'ai_tickets' | 'org_progress' | 'org_efficiency' | 'agent_console' | 'document_bank' | 'grievance' | 'assets';
+type Tab = OrgDashboardTab;
 
 /**
  * AGENT PULSE MOUNTS — tab -> canonical module slug.
@@ -120,47 +122,16 @@ interface Organization {
 }
 
 const OrgAdminDashboard = () => {
+    const { dashboardContent, navigateDashboard } = useDashboardContent();
     const { user, signOut, membership } = useAuth();
     const params = useParams();
     const router = useRouter();
     const searchParams = useSearchParams();
     const orgSlugOrId = params?.orgId as string;
 
-    // Active Tab with URL searchParams & localStorage persistence
-    const [activeTab, setActiveTabRaw] = useState<Tab>(() => {
-        if (typeof window !== 'undefined') {
-            const urlParams = new URLSearchParams(window.location.search);
-            const tabParam = urlParams.get('tab');
-            if (tabParam) return tabParam as Tab;
-            const savedKey = orgSlugOrId ? `active_tab_${orgSlugOrId}` : 'active_tab_org';
-            const saved = localStorage.getItem(savedKey);
-            if (saved) return saved as Tab;
-        }
-        return 'overview';
-    });
-
-    const setActiveTab = useCallback((newTab: Tab | ((prev: Tab) => Tab)) => {
-        setActiveTabRaw((prevTab) => {
-            const resolvedTab = typeof newTab === 'function' ? newTab(prevTab) : newTab;
-            if (typeof window !== 'undefined') {
-                try {
-                    const savedKey = orgSlugOrId ? `active_tab_${orgSlugOrId}` : 'active_tab_org';
-                    localStorage.setItem(savedKey, resolvedTab);
-                    const url = new URL(window.location.href);
-                    url.searchParams.set('tab', resolvedTab);
-                    window.history.replaceState(null, '', url.toString());
-                } catch (e) {}
-            }
-            return resolvedTab;
-        });
-    }, [orgSlugOrId]);
-
-    useEffect(() => {
-        const tabParam = searchParams.get('tab');
-        if (tabParam) {
-            setActiveTabRaw(tabParam as Tab);
-        }
-    }, [searchParams]);
+    const isOpsTabScope = ['ops_super_admin', 'ops super admin'].includes((membership?.org_role || '').toLowerCase());
+    const dashboardTab = resolveOrgDashboardTab(searchParams.get('tab'), isOpsTabScope);
+    const activeTab = dashboardContent !== undefined ? 'petty-cash' as Tab : dashboardTab;
 
     const [org, setOrg] = useState<Organization | null>(null);
     const [properties, setProperties] = useState<Property[]>([]);
@@ -258,22 +229,12 @@ const OrgAdminDashboard = () => {
     const [isSummariesLoading, setIsSummariesLoading] = useState(false);
     const { getCachedData, setCachedData, invalidateCache } = useDataCache();
 
-    // Restore showRequestsList, filter, and selectedPropertyId from URL on mount/back navigation
-    // Restore showRequestsList, filter, and selectedPropertyId from URL on mount/back navigation
+    // Only restore subordinate filters. The validated URL owns the active tab.
     useEffect(() => {
-        const tab = searchParams.get('tab') as Tab;
-        // No ?tab= means overview: `/{orgId}/dashboard` is the board. Leaving the
-        // previous tab in place made a bare dashboard link a no-op on back navigation.
-        setActiveTab(tab || 'overview');
-        
-        const filter = searchParams.get('filter');
-        if (filter) setPendingStatusFilter(filter);
-        
-        const propId = searchParams.get('propertyId');
-        if (propId) setSelectedPropertyId(propId);
-
-        const view = searchParams.get('view') as any;
-        if (view) setRequestsView(view);
+        setPendingStatusFilter(searchParams.get('filter') || 'all');
+        setSelectedPropertyId(searchParams.get('propertyId') || 'all');
+        const view = searchParams.get('view');
+        setRequestsView(view === 'board' || view === 'flow' ? view : 'list');
     }, [searchParams]);
 
     // Robust Unified Scroll Restoration for Org Admin
@@ -546,19 +507,6 @@ const OrgAdminDashboard = () => {
         };
         init();
     }, [orgSlugOrId, fetchOrgDetails]);
-
-    // Restore tab from URL
-    useEffect(() => {
-        const tab = searchParams.get('tab');
-        if (tab && ['overview', 'properties', 'requests', 'reports', 'visitors', 'settings', 'profile', 'revenue', 'users', 'diesel_logger', 'diesel', 'electricity_logger', 'electricity', 'stock_reports', 'checklist', 'super_tenants', 'escalation', 'rooms', 'ppm', 'vendors', 'procurement', 'roster', 'water_logger', 'water', 'guest_experience', 'agent_console', 'org_progress', 'org_efficiency', 'grievance', 'assets'].includes(tab)) {
-            if (isOpsSuperAdmin && (tab === 'org_progress' || tab === 'org_efficiency' || tab === 'agent_console')) {
-                setActiveTab('overview');
-            } else {
-                setActiveTab(tab as Tab);
-            }
-        }
-    }, [searchParams, isOpsSuperAdmin]);
-
 
     // Fetch properties ONCE when org is loaded (not on every tab change)
     useEffect(() => {
@@ -850,8 +798,8 @@ const OrgAdminDashboard = () => {
     }, [org?.id, timePeriod, properties]);
 
     useEffect(() => {
-        fetchSummaries();
-    }, [fetchSummaries]);
+        if (dashboardContent === undefined) fetchSummaries();
+    }, [fetchSummaries, dashboardContent]);
 
     const uploadBase64IfNeeded = async (url: string | undefined) => {
         if (!url || !url.startsWith('data:image/')) return url;
@@ -1025,7 +973,6 @@ const OrgAdminDashboard = () => {
 
     const handleTabChange = (tab: Tab, filter: string = 'all', dateFrom?: string, dateTo?: string, procurementTab?: string) => {
         const effectiveTab = (isOpsSuperAdmin && (tab === 'org_progress' || tab === 'org_efficiency' || tab === 'agent_console')) ? 'overview' : tab;
-        setActiveTab(effectiveTab);
         setPendingStatusFilter(filter);
         setSidebarOpen(false);
         const params = new URLSearchParams(window.location.search);
@@ -1058,7 +1005,9 @@ const OrgAdminDashboard = () => {
             params.set('view', requestsView);
         }
         
-        router.replace(`${window.location.pathname}?${params.toString()}`, { scroll: false });
+        const path = dashboardContent !== undefined ? `/${orgSlugOrId}/dashboard` : window.location.pathname;
+        if (dashboardContent !== undefined) router.push(`${path}?${params.toString()}`, { scroll: false });
+        else pushDashboardNavigation(`${path}?${params.toString()}${window.location.hash}`);
     };
 
     // COMMAND CENTER — the body of the Overview tab, and nothing else. This dashboard
@@ -1252,6 +1201,7 @@ const OrgAdminDashboard = () => {
                             Management Hub
                         </p>
                         <div className="space-y-1">
+                            <PettyCashNavLink onNavigate={() => setSidebarOpen(false)} />
                             <button
                                 onClick={() => handleTabChange('properties')}
                                 className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl transition-all duration-200 font-bold text-sm ${activeTab === 'properties'
@@ -1531,7 +1481,6 @@ const OrgAdminDashboard = () => {
                             </button>
                         </div>
                     </div>
-                <PettyCashNavLink />
                 </nav>
 
                 <div className="pt-3 border-t border-border px-4 pb-6 flex-shrink-0 bg-white">
@@ -1569,7 +1518,15 @@ const OrgAdminDashboard = () => {
             />
 
             {/* Main Content */}
-            <main id="main-scroll-container" className={`flex-1 min-w-0 w-full lg:ml-72 bg-white transition-all duration-300 overflow-y-auto ${activeTab === 'overview' ? 'p-4 md:p-6 lg:p-8' : activeTab === 'requests' ? 'pt-16 lg:pt-0 lg:p-12' : 'pt-16 lg:pt-0 p-4 md:p-8 lg:p-12'}`}>
+            <main id="main-scroll-container" className={`flex-1 min-w-0 w-full lg:ml-72 bg-white transition-all duration-300 overflow-y-auto ${activeTab === 'overview' ? 'pt-16 px-4 pb-4 md:p-6 lg:p-8' : activeTab === 'requests' ? 'pt-16 lg:pt-0 lg:p-12' : 'pt-16 lg:pt-0 p-4 md:p-8 lg:p-12'}`}>
+                {(showCommandCenter || dashboardContent !== undefined) && (
+                    <div className="lg:hidden fixed top-0 inset-x-0 h-14 bg-white border-b border-border flex items-center gap-3 px-4 z-30">
+                        <button type="button" aria-label="Open menu" onClick={() => setSidebarOpen(true)} className="p-2 text-text-secondary"><Menu className="w-6 h-6" /></button>
+                        <span className="font-semibold">{dashboardContent !== undefined ? 'Petty Cash' : 'Dashboard'}</span>
+                    </div>
+                )}
+                {dashboardContent ?? (<>
+
 
             {/* Overview IS the Command Center board — same tab, same URL, same chrome;
                 only what sits inside <main> changes. It gets its own thin header (not the
@@ -2106,7 +2063,9 @@ const OrgAdminDashboard = () => {
                 </AnimatePresence>
             </>
             )}
-            </main>
+
+                </>)}
+</main>
 
             {/* Modals — outside the tab branches so they stay mounted on every tab */}
             {
@@ -2139,7 +2098,7 @@ const OrgAdminDashboard = () => {
                 properties={properties}
                 onSuccess={() => {
                     fetchOrgUsers();
-                    setActiveTab('users');
+                    handleTabChange('users');
                 }}
             />
 

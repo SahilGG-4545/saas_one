@@ -459,7 +459,10 @@ export default function DashboardSidebar({
                         </div>
                     )}
 
-                    <PettyCashNavLink />
+                    <div data-navigation-section="management-hub">
+                        <p className="px-4 mb-2 text-[10px] font-bold uppercase tracking-widest text-text-secondary">Management Hub</p>
+                        <PettyCashNavLink onNavigate={handleLinkClick} />
+                    </div>
 
                     {/* 4. SYSTEM & PERSONAL Section (Always below primary role navigation) */}
                     {!isExternalRole && (

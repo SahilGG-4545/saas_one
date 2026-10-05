@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import { PC_CATEGORIES, PC_PAYMENT_MODES } from '@/frontend/lib/pettyCash/roles';
 import ProofUpload from './ProofUpload';
-import { pcFetch, pcJson, type Context, type Upload, type Expense } from './workflowTypes';
+import { pcFetch, pcJson, pettyCashToday, type Context, type Upload, type Expense } from './workflowTypes';
 export default function ExpenseForm({ context, requestId, balance, correction, onSaved }: { context: Context; requestId: string; balance: number; correction?: Expense; onSaved: () => void }) {
     const [proofs, setProofs] = useState<Upload[]>([]); const [uploading, setUploading] = useState(false); const [busy, setBusy] = useState(false); const [error, setError] = useState('');
     const [key] = useState(() => crypto.randomUUID());
@@ -17,7 +17,7 @@ export default function ExpenseForm({ context, requestId, balance, correction, o
         <h3 className="font-bold">{correction ? 'Correct rejected proof' : 'Record expense'}</h3>
         {correction ? <p>₹{correction.amount}: {correction.description}. Replacing proof does not deduct cash again.</p> : <>
             <label className="block">Amount (₹)<input className="pc-input" name="amount" type="number" min="0.01" max={balance} step="0.01" required /></label>
-            <div className="grid sm:grid-cols-2 gap-3"><label>Date<input className="pc-input" name="expense_date" type="date" defaultValue={new Date().toLocaleDateString('en-CA')} required /></label><label>Category<select className="pc-input" name="category">{PC_CATEGORIES.map(c => <option key={c}>{c}</option>)}</select></label></div>
+            <div className="grid sm:grid-cols-2 gap-3"><label>Date<input className="pc-input" name="expense_date" type="date" defaultValue={pettyCashToday()} max={pettyCashToday()} required /></label><label>Category<select className="pc-input" name="category">{PC_CATEGORIES.map(c => <option key={c}>{c}</option>)}</select></label></div>
             <label className="block">Vendor / payee<input className="pc-input" name="vendor" required maxLength={200} /></label>
             <div className="grid sm:grid-cols-2 gap-3"><label>Payment mode<select className="pc-input" name="payment_mode">{PC_PAYMENT_MODES.map(c => <option key={c}>{c}</option>)}</select></label><label>Payment reference (required except cash)<input className="pc-input" name="payment_ref" /></label></div>
         </>}

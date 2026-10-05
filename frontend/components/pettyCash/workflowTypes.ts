@@ -10,7 +10,7 @@ export interface Context {
 }
 export interface Expense { id: string; request_id: string; amount: number; description: string; category: string; vendor: string; expense_date: string; payment_mode: string; payment_ref?: string; review_status: string; review_remarks?: string }
 export interface Document { id: string; request_id: string; expense_id?: string; superseded_by?: string; stage: string; file_name: string; review_status?: string; amount?: number; review_remarks?: string }
-export interface Detail { request: PettyCashRequest; documents: Document[]; expenses: Expense[]; balance: number; activity: { id: string; action: string; remark?: string; created_at: string; actor?: { full_name: string } }[]; reconciliation?: { unaccounted: number; bills_pending_review: number; bills_rejected: number } }
+export interface Detail { request: PettyCashRequest; documents: Document[]; expenses: Expense[]; balance: number; activity: { id: string; action: string; remark?: string; created_at: string; actor?: { full_name: string }; metadata?: { after?: { allocated_amount?: number; approved_amount?: number; paid_amount?: number } } }[]; reconciliation?: { unaccounted: number; bills_pending_review: number; bills_rejected: number } }
 export async function pcFetch<T>(url: string, options?: RequestInit): Promise<T> {
     const response = await fetch(url, options);
     const data = await response.json();
@@ -18,3 +18,4 @@ export async function pcFetch<T>(url: string, options?: RequestInit): Promise<T>
     return data as T;
 }
 export const pcJson = (body: object, method = 'POST'): RequestInit => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+export const pettyCashToday = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });

@@ -7,7 +7,7 @@ export async function setup(){
  ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO anon,authenticated;
  CREATE SCHEMA auth; CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql AS $$ SELECT null::uuid $$;
  CREATE TABLE organizations(id uuid primary key); CREATE TABLE users(id uuid primary key,full_name text,email text,is_master_admin boolean default false);
- CREATE TABLE properties(id uuid primary key,organization_id uuid,name text,code text);
+ CREATE TABLE properties(id uuid primary key,organization_id uuid,name text,code text,deleted_at timestamptz,is_active boolean default true);
  CREATE TABLE organization_memberships(user_id uuid,organization_id uuid,role text,is_active boolean default true);
  CREATE TABLE property_memberships(user_id uuid,organization_id uuid,property_id uuid,role text,is_active boolean default true);
  CREATE SCHEMA storage; CREATE TABLE storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);
@@ -15,10 +15,10 @@ export async function setup(){
  CREATE PUBLICATION supabase_realtime;
  INSERT INTO organizations VALUES ('${id(1)}'),('${id(2)}');
  INSERT INTO users(id,full_name) SELECT ('00000000-0000-0000-0000-'||lpad(n::text,12,'0'))::uuid,'Fixture '||n FROM generate_series(10,19)n;
- INSERT INTO properties VALUES ('${id(3)}','${id(1)}','Property A','A'),('${id(4)}','${id(1)}','Property B','B');
+ INSERT INTO properties(id,organization_id,name,code) VALUES ('${id(3)}','${id(1)}','Property A','A'),('${id(4)}','${id(1)}','Property B','B');
  INSERT INTO organization_memberships(user_id,organization_id,role) VALUES ('${id(10)}','${id(1)}','org_super_admin'),('${id(14)}','${id(1)}','accounts');
  INSERT INTO property_memberships(user_id,organization_id,property_id,role) VALUES ('${id(11)}','${id(1)}','${id(3)}','mst'),('${id(12)}','${id(1)}','${id(3)}','staff'),('${id(13)}','${id(1)}','${id(3)}','property_admin'),('${id(15)}','${id(1)}','${id(3)}','food_vendor'),('${id(16)}','${id(1)}','${id(3)}','staff');`);
- for(const file of ['20260723000002_petty_cash.sql','20260903000001_petty_cash_ledger.sql','20260912000002_add_assigned_approver_to_petty_cash.sql','20261003000001_petty_cash_allocation_wallet.sql']) await db.exec(await readFile(new URL('../../supabase/migrations/'+file,import.meta.url),'utf8'));
+ for(const file of ['20260723000002_petty_cash.sql','20260903000001_petty_cash_ledger.sql','20260912000002_add_assigned_approver_to_petty_cash.sql','20261003000001_petty_cash_allocation_wallet.sql','20261004000001_petty_cash_plan_completion.sql']) await db.exec(await readFile(new URL('../../supabase/migrations/'+file,import.meta.url),'utf8'));
  await db.query('select pc_configure($1,$2,$3,$4)',[id(10),id(3),id(12),id(13)]);
  return db;
 }

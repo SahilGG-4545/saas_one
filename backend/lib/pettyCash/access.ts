@@ -42,6 +42,10 @@ export async function resolvePettyCashAccessForUser(user: { id: string; email?: 
     const organizationId = org || (orgs.length === 1 ? orgs[0] : null);
     if (!organizationId) return NextResponse.json({ error: 'organization_id is required' }, { status: 400 });
     if (!master && !orgs.includes(organizationId)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    if (master) {
+        const { error } = await supabaseAdmin.rpc('pc_audit_support', { actor: user.id, org: organizationId });
+        if (error) return NextResponse.json({ error: 'Could not verify and audit selected-organization support access' }, { status: 503 });
+    }
     const roles = [...new Set(memberships.filter(m => m.organization_id === organizationId).map(m => m.role as string))];
     const propertyIds = [...new Set((pm.data || []).filter(m => m.organization_id === organizationId && isInternalPettyCashRole(m.role)).map(m => m.property_id))];
     const [assignments, assigned] = await Promise.all([
