@@ -131,6 +131,10 @@
     {
       "path": "/api/cron/whatsapp-assistant",
       "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/cron/task-manager?action=auto",
+      "schedule": "*/15 * * * *"
     }
   ]
 }

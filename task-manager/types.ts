@@ -115,3 +115,14 @@ export interface ProgressSummary {
     pending: number;
     percentage: number;
 }
+
+export interface TestingConfig {
+    enabled: boolean;
+    manager?: { name: string; phone: string };
+    notifyManager?: boolean;
+    employees?: Array<{ name: string; phone: string }>;
+    cronTiming?: string; // IST time string, e.g. "09:00"
+    cronEnabled?: boolean; // Automation master toggle
+    cronLastRunDate?: string | null; // YYYY-MM-DD
+    cronLastRunSummary?: string | null; // Last run stats
+}
