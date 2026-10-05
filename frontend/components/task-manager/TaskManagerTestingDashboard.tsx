@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
     FlaskConical,
     Shield,
@@ -44,6 +44,248 @@ interface TechSummary {
     members: EmployeeItem[];
 }
 
+/**
+ * 12-Hour Time Picker with AM/PM toggle and compact grid selectors
+ * - No scrolling lists
+ * - Tapping Hour shows 1-12 grid
+ * - Tapping Minute shows 00-55 grid (with exact minute field)
+ * - Emits strict 24-hour "HH:mm" to parent
+ */
+function TwelveHourTimePicker({
+    value,
+    onChange
+}: {
+    value: string;
+    onChange: (val24: string) => void;
+}) {
+    const [showHourPicker, setShowHourPicker] = useState(false);
+    const [showMinutePicker, setShowMinutePicker] = useState(false);
+    const pickerRef = useRef<HTMLDivElement>(null);
+
+    // Parse 24-hr value ("HH:mm") into 12-hr parts
+    const parse24 = (v: string) => {
+        const [hRaw, mRaw] = (v || '09:00').split(':');
+        let h = parseInt(hRaw, 10);
+        if (isNaN(h) || h < 0 || h > 23) h = 9;
+        const m = parseInt(mRaw, 10);
+        const safeM = isNaN(m) || m < 0 || m > 59 ? '00' : String(m).padStart(2, '0');
+        const period: 'AM' | 'PM' = h >= 12 ? 'PM' : 'AM';
+        let h12 = h % 12;
+        if (h12 === 0) h12 = 12;
+        return { hour12: h12, minuteStr: safeM, period };
+    };
+
+    const { hour12, minuteStr, period } = parse24(value);
+
+    // Reconstruct 24-hr string
+    const emitChange = (h12: number, mStr: string, p: 'AM' | 'PM') => {
+        let h24 = h12 % 12;
+        if (p === 'PM') h24 += 12;
+        const safeM = String(mStr).padStart(2, '0');
+        onChange(`${String(h24).padStart(2, '0')}:${safeM}`);
+    };
+
+    // Close on outside click or Escape
+    useEffect(() => {
+        const handleClickOutside = (e: MouseEvent) => {
+            if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
+                setShowHourPicker(false);
+                setShowMinutePicker(false);
+            }
+        };
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') {
+                setShowHourPicker(false);
+                setShowMinutePicker(false);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        document.addEventListener('keydown', handleKeyDown);
+        return () => {
+            document.removeEventListener('mousedown', handleClickOutside);
+            document.removeEventListener('keydown', handleKeyDown);
+        };
+    }, []);
+
+    const handleHourSelect = (selectedH: number) => {
+        emitChange(selectedH, minuteStr, period);
+        setShowHourPicker(false);
+        setShowMinutePicker(true); // Smooth auto-advance to minute selection
+    };
+
+    const handleMinuteSelect = (selectedM: string) => {
+        emitChange(hour12, selectedM, period);
+        setShowMinutePicker(false);
+    };
+
+    const handlePeriodChange = (newP: 'AM' | 'PM') => {
+        if (newP === period) return;
+        emitChange(hour12, minuteStr, newP);
+    };
+
+    return (
+        <div className="relative w-full" ref={pickerRef}>
+            <div className="flex items-center gap-2">
+                {/* Main display input container */}
+                <div className="flex-1 flex items-center bg-white border border-slate-300 rounded-xl px-3 py-2 text-sm font-bold shadow-xs hover:border-slate-400 transition-colors focus-within:ring-2 focus-within:ring-primary/20 focus-within:border-primary">
+                    <Clock className="w-4 h-4 text-slate-400 mr-2 flex-shrink-0" />
+
+                    {/* Hour trigger */}
+                    <button
+                        type="button"
+                        onClick={() => {
+                            setShowHourPicker(prev => !prev);
+                            setShowMinutePicker(false);
+                        }}
+                        className={`px-2 py-1 rounded-lg text-slate-800 hover:bg-slate-100 font-mono transition-colors text-sm md:text-base font-extrabold ${
+                            showHourPicker ? 'bg-amber-100 text-amber-900 ring-1 ring-amber-400' : ''
+                        }`}
+                        title="Click to select Hour"
+                    >
+                        {String(hour12).padStart(2, '0')}
+                    </button>
+
+                    <span className="text-slate-400 font-bold px-0.5 select-none">:</span>
+
+                    {/* Minute trigger */}
+                    <button
+                        type="button"
+                        onClick={() => {
+                            setShowMinutePicker(prev => !prev);
+                            setShowHourPicker(false);
+                        }}
+                        className={`px-2 py-1 rounded-lg text-slate-800 hover:bg-slate-100 font-mono transition-colors text-sm md:text-base font-extrabold ${
+                            showMinutePicker ? 'bg-amber-100 text-amber-900 ring-1 ring-amber-400' : ''
+                        }`}
+                        title="Click to select Minute"
+                    >
+                        {minuteStr}
+                    </button>
+
+                    <div className="ml-auto pl-2">
+                        <span className="text-xs font-mono font-bold text-slate-400">
+                            IST
+                        </span>
+                    </div>
+                </div>
+
+                {/* AM / PM Toggle buttons side-by-side */}
+                <div className="flex items-center p-1 bg-slate-200/80 rounded-xl border border-slate-300/80 shadow-xs flex-shrink-0">
+                    <button
+                        type="button"
+                        onClick={() => handlePeriodChange('AM')}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-black tracking-wider transition-all ${
+                            period === 'AM'
+                                ? 'bg-slate-900 text-white shadow-xs'
+                                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+                        }`}
+                    >
+                        AM
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => handlePeriodChange('PM')}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-black tracking-wider transition-all ${
+                            period === 'PM'
+                                ? 'bg-slate-900 text-white shadow-xs'
+                                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+                        }`}
+                    >
+                        PM
+                    </button>
+                </div>
+            </div>
+
+            {/* Popover Grid: Hours (1 to 12) */}
+            {showHourPicker && (
+                <div className="absolute top-full left-0 mt-2 z-50 w-64 bg-white border border-slate-200 rounded-2xl p-3 shadow-xl animate-in fade-in zoom-in-95 duration-150">
+                    <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-100">
+                        <span className="text-[11px] font-black uppercase tracking-wider text-slate-400">
+                            Select Hour
+                        </span>
+                        <span className="text-xs font-bold text-slate-700 font-mono">
+                            {period}
+                        </span>
+                    </div>
+                    <div className="grid grid-cols-4 gap-1.5">
+                        {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(h => (
+                            <button
+                                key={h}
+                                type="button"
+                                onClick={() => handleHourSelect(h)}
+                                className={`h-10 rounded-xl text-sm font-bold font-mono transition-all flex items-center justify-center ${
+                                    hour12 === h
+                                        ? 'bg-primary text-white shadow-sm shadow-primary/30 font-black scale-105'
+                                        : 'bg-slate-50 hover:bg-slate-100 text-slate-700 active:scale-95'
+                                }`}
+                            >
+                                {h}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            )}
+
+            {/* Popover Grid: Minutes (00 to 55 + exact minute field) */}
+            {showMinutePicker && (
+                <div className="absolute top-full left-0 mt-2 z-50 w-72 bg-white border border-slate-200 rounded-2xl p-3 shadow-xl animate-in fade-in zoom-in-95 duration-150">
+                    <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-100">
+                        <span className="text-[11px] font-black uppercase tracking-wider text-slate-400">
+                            Select Minute
+                        </span>
+                        <span className="text-xs font-bold text-slate-700 font-mono">
+                            {hour12}:{minuteStr} {period}
+                        </span>
+                    </div>
+                    <div className="grid grid-cols-4 gap-1.5">
+                        {['00', '05', '10', '15', '20', '25', '30', '35', '40', '45', '50', '55'].map(m => (
+                            <button
+                                key={m}
+                                type="button"
+                                onClick={() => handleMinuteSelect(m)}
+                                className={`h-10 rounded-xl text-sm font-bold font-mono transition-all flex items-center justify-center ${
+                                    minuteStr === m
+                                        ? 'bg-primary text-white shadow-sm shadow-primary/30 font-black scale-105'
+                                        : 'bg-slate-50 hover:bg-slate-100 text-slate-700 active:scale-95'
+                                }`}
+                            >
+                                :{m}
+                            </button>
+                        ))}
+                    </div>
+                    {/* Exact Minute Input */}
+                    <div className="mt-3 pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
+                        <span className="text-[11px] font-bold text-slate-500">Exact Minute:</span>
+                        <div className="flex items-center gap-1.5">
+                            <input
+                                type="number"
+                                min="0"
+                                max="59"
+                                defaultValue={minuteStr}
+                                placeholder="00-59"
+                                className="w-16 px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono font-bold text-center focus:bg-white focus:outline-none focus:ring-1 focus:ring-primary"
+                                onChange={(e) => {
+                                    const val = parseInt(e.target.value, 10);
+                                    if (!isNaN(val) && val >= 0 && val <= 59) {
+                                        emitChange(hour12, String(val).padStart(2, '0'), period);
+                                    }
+                                }}
+                            />
+                            <button
+                                type="button"
+                                onClick={() => setShowMinutePicker(false)}
+                                className="px-2.5 py-1 bg-slate-900 text-white rounded-lg text-[10px] font-bold hover:bg-slate-800 transition-colors"
+                            >
+                                Done
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
 export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string }) {
     const [employees, setEmployees] = useState<EmployeeItem[]>([]);
     const [techSummary, setTechSummary] = useState<TechSummary | null>(null);
@@ -62,6 +304,32 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
     const [savingSchedule, setSavingSchedule] = useState(false);
     const [triggerLoading, setTriggerLoading] = useState(false);
     const [dryRunMode, setDryRunMode] = useState(true);
+    const [currentISTDisplay, setCurrentISTDisplay] = useState('');
+
+    useEffect(() => {
+        const updateIST = () => {
+            const now = new Date();
+            const timeStr = now.toLocaleTimeString('en-US', {
+                timeZone: 'Asia/Kolkata',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hour12: true
+            });
+            setCurrentISTDisplay(timeStr);
+        };
+        updateIST();
+        const interval = setInterval(updateIST, 1000);
+        return () => clearInterval(interval);
+    }, []);
+
+    const setTimeOffset = (minutesAhead: number) => {
+        const d = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+        d.setMinutes(d.getMinutes() + minutesAhead);
+        const h = String(d.getHours()).padStart(2, '0');
+        const m = String(d.getMinutes()).padStart(2, '0');
+        setCronTiming(`${h}:${m}`);
+    };
 
     const [statusMessage, setStatusMessage] = useState<{
         type: 'success' | 'error';
@@ -116,6 +384,14 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
     };
 
     const handleSaveSchedule = async () => {
+        if (!cronTiming || !/^\d{1,2}:\d{2}$/.test(cronTiming.trim())) {
+            setStatusMessage({
+                type: 'error',
+                title: 'Invalid Time Selected',
+                details: 'Please enter a valid dispatch time in HH:mm format (e.g., 09:00 or 12:45).'
+            });
+            return;
+        }
         setSavingSchedule(true);
         setStatusMessage(null);
         try {
@@ -183,9 +459,33 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
         }
     };
 
+    const [animationStep, setAnimationStep] = useState(0);
+
     useEffect(() => {
         fetchData();
     }, []);
+
+    useEffect(() => {
+        if (loading) {
+            setAnimationStep(0);
+            return;
+        }
+
+        setAnimationStep(0);
+        const t1 = setTimeout(() => setAnimationStep(1), 50);
+        const t2 = setTimeout(() => setAnimationStep(2), 150);
+        const t3 = setTimeout(() => setAnimationStep(3), 280);
+        const t4 = setTimeout(() => setAnimationStep(4), 400);
+        const t5 = setTimeout(() => setAnimationStep(5), 520);
+
+        return () => {
+            clearTimeout(t1);
+            clearTimeout(t2);
+            clearTimeout(t3);
+            clearTimeout(t4);
+            clearTimeout(t5);
+        };
+    }, [loading]);
 
     // Filter employees for dropdown
     const filteredEmployees = employees.filter(e => {
@@ -246,10 +546,35 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
         if (found) setSelectedEmployeeId(found.id);
     };
 
+    // Sleek Loading State matching Task Manager
+    if (loading) {
+        return (
+            <div className="w-full min-h-[480px] flex flex-col items-center justify-center p-8 text-center space-y-4 tm-root max-w-[1600px] mx-auto" style={{ zoom: '0.85' }}>
+                <div className="relative flex items-center justify-center">
+                    <div className="w-16 h-16 rounded-2xl bg-amber-50 border border-amber-200/60 flex items-center justify-center shadow-xl shadow-amber-500/10">
+                        <FlaskConical className="w-8 h-8 text-amber-600 animate-pulse" />
+                    </div>
+                    <div className="absolute -inset-2.5 border-2 border-amber-500/20 border-t-amber-600 rounded-3xl animate-spin" />
+                </div>
+                <div className="space-y-1">
+                    <h3 className="text-base font-bold text-slate-800">
+                        Loading Task Testing Hub...
+                    </h3>
+                    <p className="text-xs text-slate-400">
+                        Syncing live employee roles, whitelist config & automated cron schedule
+                    </p>
+                </div>
+            </div>
+        );
+    }
+
     return (
-        <div className="p-6 md:p-8 space-y-6 max-w-6xl mx-auto">
+        <div 
+            className="w-full space-y-4 p-2 sm:p-4 tm-root overflow-x-hidden max-w-[1600px] mx-auto"
+            style={{ zoom: '0.85' }}
+        >
             {/* Header Banner */}
-            <div className="bg-gradient-to-r from-amber-500/10 via-amber-500/5 to-transparent border border-amber-500/20 rounded-3xl p-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className={`bg-gradient-to-r from-amber-500/10 via-amber-500/5 to-transparent border border-amber-500/20 rounded-3xl p-6 flex flex-col md:flex-row md:items-center justify-between gap-4 ${animationStep >= 1 ? 'tm-slide-down-visible' : 'tm-slide-down-hidden'}`}>
                 <div className="flex items-center gap-4">
                     <div className="w-12 h-12 bg-amber-500 text-white rounded-2xl flex items-center justify-center shadow-lg shadow-amber-500/30 flex-shrink-0">
                         <FlaskConical className="w-6 h-6" />
@@ -307,7 +632,7 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
             )}
 
             {/* Top Grid: Department Live Status */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className={`grid grid-cols-1 md:grid-cols-3 gap-4 ${animationStep >= 2 ? 'tm-slide-up-visible' : 'tm-slide-up-hidden'}`}>
                 {/* Tech Manager Card */}
                 <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
                     <p className="text-[11px] font-black text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
@@ -365,7 +690,7 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
             </div>
 
             {/* Automated Daily Routine & Cron Timing Card (Phase 3 & 4) */}
-            <div className="bg-white border border-slate-200 rounded-3xl p-6 md:p-8 shadow-sm space-y-6">
+            <div className={`bg-white border border-slate-200 rounded-3xl p-6 md:p-8 shadow-sm space-y-6 ${animationStep >= 3 ? 'tm-slide-up-visible' : 'tm-slide-up-hidden'}`}>
                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                     <div>
                         <div className="flex items-center gap-2">
@@ -403,50 +728,84 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
                             Schedule Settings
                         </h3>
 
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            <div>
-                                <label className="block text-xs font-bold text-slate-600 mb-1.5">
+                        {/* Target Dispatch Time Section */}
+                        <div className="space-y-2">
+                            <div className="flex items-center justify-between">
+                                <label className="text-xs font-bold text-slate-700">
                                     Target Dispatch Time (IST)
                                 </label>
-                                <select
-                                    value={cronTiming}
-                                    onChange={(e) => setCronTiming(e.target.value)}
-                                    className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-sm font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all"
-                                >
-                                    <option value="08:00">08:00 AM IST (Early Shift)</option>
-                                    <option value="08:30">08:30 AM IST</option>
-                                    <option value="09:00">09:00 AM IST (Standard)</option>
-                                    <option value="09:15">09:15 AM IST</option>
-                                    <option value="09:30">09:30 AM IST</option>
-                                    <option value="10:00">10:00 AM IST</option>
-                                    <option value="10:30">10:30 AM IST</option>
-                                    <option value="11:00">11:00 AM IST (Testing)</option>
-                                    <option value="11:15">11:15 AM IST (Testing)</option>
-                                    <option value="11:30">11:30 AM IST (Testing)</option>
-                                    <option value="12:00">12:00 PM IST (Noon)</option>
-                                    <option value="14:00">02:00 PM IST (Afternoon)</option>
-                                </select>
+                                {currentISTDisplay && (
+                                    <span className="text-[10px] font-mono text-slate-500 bg-white px-2 py-0.5 rounded-md border border-slate-200 shadow-xs">
+                                        Current IST: {currentISTDisplay}
+                                    </span>
+                                )}
                             </div>
 
-                            <div>
-                                <label className="block text-xs font-bold text-slate-600 mb-1.5">
-                                    Automation State
-                                </label>
+                            <TwelveHourTimePicker
+                                value={cronTiming}
+                                onChange={(val) => setCronTiming(val)}
+                            />
+
+                            {/* Quick Test Chips */}
+                            <div className="flex items-center gap-1.5 pt-1 flex-wrap">
+                                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Quick:</span>
                                 <button
                                     type="button"
-                                    onClick={() => setCronEnabled(!cronEnabled)}
-                                    className={`w-full px-3.5 py-2.5 rounded-xl border text-sm font-bold transition-all flex items-center justify-between ${
-                                        cronEnabled
-                                            ? 'bg-emerald-50 border-emerald-300 text-emerald-800'
-                                            : 'bg-rose-50 border-rose-300 text-rose-800'
-                                    }`}
+                                    onClick={() => setTimeOffset(2)}
+                                    className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200/80 rounded-md text-[10px] font-bold transition-colors"
+                                    title="Set to 2 minutes from current IST for testing"
                                 >
-                                    <span>{cronEnabled ? '🟢 Enabled' : '⏸️ Paused'}</span>
-                                    <span className="text-[11px] underline opacity-70">
-                                        {cronEnabled ? 'Click to Pause' : 'Click to Enable'}
-                                    </span>
+                                    +2m Test
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setTimeOffset(5)}
+                                    className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200/80 rounded-md text-[10px] font-bold transition-colors"
+                                    title="Set to 5 minutes from current IST for testing"
+                                >
+                                    +5m Test
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setTimeOffset(10)}
+                                    className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200/80 rounded-md text-[10px] font-bold transition-colors"
+                                    title="Set to 10 minutes from current IST"
+                                >
+                                    +10m Test
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setCronTiming('09:00')}
+                                    className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md text-[10px] font-bold transition-colors"
+                                    title="Reset to 09:00 AM standard daily dispatch"
+                                >
+                                    09:00 AM Standard
                                 </button>
                             </div>
+                        </div>
+
+                        {/* Automation State Toggle Section */}
+                        <div className="pt-1">
+                            <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                                Automated Daily Routine State
+                            </label>
+                            <button
+                                type="button"
+                                onClick={() => setCronEnabled(!cronEnabled)}
+                                className={`w-full px-4 py-2.5 rounded-xl border text-sm font-bold transition-all flex items-center justify-between shadow-xs ${
+                                    cronEnabled
+                                        ? 'bg-emerald-50 border-emerald-300 text-emerald-800 hover:bg-emerald-100/60'
+                                        : 'bg-rose-50 border-rose-300 text-rose-800 hover:bg-rose-100/60'
+                                }`}
+                            >
+                                <span className="flex items-center gap-2">
+                                    <span className={`w-2.5 h-2.5 rounded-full ${cronEnabled ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
+                                    {cronEnabled ? 'Heartbeat: Enabled' : 'Heartbeat: Paused'}
+                                </span>
+                                <span className="text-xs font-semibold underline opacity-75">
+                                    {cronEnabled ? 'Click to Pause' : 'Click to Enable'}
+                                </span>
+                            </button>
                         </div>
 
                         {/* Whitelist Protection Toggle */}
@@ -476,7 +835,7 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
                             onClick={handleSaveSchedule}
                             className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-bold text-xs shadow-sm transition-all disabled:opacity-50"
                         >
-                            <Check className="w-3.5 h-3.5" />
+                            {savingSchedule ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
                             {savingSchedule ? 'Saving Schedule...' : 'Save Schedule (Applies Instantly)'}
                         </button>
                     </div>
@@ -512,7 +871,7 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
                                 onClick={() => handleManualTrigger('trigger_generate')}
                                 className="flex items-center justify-center gap-2 px-4 py-2.5 bg-white border border-slate-300 hover:bg-slate-100 text-slate-800 rounded-xl font-bold text-xs shadow-sm transition-all disabled:opacity-50"
                             >
-                                <Play className="w-3.5 h-3.5 text-primary" />
+                                {triggerLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin text-primary" /> : <Play className="w-3.5 h-3.5 text-primary" />}
                                 {triggerLoading ? 'Processing...' : '⚡ Generate Tasks Now'}
                             </button>
 
@@ -522,7 +881,7 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
                                 onClick={() => handleManualTrigger('trigger_dispatch')}
                                 className="flex items-center justify-center gap-2 px-4 py-2.5 bg-primary hover:bg-primary/90 text-white rounded-xl font-bold text-xs shadow-sm transition-all disabled:opacity-50"
                             >
-                                <Send className="w-3.5 h-3.5" />
+                                {triggerLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
                                 {triggerLoading ? 'Dispatching...' : '📤 Send Digest Now'}
                             </button>
                         </div>
@@ -551,7 +910,7 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
             </div>
 
             {/* Main Interactive Control Card */}
-            <div className="bg-white border border-slate-200 rounded-3xl p-6 md:p-8 shadow-sm space-y-6">
+            <div className={`bg-white border border-slate-200 rounded-3xl p-6 md:p-8 shadow-sm space-y-6 ${animationStep >= 4 ? 'tm-slide-up-visible' : 'tm-slide-up-hidden'}`}>
                 <div>
                     <h2 className="text-lg font-black text-slate-900 tracking-tight flex items-center gap-2">
                         <UserCheck className="w-5 h-5 text-primary" />
@@ -669,7 +1028,7 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
                                 onClick={() => handleRoleAction('assign_manager')}
                                 className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs shadow-sm hover:shadow transition-all disabled:opacity-50"
                             >
-                                <UserCheck className="w-4 h-4" />
+                                {actionLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <UserCheck className="w-4 h-4" />}
                                 {actionLoading ? 'Assigning...' : 'Assign Reporting Manager & Kickoff'}
                             </button>
 
@@ -684,8 +1043,8 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
                                 }}
                                 className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-xs shadow-sm hover:shadow transition-all disabled:opacity-50"
                             >
-                                <Send className="w-4 h-4" />
-                                Send Employee Kickoff
+                                {actionLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                                {actionLoading ? 'Sending Kickoff...' : 'Send Employee Kickoff'}
                             </button>
 
                             {/* Remove Role Button */}
@@ -695,8 +1054,8 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
                                 onClick={() => handleRoleAction('remove_manager')}
                                 className="flex items-center gap-2 px-4 py-2.5 bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 rounded-xl font-bold text-xs shadow-sm transition-all disabled:opacity-50"
                             >
-                                <UserX className="w-4 h-4 text-rose-500" />
-                                Remove Manager Role (Revert)
+                                {actionLoading ? <RefreshCw className="w-4 h-4 animate-spin text-rose-500" /> : <UserX className="w-4 h-4 text-rose-500" />}
+                                {actionLoading ? 'Removing...' : 'Remove Manager Role (Revert)'}
                             </button>
                         </div>
                     </div>
@@ -704,7 +1063,7 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
             </div>
 
             {/* Meta Approved Templates & WhatsApp Quick Reply Cheatsheet */}
-            <div className="bg-slate-900 text-white rounded-3xl p-6 md:p-8 space-y-5">
+            <div className={`bg-slate-900 text-white rounded-3xl p-6 md:p-8 space-y-5 ${animationStep >= 5 ? 'tm-slide-up-visible' : 'tm-slide-up-hidden'}`}>
                 <div className="flex items-center justify-between">
                     <h3 className="text-base font-black tracking-tight flex items-center gap-2 text-white">
                         <Sparkles className="w-5 h-5 text-emerald-400" />
@@ -771,6 +1130,50 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
                     <span>Tapping any quick reply button immediately opens Meta&apos;s 24-hour conversational window for rich interactive task management.</span>
                 </div>
             </div>
+
+            {/* Animation & Responsive Spacing System matching TaskAssignmentDashboard */}
+            <style>{`
+                .tm-root {
+                    zoom: 0.85;
+                }
+                @media (max-width: 640px) {
+                    .tm-root {
+                        zoom: 0.92;
+                    }
+                }
+
+                /* ── Slide Transitions (Shared Base) ─────────────────────────── */
+                .tm-slide-left-hidden, .tm-slide-right-hidden,
+                .tm-slide-down-hidden, .tm-slide-up-hidden {
+                    opacity: 0 !important;
+                    pointer-events: none !important;
+                    will-change: opacity, transform;
+                }
+
+                .tm-slide-left-visible, .tm-slide-right-visible,
+                .tm-slide-down-visible, .tm-slide-up-visible {
+                    opacity: 1 !important;
+                    transform: translate(0, 0) !important;
+                    pointer-events: auto !important;
+                    will-change: opacity, transform;
+                }
+
+                /* Horizontal slides */
+                .tm-slide-left-hidden, .tm-slide-left-visible,
+                .tm-slide-right-hidden, .tm-slide-right-visible {
+                    transition: opacity 800ms cubic-bezier(0.16, 1, 0.3, 1), transform 900ms cubic-bezier(0.16, 1, 0.3, 1) !important;
+                }
+                .tm-slide-left-hidden  { transform: translateX(-40px) !important; }
+                .tm-slide-right-hidden { transform: translateX(40px) !important; }
+
+                /* Vertical slides */
+                .tm-slide-down-hidden, .tm-slide-down-visible,
+                .tm-slide-up-hidden, .tm-slide-up-visible {
+                    transition: opacity 800ms cubic-bezier(0.16, 1, 0.3, 1), transform 900ms cubic-bezier(0.16, 1, 0.3, 1) !important;
+                }
+                .tm-slide-down-hidden { transform: translateY(-30px) !important; }
+                .tm-slide-up-hidden   { transform: translateY(30px) !important; }
+            `}</style>
         </div>
     );
 }
