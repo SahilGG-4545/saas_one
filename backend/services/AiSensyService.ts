@@ -1,4 +1,5 @@
 import { campaignOptions } from '../lib/whatsapp/assistant/templates.mjs';
+import { providerIds } from '../lib/whatsapp/interpreter/delivery.mjs';
 
 const AISENSY_API_URL = 'https://backend.aisensy.com/campaign/t1/api/v2';
 
@@ -15,6 +16,7 @@ export interface AiSensySendResult {
     success: boolean;
     error?: string;
     retryable?: boolean;
+    messageIds?: string[];
 }
 
 export class AiSensyService {
@@ -100,8 +102,10 @@ export class AiSensyService {
                     retryable: !(res.status >= 400 && res.status < 500 && ![408, 409, 425, 429].includes(res.status)) };
             }
 
+            let messageIds: string[] = [];
             try {
                 const parsed = JSON.parse(responseText);
+                messageIds = providerIds(parsed);
                 if (parsed.success === false) {
                     console.error(`[AiSensy] ❌ Campaign "${options.campaignName}" API error:`, parsed.message || 'unknown');
                     const error = typeof parsed.message === 'string' ? parsed.message : 'AiSensy API returned failure';
@@ -112,7 +116,7 @@ export class AiSensyService {
                 // Non-JSON response — treat as success if HTTP was ok
             }
 
-            return { success: true };
+            return { success: true, ...(messageIds.length ? { messageIds } : {}) };
         } catch (err: unknown) {
             console.error('[AiSensy] ❌ Network error:', err);
             return { success: false, error: err instanceof Error ? err.message : 'Network error' };

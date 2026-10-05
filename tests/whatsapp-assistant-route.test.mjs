@@ -5,12 +5,13 @@ import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import ts from 'typescript';
 import * as protocol from '../backend/lib/whatsapp/assistant/protocol.mjs';
+import { isExplicitTaskCommand } from '../backend/lib/whatsapp/interpreter/coordinator.mjs';
 
 const require = createRequire(import.meta.url);
 const next = require('next/server');
 const source = await readFile(new URL('../app/api/webhooks/aisensy/route.ts', import.meta.url), 'utf8');
 
-function handler(env, enqueue = async () => 'event-1') {
+function handler(env, enqueue = async () => 'event-1', overrides = {}) {
     const callbacks = [];
     const logs = [];
     const exports = {};
@@ -23,16 +24,75 @@ function handler(env, enqueue = async () => 'event-1') {
         '@/backend/lib/whatsapp/greeting': { isGreetingMessage: () => false },
         '@/backend/services/AiSensyService': { AiSensyService: { sendGreeting: async () => {} } },
         '@/whatsapp-test/freeformTest': { handleFreeformTest: async () => false },
+        '@/task-manager/TaskMessageRouter': {TaskMessageRouter:{routeInboundMessage:async()=>({handledByTaskManager:false})}},
+        '@/task-manager/TaskIdempotencyService': {TaskIdempotencyService:{isDuplicateWebhook:async()=>false,recordProcessedWebhook:()=>{}}},
+        '@/backend/lib/whatsapp/interpreter/context': {isInterpreterPilot:async()=>false,lookupQuotedContext:async()=>null},
+        '@/backend/lib/whatsapp/interpreter/coordinator.mjs': {isExplicitTaskCommand},
+        ...overrides,
     };
     const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
     vm.runInNewContext(compiled, { exports, require: name => { if (!(name in imports)) throw new Error('Unexpected import ' + name); return imports[name]; },
-        Buffer, URL, process: { env }, console: { info: (...args) => logs.push(args), error() {} } });
+        Buffer, URL, Date, process: { env }, console: { info: (...args) => logs.push(args), error() {} } });
     return { ...exports, callbacks, logs };
 }
 
 const payload = { topic: 'message.sender.user', data: { phone: '919876543210', messageId: 'wamid-1', message: 'Hi' } };
 const request = (body = payload, token = 'secret') => new next.NextRequest('https://example.com/api/webhooks/aisensy', {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'x-aisensy-secret': token }, body: typeof body === 'string' ? body : JSON.stringify(body),
+});
+
+test('pilot persists before task audit dedup and retains quoted IDs and service timestamp',async()=>{
+    let stored;
+    const route=handler({AISENSY_ASSISTANT_ENABLED:'true'},async input=>{stored=input;return 'pilot-event';},{
+        '@/backend/lib/whatsapp/interpreter/context':{isInterpreterPilot:async()=>true,lookupQuotedContext:async()=>null},
+        '@/task-manager/TaskIdempotencyService':{TaskIdempotencyService:{isDuplicateWebhook:()=>assert.fail('pilot uses durable dedup'),recordProcessedWebhook:()=>assert.fail('must persist first')}},
+        '@/task-manager/TaskMessageRouter':{TaskMessageRouter:{routeInboundMessage:()=>assert.fail('facility draft bypasses Task Manager')}}
+    });
+    const response=await route.POST(request({topic:'message.sender.user',project_id:'project-1',data:{message:{phone_number:'919876543210',messageId:'pilot-wamid',message_content:{text:'3 PM to 4 PM'},context:{id:'old-prompt',submitted_message_id:'alias'},sent_at:1791201600}}}));
+    assert.equal(response.status,200);
+    assert.equal(stored.interpreter,true);
+    assert.deepEqual(Array.from(stored.quotedIds),['old-prompt','alias']);
+    assert.equal(stored.inboundAt,new Date(1791201600*1000).toISOString());
+});
+
+test('pilot persistence failure remains retryable without an early task audit mark',async()=>{
+    const route=handler({},async()=>{throw new Error('storage unavailable');},{
+        '@/backend/lib/whatsapp/interpreter/context':{isInterpreterPilot:async()=>true},
+        '@/task-manager/TaskIdempotencyService':{TaskIdempotencyService:{recordProcessedWebhook:()=>assert.fail('no audit before storage')}}
+    });
+    assert.equal((await route.POST(request())).status,503);
+    assert.equal(route.callbacks.length,0);
+});
+
+test('explicit task command stays with legacy Task Manager and cannot alter facility state',async()=>{
+    let called=false;
+    const route=handler({},()=>assert.fail('task must not advance facility draft'),{
+        '@/backend/lib/whatsapp/interpreter/context':{isInterpreterPilot:async()=>true},
+        '@/task-manager/TaskMessageRouter':{TaskMessageRouter:{routeInboundMessage:async()=>{called=true;return {handledByTaskManager:true};}}}
+    });
+    const response=await route.POST(request({...payload,data:{...payload.data,message:'done 1'}}));
+    assert.equal(called,true);assert.equal((await response.json()).routedTo,'TASK_MANAGER');
+});
+
+test('explicit CANCEL TASKS and quoted task cancellation stay outside facility drafts',async()=>{
+    const texts=[];
+    const route=handler({},()=>assert.fail('task cancellation must not advance facility draft'),{
+        '@/backend/lib/whatsapp/interpreter/context':{isInterpreterPilot:async()=>true,lookupQuotedContext:async()=>({workflow:'task'})},
+        '@/task-manager/TaskMessageRouter':{TaskMessageRouter:{routeInboundMessage:async input=>{texts.push(input.text);return {handledByTaskManager:true};}}}
+    });
+    assert.equal((await route.POST(request({...payload,data:{...payload.data,message:'Cancel Tasks'}}))).status,200);
+    assert.equal((await route.POST(request({topic:'message.sender.user',data:{message:{phone_number:'919876543210',messageId:'cancel-quoted',message_content:{text:'Cancel'},context:{id:'task-prompt'}}}}))).status,200);
+    assert.deepEqual(texts,['cancel','Cancel']);
+});
+
+test('quoted task mutation and unknown quote require clarification rather than executing current task numbers',async()=>{
+    let saved;
+    const route=handler({},async input=>{saved=input;return 'event';},{
+        '@/backend/lib/whatsapp/interpreter/context':{isInterpreterPilot:async()=>true,lookupQuotedContext:async()=>({workflow:'task'})},
+        '@/task-manager/TaskMessageRouter':{TaskMessageRouter:{routeInboundMessage:()=>assert.fail('old task quote cannot complete current task 1')}}
+    });
+    await route.POST(request({topic:'message.sender.user',data:{message:{phone_number:'919876543210',messageId:'quoted-task-command',message_content:{text:'done 1'},context:{id:'old-task-list'}}}}));
+    assert.equal(saved.interpreter,true);
 });
 
 test('enabled webhook accepts the plain URL without a secret', async () => {
@@ -110,4 +170,11 @@ test('AiSensy nested project message is persisted and schedules the reply worker
     assert.equal(stored.text, 'Hi');
     assert.equal(stored.messageId, 'wamid-project-1');
     assert.equal(route.callbacks.length, 1);
+});
+
+test('AiSensy image message_content retains the caption and media URL for ticket creation',()=>{
+    const result=protocol.normalizeInbound({topic:'message.sender.user',data:{message:{phone_number:'919876543210',messageId:'image-id',message_type:'IMAGE',message_content:{url:'https://media.aisensy.com/photo.jpg',caption:'Floor lighting is not working'}}}});
+    assert.equal(result?.text,'Floor lighting is not working');
+    assert.equal(result?.mediaUrl,'https://media.aisensy.com/photo.jpg');
+    assert.equal(result?.mediaType,'image');
 });

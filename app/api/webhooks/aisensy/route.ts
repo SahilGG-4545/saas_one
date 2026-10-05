@@ -7,6 +7,8 @@ import { AiSensyService } from '@/backend/services/AiSensyService';
 import { handleFreeformTest } from '@/whatsapp-test/freeformTest';
 import { TaskMessageRouter } from '@/task-manager/TaskMessageRouter';
 import { TaskIdempotencyService } from '@/task-manager/TaskIdempotencyService';
+import { isInterpreterPilot, lookupQuotedContext } from '@/backend/lib/whatsapp/interpreter/context';
+import { isExplicitTaskCommand } from '@/backend/lib/whatsapp/interpreter/coordinator.mjs';
 
 export const runtime = 'nodejs';
 export const maxDuration = 120;
@@ -43,12 +45,42 @@ export async function POST(req: NextRequest) {
     }));
     if (!input) return NextResponse.json({ ok: true, ignored: true });
 
+    let interpreter = false;
+    try { interpreter = await isInterpreterPilot(input); }
+    catch {
+        // An enabled pilot cannot silently fall through into the old default-ticket handler.
+        return NextResponse.json({ error: 'Assistant configuration unavailable; retry delivery' }, { status: 503 });
+    }
+    if (interpreter && input.mediaUrl) {
+        try { if (new URL(input.mediaUrl).protocol !== 'https:') throw new Error(); }
+        catch { return NextResponse.json({ error: 'Media must use an HTTPS URL' }, { status: 400 }); }
+    }
+    let explicitTask = interpreter && !input.mediaUrl && (isExplicitTaskCommand(input.text) || (!!input.quotedIds?.length && /^cancel$/i.test(input.text.trim())));
+    if (explicitTask && input.quotedIds?.length) {
+        // Task numbering is owned by today's Task Manager list, not an old quoted digest.
+        // Quoted mutations require resource-aware task routing in a future adapter.
+        try { explicitTask = /^(tasks?|task manager|my tasks|view tasks|status|today'?s? tasks|cancel|cancel tasks)$/i.test(input.text.trim()) &&
+            (await lookupQuotedContext(input.phone, input.quotedIds))?.workflow === 'task'; }
+        catch { return NextResponse.json({ error: 'Reply context unavailable; retry delivery' }, { status: 503 }); }
+    }
+    if (interpreter && !explicitTask) {
+        if (!input.messageId) return NextResponse.json({ error: 'A stable inbound messageId is required' }, { status: 400 });
+        try {
+            const eventId = await enqueueAssistantMessage({ ...input, interpreter: true, inboundAt: input.inboundAt || new Date().toISOString() });
+            after(async () => {
+                try { await drainWhatsAppPhone(input.phone); }
+                catch { console.error('[WhatsAppInterpreter] Processing deferred; durable event will retry'); }
+            });
+            return NextResponse.json({ success: true, queued: !!eventId, duplicate: !eventId });
+        } catch { return NextResponse.json({ error: 'Message could not be accepted; retry delivery' }, { status: 503 }); }
+    }
+
     // Idempotency: Ignore duplicate webhook deliveries (Phase 19)
     if (input.messageId && await TaskIdempotencyService.isDuplicateWebhook(input.messageId)) {
         console.info('[AiSensyWebhook] Duplicate delivery ignored', { messageId: input.messageId });
         return NextResponse.json({ success: true, duplicate: true });
     }
-    if (input.messageId) {
+    if (input.messageId && !interpreter) {
         TaskIdempotencyService.recordProcessedWebhook(input.messageId);
     }
 
@@ -63,11 +95,12 @@ export async function POST(req: NextRequest) {
         try {
             const routeResult = await TaskMessageRouter.routeInboundMessage({
                 phone: input.phone,
-                text: input.text,
+                text: interpreter && /^cancel tasks$/i.test(input.text.trim()) ? 'cancel' : input.text,
                 messageId: input.messageId || undefined
             });
 
             if (routeResult.handledByTaskManager) {
+                if (interpreter && input.messageId) TaskIdempotencyService.recordProcessedWebhook(input.messageId);
                 console.info('[AiSensyWebhook] Inbound routed to TASK_MANAGER', {
                     phoneMasked: input.phone.replace(/(\d{4})\d+(\d{2})/, '$1****$2'),
                     command: routeResult.taskResult?.command
@@ -77,6 +110,16 @@ export async function POST(req: NextRequest) {
         } catch (routeError) {
             console.error('[AiSensyWebhook] Task routing error, falling back to facility:', routeError);
         }
+    }
+
+    if (interpreter) {
+        // A task command that was declined must never become a default facility ticket.
+        if (!input.messageId) return NextResponse.json({ error: 'A stable inbound messageId is required' }, { status: 400 });
+        try {
+            const eventId = await enqueueAssistantMessage({ ...input, interpreter:true, inboundAt:input.inboundAt || new Date().toISOString() });
+            after(async () => { await drainWhatsAppPhone(input.phone).catch(() => console.error('[WhatsAppInterpreter] Deferred processing failed')); });
+            return NextResponse.json({success:true,queued:!!eventId,duplicate:!eventId});
+        } catch { return NextResponse.json({error:'Message could not be accepted; retry delivery'},{status:503}); }
     }
 
     if (!enabled) {

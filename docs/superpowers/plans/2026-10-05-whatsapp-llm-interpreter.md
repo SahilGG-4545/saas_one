@@ -301,10 +301,35 @@ preview interprets approved sample messages without executing services.
 - [ ] Document disabling the interpreter as rollback; existing domain records and
   outbox stay intact. Commit the pilot configuration and evaluation evidence.
 
-## Current handoff
+## Implemented pilot (2026-10-05)
 
-Review this plan and the design before implementation. The immediate next step
-would be Task 1 in shadow-capable form, followed by trusted scope and persistence.
-No application functionality has been added on this branch yet. Task Manager,
-Agent Console, procurement and further actions are future adapters after the two
-pilot actions meet the same authorization, idempotency and delivery requirements.
+The user's later instruction selects a **menu-led** pilot. The historical broader
+plan above is the expansion roadmap; shadow dispatch, automatic cross-feature
+intent execution, 60-case live model evaluation and optional booking
+attendee/comment fields are not part of this implementation.
+
+Implemented modules follow the existing `.mjs` pure-core / TypeScript IO style:
+`backend/lib/whatsapp/interpreter/{contracts,config,interpret,coordinator,delivery,media}.mjs`
+and `context.ts`. The existing assistant worker, event/session RPCs and booking
+transactions remain the execution owners. Account lookup preserves the requested
+plain AiSensy webhook integration; project-ID matching and property checks do not
+constitute cryptographic provider verification.
+
+The pilot supports menu-selected booking/ticket extraction using only
+`GROQ_TASK_CHAT_API_KEY`, strict source-grounded fields, fresh authorization,
+missing-detail questions, scoped property/room choices, stable operation IDs,
+immutable review fingerprints, explicit confirmation, optional validated photos,
+quote-aware routing and ambiguity safeguards. Explicit Task Manager commands keep
+using the existing handler; a future resource-aware task adapter is required for
+mutations quoted against old task digests. Completion stays with omnichannel.
+
+Organization Super Admin configuration and interpretation-only preview are in the
+existing WhatsApp Service settings tab. Settings and outgoing aliases are in the
+additive migration `20261005000002_whatsapp_llm_interpreter.sql`. Global and
+per-organization switches plus account allowlists are off/empty by default.
+
+See `docs/WHATSAPP_LLM_PILOT.md` for exact environment variables, templates,
+migration, live test steps, limitations and rollback. No push or production
+migration is included. Offline tests exercise the provider boundary, coordinator,
+worker, ticket/booking retry adapter, media limits, settings API and SQL RLS;
+live model accuracy and provider delivery require configured test credentials.

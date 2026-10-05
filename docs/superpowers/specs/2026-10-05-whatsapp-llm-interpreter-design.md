@@ -261,3 +261,14 @@ enable the production flag or alter Task Manager behavior during this planning t
 Conclusion: feasible with existing app services. Production readiness depends on
 verified ingress/account binding, routing ownership, durable operations and the
 live delivery gates above; reading messages with an LLM alone does not meet them.
+
+
+## Implementation scope agreed after this design
+
+The first implementation is menu-led and restricted to meeting-room booking and
+ticket creation. Task Manager retains its existing explicit-command execution;
+ambiguous or stale quoted mutations require clarification. There is no general
+LLM tool executor. User authorization preserves the existing secret-free ingress
+and account association by phone. The pilot requires global/per-org enablement,
+an account allowlist, current app permissions and explicit action confirmation.
+See `docs/WHATSAPP_LLM_PILOT.md` for the implemented contracts and deployment.
