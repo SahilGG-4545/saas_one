@@ -104,7 +104,17 @@ export async function POST(request: NextRequest) {
         }
 
         if (body.cronTiming !== undefined) {
-            updatePayload.cronTiming = String(body.cronTiming).trim();
+            const trimmed = String(body.cronTiming).trim();
+            if (/^\d{1,2}:\d{2}$/.test(trimmed)) {
+                const [h, m] = trimmed.split(':').map(Number);
+                if (h >= 0 && h <= 23 && m >= 0 && m <= 59) {
+                    updatePayload.cronTiming = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+                } else {
+                    updatePayload.cronTiming = trimmed;
+                }
+            } else {
+                updatePayload.cronTiming = trimmed;
+            }
         }
         if (body.cronEnabled !== undefined) {
             updatePayload.cronEnabled = Boolean(body.cronEnabled);
