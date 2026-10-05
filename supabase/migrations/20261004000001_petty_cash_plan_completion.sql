@@ -23,7 +23,7 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path=public AS $$
  SELECT coalesce(array_agg(DISTINCT p.id),'{}'::uuid[]) FROM property_memberships m JOIN properties p ON p.id=m.property_id
  WHERE m.user_id=actor AND m.organization_id=org AND p.organization_id=org AND m.is_active
  AND p.deleted_at IS NULL AND coalesce(p.is_active,true)
- AND coalesce(m.role,'')<>'' AND m.role !~* '(tenant|vendor)'; $$;
+ AND coalesce(m.role::text,'')<>'' AND m.role::text !~* '(tenant|vendor)'; $$;
 
 CREATE OR REPLACE FUNCTION public.pc_can_read(u uuid,rid uuid) RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path=public AS $$
  SELECT coalesce((SELECT

@@ -94,9 +94,9 @@ LEFT JOIN LATERAL (
 CREATE OR REPLACE FUNCTION public.pc_internal(u uuid,o uuid,p uuid DEFAULT null) RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path=public AS $$
  SELECT EXISTS(SELECT 1 FROM organization_memberships m WHERE m.user_id=u AND m.organization_id=o AND m.is_active
- AND coalesce(m.role,'')<>'' AND m.role !~* '(tenant|vendor)')
+ AND coalesce(m.role::text,'')<>'' AND m.role::text !~* '(tenant|vendor)')
  OR EXISTS(SELECT 1 FROM property_memberships m JOIN properties x ON x.id=m.property_id WHERE m.user_id=u
- AND x.organization_id=o AND m.is_active AND (p IS NULL OR m.property_id=p) AND coalesce(m.role,'')<>'' AND m.role !~* '(tenant|vendor)'); $$;
+ AND x.organization_id=o AND m.is_active AND (p IS NULL OR m.property_id=p) AND coalesce(m.role::text,'')<>'' AND m.role::text !~* '(tenant|vendor)'); $$;
 CREATE OR REPLACE FUNCTION public.pc_super(u uuid,o uuid) RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path=public AS $$
  SELECT EXISTS(SELECT 1 FROM organization_memberships WHERE user_id=u AND organization_id=o AND is_active AND role IN ('org_super_admin','ops_super_admin'))
  OR EXISTS(SELECT 1 FROM property_memberships m JOIN properties p ON p.id=m.property_id WHERE m.user_id=u AND p.organization_id=o AND m.is_active AND m.role IN ('org_super_admin','ops_super_admin')); $$;
@@ -167,7 +167,7 @@ BEGIN
  IF NOT pc_internal(actor,org) THEN RAISE EXCEPTION 'Forbidden'; END IF;
  IF body ? 'assigned_allocator_id' OR body ? 'assigned_approver_id' THEN RAISE EXCEPTION 'Actors are system configured'; END IF;
  SELECT array_agg(DISTINCT m.property_id) INTO eligible FROM property_memberships m JOIN properties p ON p.id=m.property_id
- WHERE m.user_id=actor AND m.is_active AND p.organization_id=org AND coalesce(m.role,'')<>'' AND m.role !~* '(tenant|vendor)';
+ WHERE m.user_id=actor AND m.is_active AND p.organization_id=org AND coalesce(m.role::text,'')<>'' AND m.role::text !~* '(tenant|vendor)';
  prop:=nullif(body->>'property_id','')::uuid;
  IF prop IS NULL AND cardinality(eligible)=1 THEN prop:=eligible[1]; END IF;
  IF prop IS NULL THEN RAISE EXCEPTION 'Select an assigned property'; END IF;

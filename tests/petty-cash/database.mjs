@@ -1,15 +1,16 @@
 import { readFile } from 'node:fs/promises';
 import { PGlite } from '@electric-sql/pglite';
 export const id=n=>`00000000-0000-0000-0000-${String(n).padStart(12,'0')}`;
-export async function setup(){
+export async function setup({ enumRoles = true } = {}){
  const db=new PGlite();
  await db.exec(`CREATE ROLE service_role; CREATE ROLE authenticated; CREATE ROLE anon;
  ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO anon,authenticated;
  CREATE SCHEMA auth; CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql AS $$ SELECT null::uuid $$;
  CREATE TABLE organizations(id uuid primary key); CREATE TABLE users(id uuid primary key,full_name text,email text,is_master_admin boolean default false);
  CREATE TABLE properties(id uuid primary key,organization_id uuid,name text,code text,deleted_at timestamptz,is_active boolean default true);
- CREATE TABLE organization_memberships(user_id uuid,organization_id uuid,role text,is_active boolean default true);
- CREATE TABLE property_memberships(user_id uuid,organization_id uuid,property_id uuid,role text,is_active boolean default true);
+ CREATE TYPE public.app_role AS ENUM ('org_super_admin','ops_super_admin','accounts','mst','staff','property_admin','food_vendor','tenant','vendor');
+ CREATE TABLE organization_memberships(user_id uuid,organization_id uuid,role ${enumRoles ? 'app_role' : 'text'},is_active boolean default true);
+ CREATE TABLE property_memberships(user_id uuid,organization_id uuid,property_id uuid,role ${enumRoles ? 'app_role' : 'text'},is_active boolean default true);
  CREATE SCHEMA storage; CREATE TABLE storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);
  CREATE TABLE storage.objects(id uuid primary key default gen_random_uuid(),bucket_id text,name text);ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;CREATE POLICY existing_storage_read ON storage.objects FOR SELECT TO authenticated USING(true);
  CREATE PUBLICATION supabase_realtime;

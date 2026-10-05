@@ -19,6 +19,8 @@ Historical requests, documents, activity and settlement records remain readable.
 
 All access requires authentication and verified active memberships in the selected organization. The API, SQL functions and private-document checks enforce access independently of navigation visibility.
 
+Membership roles can be stored as the PostgreSQL `app_role` enum. Petty Cash SQL casts roles to text before checking empty values or matching tenant/vendor variants; it does not change the enum or membership records.
+
 | Actor | Read scope | Actions |
 | --- | --- | --- |
 | Internal requester: staff, MST, managers, property admin, other internal roles | Own requests, wallet, expenses and proofs | Draft/submit for actively assigned properties; own expenses/proof corrections |

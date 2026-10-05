@@ -9,7 +9,7 @@
     "lint": "eslint",
     "lint:sql": "node scripts/lint_sql_migrations.js",
     "test:whatsapp": "node --test --test-isolation=none tests/aisensy-greetings.test.mjs tests/whatsapp-assistant.test.mjs tests/whatsapp-assistant-worker.test.mjs tests/whatsapp-assistant-route.test.mjs tests/whatsapp-assistant-db.test.mjs tests/whatsapp-assistant-access.test.mjs",
-    "test:petty-cash": "node --test --test-isolation=none tests/petty-cash/workflow.test.mjs tests/petty-cash/plan-gaps.test.mjs tests/petty-cash/api.test.mjs tests/petty-cash/sidebar.test.mjs tests/petty-cash/notifications.test.mjs tests/petty-cash/finance-separation.test.mjs tests/petty-cash/approver-compat.test.mjs",
+    "test:petty-cash": "node --test --test-isolation=none tests/petty-cash/workflow.test.mjs tests/petty-cash/plan-gaps.test.mjs tests/petty-cash/role-storage.test.mjs tests/petty-cash/api.test.mjs tests/petty-cash/sidebar.test.mjs tests/petty-cash/notifications.test.mjs tests/petty-cash/finance-separation.test.mjs tests/petty-cash/approver-compat.test.mjs",
     "test:petty-cash:browser": "npm exec --yes --package=esbuild -- node --test tests/petty-cash/browser.test.mjs",
     "test:users": "node --test --test-isolation=none tests/users/list.test.mjs tests/users/action-roles.test.mjs tests/users/membership-state.test.mjs",
     "test:users:browser": "node --test --test-isolation=none tests/users/directory-loading.test.mjs",
