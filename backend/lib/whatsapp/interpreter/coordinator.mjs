@@ -3,7 +3,7 @@ import { parseBookingDate } from '../assistant/protocol.mjs';
 
 const TTL = 20 * 60 * 1000;
 const blank = () => ({ llmVersion: 1, active: null, drafts: {} });
-export const isExplicitTaskCommand = text => /^(?:tasks?|task manager|my tasks|view tasks|status|today'?s? tasks|cancel tasks|(?:done|complete|finish)\s+\d+|done\s+all|complete\s+all|finished\s+all|all\s+done|assign(?:\s+.*)?|team(?:\s+status)?|view team tasks|dept|department)$/i.test(text.trim());
+export const isExplicitTaskCommand = text => /^(?:tasks?|task\s*manager|my\s*tasks|view\s*tasks|status|today'?s?\s*tasks|cancel\s+tasks|(?:done|complete|finish)\s+\d+|done[-\s]*all|complete\s*all|finished\s*all|all\s*done|assign(?:\s+.*)?|team(?:\s*status)?|view\s*team\s*tasks|dept|department)$/i.test(text.trim());
 
 export function parseClock(value) {
     if (typeof value !== 'string') return null;

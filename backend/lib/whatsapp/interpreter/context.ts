@@ -32,6 +32,23 @@ export async function lookupQuotedContext(phone: string, aliases: string[]) {
     return distinct.size === 1 ? [...distinct.values()][0] : null;
 }
 
+// Read both systems without renewing or clearing either conversation.
+export async function getConversationRoutingState(phone: string) {
+    const now = new Date();
+    const [task, facility, pending] = await Promise.all([
+        supabaseAdmin.from('conversation_context').select('context_data').eq('phone_number',phone).eq('system','TASK_MANAGER')
+            .gt('expires_at',now.toISOString()).maybeSingle(),
+        supabaseAdmin.from('whatsapp_assistant_sessions').select('state').eq('phone',phone).maybeSingle(),
+        supabaseAdmin.from('whatsapp_assistant_events').select('id').eq('phone',phone).contains('payload',{interpreter:true})
+            .in('status',['pending','processing','ready']).limit(1),
+    ]);
+    if (task.error || facility.error || pending.error) throw new Error('Conversation routing unavailable');
+    const state = facility.data?.state;
+    const active = state?.llmVersion === 1 && state.drafts?.[state.active];
+    return {taskActive:!!task.data, taskChoicePending:task.data?.context_data?.state === 'AWAITING_SYSTEM_CHOICE',
+        facilityActive:!!(active && active.expiresAt > now.getTime()) || !!pending.data?.length};
+}
+
 export async function recordOutgoingContext(phone: string, aliases: string[], context: { workflow: string; conversationId: string; revision?: number }) {
     if (!aliases.length || !process.env.AISENSY_PROJECT_ID || process.env.WHATSAPP_LLM_INTERPRETER_ENABLED !== 'true') return;
     const { error } = await supabaseAdmin.from('whatsapp_outgoing_context').upsert(aliases.map(alias => ({

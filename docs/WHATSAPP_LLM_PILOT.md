@@ -30,6 +30,22 @@ Apply `supabase/migrations/20261005000002_whatsapp_llm_interpreter.sql` after th
 
 In organization settings, add your account with **Add my account to the pilot**, enable the desired two actions, and save. Enable `WHATSAPP_LLM_INTERPRETER_ENABLED=true` in the test deployment after the keys, migration and campaigns are ready. Both the global switch and organization/user allowlist must match. Incoming messages must carry the configured AiSensy project ID. Non-pilot senders continue through existing routing.
 
+## Controlled testing on production
+
+Use the same existing AiSensy project and webhook URL. Do not change Task Manager campaign names, credentials, testing whitelist, cron schedules or notification settings. The branch includes `main` through `26c6ce9` and retains its Task Manager handlers, router and notification logic.
+
+1. Keep `WHATSAPP_LLM_INTERPRETER_ENABLED=false` in Vercel **Production** while preparing. Keep the existing `AISENSY_ASSISTANT_ENABLED` value; enable it before activating this pilot if it is currently false.
+2. In the production Supabase SQL Editor, run the complete additive migration **`supabase/migrations/20261005000002_whatsapp_llm_interpreter.sql`** once. It is safe to reapply and does not modify task tables or enable any account. Existing assistant/message-booking and Task Manager migrations must already be installed; do not blindly reapply those earlier migrations.
+3. Run **`docs/sql/whatsapp_llm_production_checks.sql`**. Every `ready` result must be true. It only checks schema objects; it does not read user messages, change data or contact providers.
+4. After the branch is pushed, reviewed and merged, deploy it with the flag still false. In **Account Settings → WhatsApp (AiSensy) Service → WhatsApp AI pilot**, use **Preview interpretation** first, then enable the organization and add **only your own account** to the pilot. Save. If testing another account, add that exact account UUID; do not add all users.
+5. Set `WHATSAPP_LLM_INTERPRETER_ENABLED=true` in Vercel **Production** and redeploy. All non-allowlisted users retain their existing routing. Keep menu/notice and all current Task Manager/Omnichannel campaigns active.
+6. Send HI → Book Meeting Room, supply a real room and future date/time, review, and Confirm Booking. Send HI → Create Ticket, describe the issue, and Submit Ticket. These confirmations create real production records and consume real booking credits. Verify the app records and existing requester notifications.
+7. Also send TASKS, DONE 1, TEAM STATUS (with the appropriate manager role) and CANCEL TASKS. Test Task Manager's numbered system choices when it has a pending choice and no facility request. During a pending booking, explicit task commands use the current Task Manager handler and leave the facility draft intact. An unquoted number with both contexts requires clarification. Unknown task-only replies retain Task Manager's existing help response. Old quoted task mutations still ask you to retrieve today's list instead of applying stale task numbering.
+
+The route inspects active task state and pilot drafts without clearing or renewing them; pending pilot events reserve the facility conversation until the worker processes them. A Task Manager execution error cannot advance a facility action. This does not replace Task Manager's existing idempotency or add new natural-language task actions. Disable only `WHATSAPP_LLM_INTERPRETER_ENABLED` to stop the pilot; existing Task Manager routing continues.
+
+Offline verification covers the real Task Manager router/command handlers with isolated data. Live Groq accuracy, provider delivery, production schema readiness and requester notifications still require the above account-restricted production test. No production SQL was executed from this workspace.
+
 ## Templates and notifications
 
 | Message | Delivery |

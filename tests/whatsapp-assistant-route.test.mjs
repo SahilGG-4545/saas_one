@@ -26,10 +26,11 @@ function handler(env, enqueue = async () => 'event-1', overrides = {}) {
         '@/whatsapp-test/freeformTest': { handleFreeformTest: async () => false },
         '@/task-manager/TaskMessageRouter': {TaskMessageRouter:{routeInboundMessage:async()=>({handledByTaskManager:false})}},
         '@/task-manager/TaskIdempotencyService': {TaskIdempotencyService:{isDuplicateWebhook:async()=>false,recordProcessedWebhook:()=>{}}},
-        '@/backend/lib/whatsapp/interpreter/context': {isInterpreterPilot:async()=>false,lookupQuotedContext:async()=>null},
+        '@/backend/lib/whatsapp/interpreter/context': {isInterpreterPilot:async()=>false,lookupQuotedContext:async()=>null,getConversationRoutingState:async()=>({taskActive:false,facilityActive:false})},
         '@/backend/lib/whatsapp/interpreter/coordinator.mjs': {isExplicitTaskCommand},
         ...overrides,
     };
+    imports['@/backend/lib/whatsapp/interpreter/context']={getConversationRoutingState:async()=>({taskActive:false,facilityActive:false}),...imports['@/backend/lib/whatsapp/interpreter/context']};
     const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
     vm.runInNewContext(compiled, { exports, require: name => { if (!(name in imports)) throw new Error('Unexpected import ' + name); return imports[name]; },
         Buffer, URL, Date, process: { env }, console: { info: (...args) => logs.push(args), error() {} } });
@@ -72,6 +73,31 @@ test('explicit task command stays with legacy Task Manager and cannot alter faci
     });
     const response=await route.POST(request({...payload,data:{...payload.data,message:'done 1'}}));
     assert.equal(called,true);assert.equal((await response.json()).routedTo,'TASK_MANAGER');
+});
+
+for (const [text, contexts] of [
+    ['1',{taskActive:true,taskChoicePending:true,facilityActive:false}],
+    ['2',{taskActive:true,taskChoicePending:true,facilityActive:false}],
+    ['Cancel',{taskActive:true,taskChoicePending:false,facilityActive:false}],
+    ['What should I do next?',{taskActive:true,taskChoicePending:false,facilityActive:false}],
+]) test(`pilot preserves Task Manager conversation reply: ${text}`,async()=>{
+    const routed=[];
+    const route=handler({},()=>assert.fail('task conversation must not be sent to the facility interpreter'),{
+        '@/backend/lib/whatsapp/interpreter/context':{isInterpreterPilot:async()=>true,getConversationRoutingState:async()=>contexts},
+        '@/task-manager/TaskMessageRouter':{TaskMessageRouter:{classifyMessage:async()=>({system:'TASK_MANAGER'}),routeInboundMessage:async input=>{routed.push(input.text);return {handledByTaskManager:true};}}}
+    });
+    const response=await route.POST(request({...payload,data:{...payload.data,message:text}}));
+    assert.equal((await response.json()).routedTo,'TASK_MANAGER');assert.deepEqual(routed,[text]);
+});
+
+test('pilot task execution failure cannot fall through to a facility action',async()=>{
+    let enqueued=0;
+    const route=handler({},async()=>{enqueued++;return 'event';},{
+        '@/backend/lib/whatsapp/interpreter/context':{isInterpreterPilot:async()=>true},
+        '@/task-manager/TaskMessageRouter':{TaskMessageRouter:{routeInboundMessage:async()=>{throw new Error('task storage failed');}}}
+    });
+    assert.equal((await route.POST(request({...payload,data:{...payload.data,message:'done 1'}}))).status,503);
+    assert.equal(enqueued,0);
 });
 
 test('explicit CANCEL TASKS and quoted task cancellation stay outside facility drafts',async()=>{

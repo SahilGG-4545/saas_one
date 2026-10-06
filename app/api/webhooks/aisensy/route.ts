@@ -7,7 +7,7 @@ import { AiSensyService } from '@/backend/services/AiSensyService';
 import { handleFreeformTest } from '@/whatsapp-test/freeformTest';
 import { TaskMessageRouter } from '@/task-manager/TaskMessageRouter';
 import { TaskIdempotencyService } from '@/task-manager/TaskIdempotencyService';
-import { isInterpreterPilot, lookupQuotedContext } from '@/backend/lib/whatsapp/interpreter/context';
+import { isInterpreterPilot, lookupQuotedContext, getConversationRoutingState } from '@/backend/lib/whatsapp/interpreter/context';
 import { isExplicitTaskCommand } from '@/backend/lib/whatsapp/interpreter/coordinator.mjs';
 
 export const runtime = 'nodejs';
@@ -63,6 +63,26 @@ export async function POST(req: NextRequest) {
             (await lookupQuotedContext(input.phone, input.quotedIds))?.workflow === 'task'; }
         catch { return NextResponse.json({ error: 'Reply context unavailable; retry delivery' }, { status: 503 }); }
     }
+    if (interpreter && !explicitTask && !input.mediaUrl && input.quotedIds?.length && /^[12]$/.test(input.text.trim())) {
+        try {
+            const quote = await lookupQuotedContext(input.phone,input.quotedIds);
+            if (quote?.workflow === 'task') {
+                const contexts = await getConversationRoutingState(input.phone);
+                // These only choose a system; they cannot complete or assign a task.
+                explicitTask = contexts.taskChoicePending && !contexts.facilityActive;
+            }
+        } catch { return NextResponse.json({error:'Reply context unavailable; retry delivery'},{status:503}); }
+    }
+    if (interpreter && !explicitTask && !input.mediaUrl && !input.quotedIds?.length &&
+        !/^(hi|hello|hey|menu|help|options|create ticket|book meeting room|confirm booking|submit ticket|add photo|no photo|remove photo|without photo)$/i.test(input.text.trim())) {
+        try {
+            const contexts = await getConversationRoutingState(input.phone);
+            if (/^(facility|fms|helpdesk|facility\s*bot)$/i.test(input.text.trim()) || (contexts.taskActive && !contexts.facilityActive)) {
+                const classification = await TaskMessageRouter.classifyMessage(input.phone,input.text);
+                explicitTask = classification.system !== 'FACILITY' || classification.isExplicitSwitch;
+            }
+        } catch { return NextResponse.json({error:'Conversation routing unavailable; retry delivery'},{status:503}); }
+    }
     if (interpreter && !explicitTask) {
         if (!input.messageId) return NextResponse.json({ error: 'A stable inbound messageId is required' }, { status: 400 });
         try {
@@ -95,7 +115,7 @@ export async function POST(req: NextRequest) {
         try {
             const routeResult = await TaskMessageRouter.routeInboundMessage({
                 phone: input.phone,
-                text: interpreter && /^cancel tasks$/i.test(input.text.trim()) ? 'cancel' : input.text,
+                text: interpreter && /^cancel\s+tasks$/i.test(input.text.trim()) ? 'cancel' : input.text,
                 messageId: input.messageId || undefined
             });
 
@@ -108,6 +128,10 @@ export async function POST(req: NextRequest) {
                 return NextResponse.json({ success: true, routedTo: 'TASK_MANAGER' });
             }
         } catch (routeError) {
+            if (interpreter) {
+                console.error('[WhatsAppInterpreter] Task routing failed; facility execution blocked');
+                return NextResponse.json({error:'Task Manager could not process this message'},{status:503});
+            }
             console.error('[AiSensyWebhook] Task routing error, falling back to facility:', routeError);
         }
     }

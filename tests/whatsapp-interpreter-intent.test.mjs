@@ -1,5 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { isExplicitTaskCommand } from '../backend/lib/whatsapp/interpreter/coordinator.mjs';
+
+test('facility interpreter recognizes the existing task router command spacing and done-all alias',()=>{
+    for(const command of ['viewtasks','task   manager','my   tasks','doneall','done-all','team   status','view team   tasks','Cancel   Tasks'])
+        assert.equal(isExplicitTaskCommand(command),true,command);
+});
 
 const load = () => import('../backend/lib/whatsapp/interpreter/interpret.mjs');
 const empty = { property: null, room: null, date: null, start: null, end: null, issue: null };
