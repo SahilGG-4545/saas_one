@@ -60,6 +60,12 @@ The approved Org Super Admin preview includes safe diagnostics for a rejected Gr
 
 Redeploy after changing Vercel environment variables. An absent `GROQ_TASK_CHAT_MODEL` still selects the existing default, `llama-3.3-70b-versatile`; diagnostics do not switch models, change credentials, add fallback attempts or modify Task Manager. `executed: false` always means the preview did not create a booking or ticket, even when interpretation succeeds. Keep the global pilot disabled while diagnosing failed previews.
 
+## Diagnosing messages that still use the old templates
+
+For each normalized inbound message, Vercel logs include `[WhatsAppInterpreter] Routing decision` with `route: ai` or `route: legacy` and a reason. `llm_disabled` / `assistant_disabled` refer to the environment serving the webhook. `project_not_configured` / `project_mismatch` refer to the configured and inbound AiSensy project. `sender_not_approved_or_not_unique` means the sender could not be linked to exactly one approved app profile; `no_active_properties` means it has no permitted active property. `organization_disabled` means none of the accessible organizations enables the pilot; `sender_not_in_pilot` means an accessible organization enables it but the matched app account is not in its saved allowlist. `eligible` confirms the AI route passed these checks.
+
+These diagnostics do not change routing, grant access or disclose phone numbers, project IDs, account IDs, messages or credentials. If the AI route is eligible but old messages continue arriving, inspect persisted events and other notification sources before changing account permissions.
+
 ## Templates and notifications
 
 | Message | Delivery |

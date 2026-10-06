@@ -11,15 +11,27 @@ export async function organizationSettings(organizationId: string) {
 }
 
 export async function isInterpreterPilot(input: { phone: string; projectId?: string }) {
-    if (process.env.WHATSAPP_LLM_INTERPRETER_ENABLED !== 'true' || process.env.AISENSY_ASSISTANT_ENABLED !== 'true') return false;
-    if (!process.env.AISENSY_PROJECT_ID || input.projectId !== process.env.AISENSY_PROJECT_ID) return false;
+    const decision = (eligible: boolean, reason: string) => {
+        // Report why ingress chose the old flow without logging phone numbers,
+        // project IDs, account IDs, messages or credentials.
+        console.info('[WhatsAppInterpreter] Routing decision', { route: eligible ? 'ai' : 'legacy', reason });
+        return eligible;
+    };
+    if (process.env.WHATSAPP_LLM_INTERPRETER_ENABLED !== 'true') return decision(false, 'llm_disabled');
+    if (process.env.AISENSY_ASSISTANT_ENABLED !== 'true') return decision(false, 'assistant_disabled');
+    if (!process.env.AISENSY_PROJECT_ID) return decision(false, 'project_not_configured');
+    if (input.projectId !== process.env.AISENSY_PROJECT_ID) return decision(false, 'project_mismatch');
     const user = await findWhatsAppUser(input.phone);
-    if (!user) return false;
+    if (!user) return decision(false, 'sender_not_approved_or_not_unique');
     const properties = await getWhatsAppProperties(user.id);
+    if (!properties.length) return decision(false, 'no_active_properties');
+    let organizationEnabled = false;
     for (const org of new Set(properties.map(property => property.organization_id))) {
-        if (pilotAllowed(await organizationSettings(org), user.id)) return true;
+        const settings = await organizationSettings(org);
+        if (pilotAllowed(settings, user.id)) return decision(true, 'eligible');
+        organizationEnabled ||= settings.enabled;
     }
-    return false;
+    return decision(false, organizationEnabled ? 'sender_not_in_pilot' : 'organization_disabled');
 }
 
 export async function lookupQuotedContext(phone: string, aliases: string[]) {
