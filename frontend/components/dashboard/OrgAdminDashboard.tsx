@@ -127,43 +127,12 @@ const OrgAdminDashboard = () => {
     const searchParams = useSearchParams();
     const orgSlugOrId = params?.orgId as string;
 
-    // Active Tab with URL searchParams & localStorage persistence
-    const [activeTab, setActiveTabRaw] = useState<Tab>(() => {
-        if (typeof window !== 'undefined') {
-            const urlParams = new URLSearchParams(window.location.search);
-            const tabParam = urlParams.get('tab');
-            if (tabParam) return tabParam as Tab;
-            const savedKey = orgSlugOrId ? `active_tab_${orgSlugOrId}` : 'active_tab_org';
-            const saved = localStorage.getItem(savedKey);
-            if (saved) return saved as Tab;
-        }
-        return 'overview';
-    });
-
-    const setActiveTab = useCallback((newTab: Tab | ((prev: Tab) => Tab)) => {
-        setActiveTabRaw(newTab);
-    }, []);
-
-    // Sync activeTab to localStorage & URL without triggering in-render Router setState
-    useEffect(() => {
-        if (typeof window === 'undefined' || !activeTab) return;
-        try {
-            const savedKey = orgSlugOrId ? `active_tab_${orgSlugOrId}` : 'active_tab_org';
-            localStorage.setItem(savedKey, activeTab);
-            const url = new URL(window.location.href);
-            if (url.searchParams.get('tab') !== activeTab) {
-                url.searchParams.set('tab', activeTab);
-                window.history.replaceState(null, '', url.toString());
-            }
-        } catch (e) {}
-    }, [activeTab, orgSlugOrId]);
-
-    useEffect(() => {
-        const tabParam = searchParams.get('tab');
-        if (tabParam) {
-            setActiveTabRaw(tabParam as Tab);
-        }
-    }, [searchParams]);
+    // The URL owns the tab. A bare dashboard URL always opens overview, including
+    // after login; restoring a saved tab and writing it back raced URL restoration.
+    // Only explicit navigation handlers write to the URL.
+    const [activeTab, setActiveTab] = useState<Tab>(() =>
+        (searchParams.get('tab') as Tab) || 'overview'
+    );
 
     const [org, setOrg] = useState<Organization | null>(null);
     const [properties, setProperties] = useState<Property[]>([]);
@@ -261,13 +230,14 @@ const OrgAdminDashboard = () => {
     const [isSummariesLoading, setIsSummariesLoading] = useState(false);
     const { getCachedData, setCachedData, invalidateCache } = useDataCache();
 
-    // Restore showRequestsList, filter, and selectedPropertyId from URL on mount/back navigation
-    // Restore showRequestsList, filter, and selectedPropertyId from URL on mount/back navigation
+    // Restore tab, filter, and selectedPropertyId from URL on mount/back navigation.
     useEffect(() => {
-        const tab = searchParams.get('tab') as Tab;
+        const tab = (searchParams.get('tab') as Tab) || 'overview';
         // No ?tab= means overview: `/{orgId}/dashboard` is the board. Leaving the
         // previous tab in place made a bare dashboard link a no-op on back navigation.
-        setActiveTab(tab || 'overview');
+        const isRestrictedTab = isOpsSuperAdmin &&
+            (tab === 'org_progress' || tab === 'org_efficiency' || tab === 'agent_console');
+        setActiveTab(isRestrictedTab ? 'overview' : tab);
         
         const filter = searchParams.get('filter');
         if (filter) setPendingStatusFilter(filter);
@@ -277,7 +247,7 @@ const OrgAdminDashboard = () => {
 
         const view = searchParams.get('view') as any;
         if (view) setRequestsView(view);
-    }, [searchParams]);
+    }, [searchParams, isOpsSuperAdmin]);
 
     // Robust Unified Scroll Restoration for Org Admin
     useEffect(() => {
@@ -549,19 +519,6 @@ const OrgAdminDashboard = () => {
         };
         init();
     }, [orgSlugOrId, fetchOrgDetails]);
-
-    // Restore tab from URL
-    useEffect(() => {
-        const tab = searchParams.get('tab');
-        if (tab && ['overview', 'properties', 'requests', 'reports', 'visitors', 'settings', 'profile', 'revenue', 'users', 'diesel_logger', 'diesel', 'electricity_logger', 'electricity', 'stock_reports', 'checklist', 'super_tenants', 'escalation', 'rooms', 'ppm', 'vendors', 'procurement', 'roster', 'water_logger', 'water', 'guest_experience', 'agent_console', 'org_progress', 'org_efficiency', 'grievance', 'assets', 'tasks'].includes(tab)) {
-            if (isOpsSuperAdmin && (tab === 'org_progress' || tab === 'org_efficiency' || tab === 'agent_console')) {
-                setActiveTab('overview');
-            } else {
-                setActiveTab(tab as Tab);
-            }
-        }
-    }, [searchParams, isOpsSuperAdmin]);
-
 
     // Fetch properties ONCE when org is loaded (not on every tab change)
     useEffect(() => {
@@ -2164,7 +2121,7 @@ const OrgAdminDashboard = () => {
                 properties={properties}
                 onSuccess={() => {
                     fetchOrgUsers();
-                    setActiveTab('users');
+                    handleTabChange('users');
                 }}
             />
 

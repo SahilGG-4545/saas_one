@@ -8,7 +8,10 @@
     "start": "next start",
     "lint": "eslint",
     "lint:sql": "node scripts/lint_sql_migrations.js",
-    "test:whatsapp": "node --test --test-isolation=none tests/aisensy-greetings.test.mjs tests/whatsapp-assistant.test.mjs tests/whatsapp-assistant-worker.test.mjs tests/whatsapp-assistant-route.test.mjs tests/whatsapp-assistant-db.test.mjs tests/whatsapp-assistant-access.test.mjs tests/whatsapp-message-booking.test.mjs"
+    "test:accounts": "node --test --test-isolation=none tests/accounts-onboarding.test.mjs tests/accounts-onboarding-ui.test.mjs",
+    "test:whatsapp": "node --test --test-isolation=none tests/aisensy-greetings.test.mjs tests/whatsapp-assistant.test.mjs tests/whatsapp-assistant-worker.test.mjs tests/whatsapp-assistant-route.test.mjs tests/whatsapp-assistant-db.test.mjs tests/whatsapp-assistant-access.test.mjs tests/whatsapp-message-booking.test.mjs tests/whatsapp-interpreter-*.test.mjs",
+    "test:whatsapp-interpreter": "node --test --test-isolation=none tests/whatsapp-interpreter-*.test.mjs",
+    "test:requisition-drafts": "node --test --test-isolation=none tests/requisition-drafts.test.mjs tests/requisition-drafts-db.test.mjs tests/requisition-drafts-hook.test.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.82.0",
@@ -83,6 +86,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.1.1",
     "playwright": "^1.62.1",
+    "react-test-renderer": "^19.2.3",
     "tailwindcss": "^4",
     "typescript": "^5"
   }

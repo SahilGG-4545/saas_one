@@ -455,6 +455,7 @@ export default function MonthlyRequisitionsTab({ user, organizationId, propertyI
         const effectiveOrgId = organizationId || user?.user_metadata?.organization_id || (properties[0] as any)?.organization_id || '';
         return (
             <SiteRequisitionSheet
+                key={`${user?.id}:${effectiveOrgId}`}
                 user={user}
                 organizationId={effectiveOrgId}
                 properties={properties}
