@@ -104,10 +104,21 @@ const dependencies = {
             storedPhoto = existing?.photo_before_url || null;
         }
         if (request.interpreter && request.mediaUrl && !storedPhoto) {
+            let stage = 'download';
             try {
                 const downloaded = await fetchPhoto(request.mediaUrl);
+                stage = 'decode';
                 mediaBuffer = await sharp(downloaded, {limitInputPixels:20_000_000}).resize(1280,1280,{fit:'inside',withoutEnlargement:true}).jpeg({quality:85}).toBuffer();
-            } catch { throw Object.assign(new Error('Photo could not be accepted'), {code:'INVALID_MEDIA'}); }
+            } catch (error) {
+                const failure = error as {mediaReason?:string;httpStatus?:number}|null;
+                const reason = stage === 'decode' ? 'decode_failed' :
+                    (typeof failure?.mediaReason === 'string' && /^[a-z_]{1,40}$/.test(failure.mediaReason) ? failure.mediaReason : 'download_failed');
+                let hostname: string | null = null;
+                try { hostname = new URL(request.mediaUrl).hostname; } catch { /* Do not log the raw URL. */ }
+                console.warn('[WhatsAppInterpreter] Ticket photo rejected', {stage,reason,hostname,
+                    httpStatus:typeof failure?.httpStatus === 'number' ? failure.httpStatus : null});
+                throw Object.assign(new Error('Photo could not be accepted'), {code:'INVALID_MEDIA',mediaReason:reason});
+            }
         }
         const ticket = await processIncomingMessage(request.phone, request.title, request.mediaUrl, null, !!request.mediaUrl,
             null, null, false, request.propertyId, request.messageId,

@@ -26,7 +26,9 @@ function payloadShape(value: unknown, depth = 0): unknown {
 
 export async function GET() {
     return NextResponse.json({ status: 'ok', service: 'AiSensy inbound webhook',
-        assistantEnabled: process.env.AISENSY_ASSISTANT_ENABLED === 'true' });
+        assistantEnabled: process.env.AISENSY_ASSISTANT_ENABLED === 'true',
+        interpreterEnabled: process.env.WHATSAPP_LLM_INTERPRETER_ENABLED === 'true',
+        routingVersion: 'ticket-photo-submit-v1' });
 }
 
 export async function POST(req: NextRequest) {

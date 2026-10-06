@@ -42,6 +42,15 @@ const request = (body = payload, token = 'secret') => new next.NextRequest('http
     method: 'POST', headers: { 'Content-Type': 'application/json', 'x-aisensy-secret': token }, body: typeof body === 'string' ? body : JSON.stringify(body),
 });
 
+test('webhook health identifies interpreter deployment and global switch without exposing credentials',async()=>{
+    for(const enabled of ['true','false']) {
+        const route=handler({AISENSY_ASSISTANT_ENABLED:'true',WHATSAPP_LLM_INTERPRETER_ENABLED:enabled,AISENSY_PROJECT_ID:'private-project',AISENSY_PROJECT_API_KEY:'private-key'});
+        const response=await route.GET();const body=await response.json();
+        assert.equal(body.interpreterEnabled,enabled==='true');assert.equal(body.routingVersion,'ticket-photo-submit-v1');
+        assert.equal(JSON.stringify(body).includes('private'),false);
+    }
+});
+
 test('pilot persists before task audit dedup and retains quoted IDs and service timestamp',async()=>{
     let stored;
     const route=handler({AISENSY_ASSISTANT_ENABLED:'true'},async input=>{stored=input;return 'pilot-event';},{

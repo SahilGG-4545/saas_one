@@ -90,6 +90,50 @@ test('ticket photos optional; selected ticket does not delegate to Task Manager'
     assert.equal(h.calls[0][1].mediaUrl,null);
 });
 
+test('Submit confirms the current reviewed ticket without passing the command to the model',async()=>{
+    const h=harness({interpret:async()=>({ok:true,intent:'details',fields:fields({issue:'Cleaning needs to be done'})})});
+    await h.send('Create Ticket');await h.send('Cleaning needs to be done');
+    h.deps.interpret=()=>assert.fail('confirmation must not be interpreted as a new issue');
+    assert.equal((await h.send('Submit')).reply,null);
+    assert.equal(h.calls.length,1);assert.equal(h.calls[0][1].title,'Cleaning needs to be done');
+    await h.send('Submit');assert.equal(h.calls.length,1);
+});
+
+test('Submit needs a current review and clarification when another conversation could own it',async()=>{
+    const h=harness({interpret:async()=>({ok:true,intent:'details',fields:fields({issue:'Cleaning needs to be done'})})});
+    await h.send('Create Ticket');await h.send('Submit');assert.equal(h.calls.length,0);
+    await h.send('Cleaning needs to be done');h.deps.hasTaskContext=async()=>true;
+    assert.match((await h.send('Submit')).reply.text,/more than one conversation/);assert.equal(h.calls.length,0);
+    const draft=h.state.drafts.ticket;
+    h.deps.quote=async()=>({workflow:'ticket',conversation_id:draft.id,revision:draft.revision});
+    assert.equal((await h.send('Submit',{quotedIds:['current-ticket-review']})).reply,null);assert.equal(h.calls.length,1);
+});
+
+test('Submit cannot confirm an old quote and recovers an expired committed ticket without creating it again',async()=>{
+    const h=harness({interpret:async()=>({ok:true,intent:'details',fields:fields({issue:'Cleaning needs to be done'})})});
+    await h.send('Create Ticket');await h.send('Cleaning needs to be done');
+    const draft=h.state.drafts.ticket;
+    h.deps.quote=async()=>({workflow:'ticket',conversation_id:draft.id,revision:draft.revision-1});
+    assert.match((await h.send('Submit',{quotedIds:['old-ticket-review']})).reply.text,/older/);assert.equal(h.calls.length,0);
+    h.deps.findTicket=async(_id,_user,expected)=>{assert.equal(expected.title,'Cleaning needs to be done');return {id:'created-ticket',property_id:'p1'};};
+    h.deps.now=()=>new Date('2026-10-05T07:00:00Z');
+    assert.equal((await h.send('Submit')).reply,null);assert.equal(h.calls.length,0);assert.equal(h.state.active,null);
+});
+
+test('a rejected photo never becomes an attached-photo review again without replacement',async()=>{
+    let attempts=0;
+    const h=harness({interpret:async()=>({ok:true,intent:'details',fields:fields({issue:'Cleaning needs to be done'})}),
+        createTicket:async()=>{attempts++;throw Object.assign(new Error('bad photo'),{code:'INVALID_MEDIA',mediaReason:'host_not_allowed'});}});
+    await h.send('Create Ticket');await h.send('Cleaning needs to be done',{mediaType:'image',mediaUrl:'https://example.com/old.jpg'});
+    await h.send('Submit Ticket');
+    const retry=await h.send('Submit Ticket');
+    assert.doesNotMatch(retry.reply.text,/Photo attached/);assert.match(retry.reply.text,/No Photo/);assert.equal(attempts,1);
+    assert.match((await h.send('Add Photo')).reply.text,/No Photo/);
+    await h.send('',{mediaType:'image',mediaUrl:'https://example.com/new.jpg'});
+    await h.send('Submit Ticket');assert.equal(attempts,2);
+    await h.send('No Photo');assert.equal(h.state.drafts.ticket.mediaUrl,undefined);
+});
+
 test('fresh access revocation blocks confirmation and rendering draft details',async()=>{
     const h=harness();
     await h.send('Book Meeting Room');
