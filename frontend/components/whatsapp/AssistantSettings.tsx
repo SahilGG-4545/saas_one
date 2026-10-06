@@ -59,6 +59,10 @@ export default function AssistantSettings({organizationId}:{organizationId:strin
     return <section className="mt-8 border-t pt-8 space-y-4">
         <h3 className="text-lg font-semibold">WhatsApp AI</h3>
         <p className="text-sm text-slate-600">Users choose Create Ticket or Book Meeting Room from the menu. AI reads their details; the app checks access and asks for confirmation before creating anything.</p>
+        {!loaded&&(!status?<p role="status" className="text-sm text-slate-600">Loading WhatsApp AI settings and organization users…</p>:<div className="rounded border border-red-200 bg-red-50 p-3 space-y-2">
+            <p role="alert" className="text-sm text-red-800">{status}</p>
+            <button type="button" className="underline text-sm" onClick={()=>setReload(value=>value+1)}>Retry loading settings</button>
+        </div>)}
         {readiness && <p className="text-sm">AI key: {readiness.llm?'ready':'missing'} · Project messaging: {readiness.projectApi?'ready':'missing'} · Global switch: {readiness.globalEnabled?'on':'off'}</p>}
         <fieldset disabled={!loaded||busy} className="space-y-4 disabled:opacity-60">
             {(['enabled','bookingEnabled','ticketEnabled'] as const).map(key=><label key={key} className="flex gap-2 items-center"><input type="checkbox" checked={config[key]} onChange={event=>setConfig({...config,[key]:event.target.checked})}/>{({enabled:'Enable WhatsApp AI for this organization',bookingEnabled:'Allow meeting-room booking',ticketEnabled:'Allow ticket creation'})[key]}</label>)}
@@ -66,7 +70,7 @@ export default function AssistantSettings({organizationId}:{organizationId:strin
             <label className="block">Who can use WhatsApp AI <select className="border rounded ml-2 p-2" value={config.accessMode} onChange={event=>setConfig({...config,accessMode:event.target.value as Config['accessMode']})}>
                 <option value="selected">Selected users — testing</option><option value="all">All authorized users — live</option>
             </select></label>
-            {config.accessMode==='all'?<p className="text-sm text-slate-600">After saving, all approved users with access to this organization’s properties can use the enabled services. Their existing property permissions, booking credits and confirmation requirements still apply.</p>:<div className="space-y-3">
+            {config.accessMode==='all'?<p className="text-sm text-slate-600">After saving, all approved users with access to this organization’s properties can use the enabled services. Their existing property permissions, booking credits and confirmation requirements still apply.</p>:loaded&&<div className="space-y-3">
                 <p className="text-sm text-slate-600">Choose up to 100 test users. Each user needs an approved account and a valid WhatsApp number in their profile.</p>
                 <p className="font-medium text-sm">Selected test users ({selected.length})</p>
                 {selected.length===0&&<p className="text-sm text-slate-500">No test users selected yet.</p>}
@@ -92,8 +96,7 @@ export default function AssistantSettings({organizationId}:{organizationId:strin
             <textarea aria-label="Sample WhatsApp message" className="block border rounded p-2 w-full" value={sample} rows={2} onChange={event=>setSample(event.target.value)}/>
             <button type="button" className="border rounded px-4 py-2" onClick={()=>request('POST')}>Preview interpretation</button>
         </fieldset>
-        {!loaded&&status&&<button type="button" className="underline text-sm" onClick={()=>setReload(value=>value+1)}>Retry loading settings</button>}
-        {status&&<p role="status" className="text-sm">{status}</p>}
+        {loaded&&status&&<p role="status" className="text-sm">{status}</p>}
         {previewExplanation&&<p role="status" className="text-sm">{previewExplanation}</p>}
         {preview&&<pre className="bg-slate-50 rounded p-3 text-xs whitespace-pre-wrap">{preview}</pre>}
     </section>;
