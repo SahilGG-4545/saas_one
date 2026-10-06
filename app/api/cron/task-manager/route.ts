@@ -70,7 +70,7 @@ async function handleRequest(request: NextRequest) {
             });
         }
 
-        // ── Auto Mode (Heartbeat Evaluator) ──────────────────────────────────
+        // ── Auto Mode (Multi-Rule Heartbeat Evaluator) ───────────────────────
         const config = await TaskDatabaseService.getTestingConfig();
 
         // 1. Check master toggle
@@ -85,73 +85,160 @@ async function handleRequest(request: NextRequest) {
         // 2. Compute current IST date and time
         const nowIST = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
         const todayIST = targetDate || `${nowIST.getFullYear()}-${String(nowIST.getMonth() + 1).padStart(2, '0')}-${String(nowIST.getDate()).padStart(2, '0')}`;
+        const currentDayOfWeek = nowIST.getDay(); // 0 = Sun, 1 = Mon ... 6 = Sat
         const currentMinutes = nowIST.getHours() * 60 + nowIST.getMinutes();
         const currentISTTime = `${String(nowIST.getHours()).padStart(2, '0')}:${String(nowIST.getMinutes()).padStart(2, '0')}`;
 
-        // 3. Deduplication check (ensure it runs at most once per calendar day)
-        if (!force && config.cronLastRunDate === todayIST) {
+        const targetRuleId = request.nextUrl.searchParams.get('ruleId') || undefined;
+
+        // Rules to evaluate: either a specific requested rule or all active rules
+        const rules = config.rules || TaskDatabaseService.getDefaultNotificationRules(config.cronTiming);
+        const candidates = targetRuleId ? rules.filter(r => r.id === targetRuleId) : rules;
+
+        if (candidates.length === 0) {
             return NextResponse.json({
-                ok: true,
-                action: 'already_executed_today',
-                todayIST,
-                lastRunDate: config.cronLastRunDate,
-                message: `Daily tasks have already been generated and dispatched for today (${todayIST}).`
-            });
+                ok: false,
+                error: targetRuleId ? `Rule '${targetRuleId}' not found.` : 'No notification rules configured.'
+            }, { status: 404 });
         }
 
-        // 4. Check if scheduled time has arrived
-        const [targetHour, targetMin] = (config.cronTiming || '09:00').split(':').map(Number);
-        const targetMinutes = (targetHour || 9) * 60 + (targetMin || 0);
+        const ruleResults: Array<{
+            ruleId: string;
+            ruleName: string;
+            status: 'dispatched' | 'waiting' | 'already_executed_today' | 'disabled' | 'not_scheduled_today' | 'outside_operational_window';
+            message?: string;
+            summary?: string;
+        }> = [];
 
-        if (!force && currentMinutes < targetMinutes) {
-            return NextResponse.json({
-                ok: true,
-                action: 'waiting',
-                currentIST: currentISTTime,
-                scheduledIST: config.cronTiming || '09:00',
-                message: `Scheduled time (${config.cronTiming || '09:00'} IST) has not arrived yet. Current IST: ${currentISTTime}`
+        let executedCount = 0;
+
+        for (const rule of candidates) {
+            // Check individual rule toggle
+            if (rule.enabled === false) {
+                ruleResults.push({
+                    ruleId: rule.id,
+                    ruleName: rule.name,
+                    status: 'disabled',
+                    message: `Rule '${rule.name}' is currently paused.`
+                });
+                continue;
+            }
+
+            // Check active day of week (e.g. skip Sunday unless forced)
+            if (!force && rule.daysOfWeek && !rule.daysOfWeek.includes(currentDayOfWeek)) {
+                ruleResults.push({
+                    ruleId: rule.id,
+                    ruleName: rule.name,
+                    status: 'not_scheduled_today',
+                    message: `Rule '${rule.name}' is not scheduled for today (Day ${currentDayOfWeek}).`
+                });
+                continue;
+            }
+
+            // Deduplication check per rule
+            if (!force && rule.lastRunDate === todayIST) {
+                ruleResults.push({
+                    ruleId: rule.id,
+                    ruleName: rule.name,
+                    status: 'already_executed_today',
+                    message: `Rule '${rule.name}' already dispatched for today (${todayIST}).`
+                });
+                continue;
+            }
+
+            // Check if scheduled time has arrived
+            const [targetHour, targetMin] = (rule.targetTimeIST || '09:00').split(':').map(Number);
+            const targetMinutes = (targetHour || 9) * 60 + (targetMin || 0);
+
+            if (!force && currentMinutes < targetMinutes) {
+                ruleResults.push({
+                    ruleId: rule.id,
+                    ruleName: rule.name,
+                    status: 'waiting',
+                    message: `Scheduled time (${rule.targetTimeIST} IST) has not arrived yet. Current IST: ${currentISTTime}`
+                });
+                continue;
+            }
+
+            // Evening cutoff safety (after 20:30 IST)
+            if (!force && currentMinutes > 20 * 60 + 30) {
+                ruleResults.push({
+                    ruleId: rule.id,
+                    ruleName: rule.name,
+                    status: 'outside_operational_window',
+                    message: `Current time (${currentISTTime} IST) is past evening operational cutoff (20:30 IST).`
+                });
+                continue;
+            }
+
+            // Execute tasks & notification for this rule
+            const genResult = await TaskDailyGeneratorService.generateDailyFixedTasks({
+                date: todayIST,
+                departmentId: deptId
             });
+
+            const notifResult = await TaskNotificationService.sendMorningNotifications({
+                date: todayIST,
+                departmentId: deptId,
+                dryRun,
+                rule
+            });
+
+
+            const summary = `Generated ${genResult.tasksGenerated} tasks (${genResult.tasksAlreadyExisting} existing). Sent ${notifResult.notificationsSent} digests (${notifResult.skippedNoTasks} skipped).`;
+
+            // Stamp rule execution in DB
+            await TaskDatabaseService.updateNotificationRule(rule.id, {
+                lastRunDate: todayIST,
+                lastRunSummary: summary
+            });
+
+            // If it's the primary morning digest, maintain legacy fields too
+            if (rule.id === 'rule_morning_digest' || rule.ruleType === 'morning_digest') {
+                await TaskDatabaseService.saveTestingConfig({
+                    cronLastRunDate: todayIST,
+                    cronLastRunSummary: summary
+                });
+            }
+
+            ruleResults.push({
+                ruleId: rule.id,
+                ruleName: rule.name,
+                status: 'dispatched',
+                summary
+            });
+            executedCount++;
         }
 
-        // 5. Evening cutoff safety (avoid sending morning tasks at night)
-        if (!force && currentMinutes > 20 * 60) {
-            return NextResponse.json({
-                ok: true,
-                action: 'outside_operational_window',
-                currentIST: currentISTTime,
-                message: `Current time (${currentISTTime} IST) is past evening operational cutoff (20:00 IST).`
-            });
+        let overallAction: string = 'evaluated';
+        let overallMessage: string | undefined = undefined;
+
+        if (executedCount > 0) {
+            overallAction = 'dispatched';
+            overallMessage = ruleResults.find(r => r.status === 'dispatched')?.summary;
+        } else if (ruleResults.some(r => r.status === 'waiting')) {
+            overallAction = 'waiting';
+            overallMessage = ruleResults.find(r => r.status === 'waiting')?.message;
+        } else if (ruleResults.length > 0 && ruleResults.every(r => r.status === 'already_executed_today')) {
+            overallAction = 'already_executed_today';
+            overallMessage = 'All scheduled notification rules have already been executed for today.';
+        } else if (ruleResults.length > 0 && ruleResults.every(r => r.status === 'disabled')) {
+            overallAction = 'paused';
+            overallMessage = 'All notification rules are currently paused.';
         }
-
-        // 6. Execute task generation & notification dispatch (locked to Tech department)
-        const genResult = await TaskDailyGeneratorService.generateDailyFixedTasks({
-            date: todayIST,
-            departmentId: deptId
-        });
-
-        const notifResult = await TaskNotificationService.sendMorningNotifications({
-            date: todayIST,
-            departmentId: deptId,
-            dryRun
-        });
-
-        const summary = `Generated ${genResult.tasksGenerated} tasks (${genResult.tasksAlreadyExisting} existing). Sent ${notifResult.notificationsSent} digests (${notifResult.skippedNoTasks} skipped).`;
-
-        // 7. Stamp run date & summary in DB
-        await TaskDatabaseService.saveTestingConfig({
-            cronLastRunDate: todayIST,
-            cronLastRunSummary: summary
-        });
 
         return NextResponse.json({
             ok: true,
-            action: 'dispatched',
+            action: overallAction,
+            message: overallMessage,
             todayIST,
             currentIST: currentISTTime,
-            summary,
-            genResult,
-            notifResult
+            rulesEvaluated: ruleResults.length,
+            rulesDispatched: executedCount,
+            results: ruleResults
         });
+
+
     } catch (err: any) {
         console.error('[TaskReminderCron] Error executing action:', err);
         return NextResponse.json({ ok: false, error: err?.message || 'Internal error' }, { status: 500 });

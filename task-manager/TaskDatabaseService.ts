@@ -11,6 +11,8 @@ import {
     TaskType,
     EmployeeRole,
     TestingConfig,
+    NotificationRule,
+    NotificationTaskFilters,
 } from './types';
 
 function mapProfileToEmployee(profile: any): Employee {
@@ -323,6 +325,90 @@ export class TaskDatabaseService {
         return (data || []) as TaskAssignment[];
     }
 
+    /**
+     * Phase 2: Fetches assignments applying task selection filters and carry-forward rules.
+     * Safely includes uncompleted tasks from yesterday or previous days without creating DB duplicates.
+     */
+    static async getFilteredAssignments(params: {
+        employeeId: string;
+        date?: string; // YYYY-MM-DD
+        filters?: NotificationTaskFilters;
+    }): Promise<Array<TaskAssignment & { isCarriedForward?: boolean }>> {
+        const targetDate = params.date || new Date().toISOString().slice(0, 10);
+        const filters = params.filters || {
+            includeTodayFixed: true,
+            includeTodayAssigned: true,
+            includeYesterdayPending: false
+        };
+
+        const assignments: Array<TaskAssignment & { isCarriedForward?: boolean }> = [];
+
+        // 1. Fetch Today's Tasks
+        const todayQuery = supabaseAdmin
+            .from('task_assignments')
+            .select(`
+                *,
+                template:task_templates(*)
+            `)
+            .eq('employee_id', params.employeeId)
+            .eq('assigned_date', targetDate);
+
+        const { data: rawToday, error: todayErr } = await todayQuery.order('created_at', { ascending: true });
+        if (todayErr) {
+            console.error('[TaskDatabaseService] Error fetching today assignments in filter:', todayErr);
+            throw todayErr;
+        }
+
+        const todayTasks = (rawToday || []) as TaskAssignment[];
+        for (const t of todayTasks) {
+            const isFixed = Boolean(t.task_template_id);
+            if (isFixed && filters.includeTodayFixed === false) continue;
+            if (!isFixed && filters.includeTodayAssigned === false) continue;
+            if (filters.onlyPending && t.status === 'completed') continue;
+            assignments.push(t);
+        }
+
+        // 2. Fetch Carried-Forward Pending Tasks from Previous Days
+        if (filters.includeYesterdayPending) {
+            const lookbackDays = Math.max(1, filters.lookbackDays || 1);
+            const targetD = new Date(targetDate);
+            const startD = new Date(targetD);
+            startD.setDate(startD.getDate() - lookbackDays);
+            const startDateStr = startD.toISOString().slice(0, 10);
+
+            const { data: rawPrevious, error: prevErr } = await supabaseAdmin
+                .from('task_assignments')
+                .select(`
+                    *,
+                    template:task_templates(*)
+                `)
+                .eq('employee_id', params.employeeId)
+                .gte('assigned_date', startDateStr)
+                .lt('assigned_date', targetDate)
+                .neq('status', 'completed')
+                .order('assigned_date', { ascending: false });
+
+            if (prevErr) {
+                console.error('[TaskDatabaseService] Error fetching carried-forward assignments:', prevErr);
+                throw prevErr;
+            }
+
+            const prevTasks = (rawPrevious || []) as TaskAssignment[];
+            for (const pt of prevTasks) {
+                // Avoid duplicate if task with same title is already present today
+                const alreadyHasToday = assignments.some(at => at.title.trim().toLowerCase() === pt.title.trim().toLowerCase());
+                if (!alreadyHasToday) {
+                    assignments.push({
+                        ...pt,
+                        isCarriedForward: true
+                    });
+                }
+            }
+        }
+
+        return assignments;
+    }
+
     static async updateAssignmentStatus(params: {
         assignmentId: string;
         status: TaskStatus;
@@ -430,7 +516,120 @@ export class TaskDatabaseService {
         }
     }
 
+    static async getAuditLogs(params: {
+        eventType?: string;
+        limit?: number;
+    } = {}): Promise<any[]> {
+        let query = supabaseAdmin
+            .from('task_audit_logs')
+            .select('*')
+            .order('created_at', { ascending: false })
+            .limit(params.limit || 20);
+
+        if (params.eventType) {
+            query = query.eq('event_type', params.eventType);
+        }
+
+        const { data, error } = await query;
+        if (error) {
+            console.error('[TaskDatabaseService] Error fetching audit logs:', error);
+            return [];
+        }
+        return data || [];
+    }
+
+    static async clearAuditLogs(eventType = 'whatsapp_sent'): Promise<void> {
+        try {
+            await supabaseAdmin
+                .from('task_audit_logs')
+                .delete()
+                .eq('event_type', eventType);
+        } catch (err) {
+            console.warn('[TaskDatabaseService] Error clearing audit logs:', err);
+        }
+    }
+
     // ── Testing Whitelist & Cron Schedule Config ────────────────────────────
+    static getDefaultNotificationRules(legacyTiming?: string): NotificationRule[] {
+        return [
+            {
+                id: 'rule_morning_digest',
+                name: 'Morning Task Kickoff',
+                enabled: true,
+                targetTimeIST: legacyTiming || '09:00',
+                daysOfWeek: [1, 2, 3, 4, 5, 6], // Mon-Sat
+                ruleType: 'morning_digest',
+                taskFilters: {
+                    includeTodayFixed: true,
+                    includeTodayAssigned: true,
+                    includeYesterdayPending: true,
+                    lookbackDays: 1,
+                    onlyPending: false
+                },
+                conditions: {
+                    skipIfZeroTasks: false,
+                    requirePendingOnly: false
+                },
+                recipients: {
+                    target: 'tech_all',
+                    notifyReportingManager: true
+                },
+                lastRunDate: null,
+                lastRunSummary: null
+            },
+            {
+                id: 'rule_pending_reminder',
+                name: 'Midday Progress Check-in',
+                enabled: false, // Paused by default for Phase 1 safety
+                targetTimeIST: '14:30',
+                daysOfWeek: [1, 2, 3, 4, 5, 6],
+                ruleType: 'pending_reminder',
+                taskFilters: {
+                    includeTodayFixed: true,
+                    includeTodayAssigned: true,
+                    includeYesterdayPending: true,
+                    lookbackDays: 1,
+                    onlyPending: true // Focus on incomplete tasks
+                },
+                conditions: {
+                    skipIfZeroTasks: true,
+                    requirePendingOnly: true // Skip if all finished
+                },
+                recipients: {
+                    target: 'tech_all',
+                    notifyReportingManager: false
+                },
+                lastRunDate: null,
+                lastRunSummary: null
+            },
+            {
+                id: 'rule_eod_summary',
+                name: 'Evening Wrap-up & Overdue Alert',
+                enabled: false, // Paused by default for Phase 1 safety
+                targetTimeIST: '18:30',
+                daysOfWeek: [1, 2, 3, 4, 5, 6],
+                ruleType: 'eod_summary',
+                taskFilters: {
+                    includeTodayFixed: true,
+                    includeTodayAssigned: true,
+                    includeYesterdayPending: true,
+                    lookbackDays: 3,
+                    onlyPending: false
+                },
+                conditions: {
+                    skipIfZeroTasks: true,
+                    requirePendingOnly: false
+                },
+                recipients: {
+                    target: 'tech_all',
+                    notifyReportingManager: true
+                },
+                lastRunDate: null,
+                lastRunSummary: null
+            }
+        ];
+    }
+
     static async getTestingConfig(): Promise<TestingConfig> {
         const { data } = await supabaseAdmin
             .from('conversation_context')
@@ -440,6 +639,10 @@ export class TaskDatabaseService {
             .maybeSingle();
 
         const raw = (data?.context_data as any) || {};
+        const rules = Array.isArray(raw.rules) && raw.rules.length > 0
+            ? raw.rules
+            : this.getDefaultNotificationRules(raw.cronTiming);
+
         return {
             enabled: Boolean(raw.enabled),
             manager: raw.manager,
@@ -449,6 +652,7 @@ export class TaskDatabaseService {
             cronEnabled: raw.cronEnabled !== undefined ? Boolean(raw.cronEnabled) : true,
             cronLastRunDate: raw.cronLastRunDate || null,
             cronLastRunSummary: raw.cronLastRunSummary || null,
+            rules,
         };
     }
 
@@ -458,6 +662,27 @@ export class TaskDatabaseService {
             ...existing,
             ...config,
         };
+
+        // Sync legacy cronTiming with rule_morning_digest
+        if (config.cronTiming && merged.rules) {
+            merged.rules = merged.rules.map(r => {
+                if (r.id === 'rule_morning_digest') {
+                    return { ...r, targetTimeIST: config.cronTiming! };
+                }
+                return r;
+            });
+        }
+
+        // Sync legacy cronLastRunDate reset with rule_morning_digest
+        if (config.cronLastRunDate === null && merged.rules) {
+            merged.rules = merged.rules.map(r => {
+                if (r.id === 'rule_morning_digest') {
+                    return { ...r, lastRunDate: null, lastRunSummary: null };
+                }
+                return r;
+            });
+        }
+
 
         const expiresAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
         await supabaseAdmin
@@ -475,4 +700,37 @@ export class TaskDatabaseService {
 
         return merged;
     }
+
+    static async updateNotificationRule(ruleId: string, updates: Partial<NotificationRule>): Promise<TestingConfig> {
+        const config = await this.getTestingConfig();
+        const existingRules = config.rules || this.getDefaultNotificationRules();
+        const updatedRules = existingRules.map(rule => {
+            if (rule.id === ruleId) {
+                return { ...rule, ...updates };
+            }
+            return rule;
+        });
+
+        // If ruleId didn't exist and updates has an id, append it
+        if (!existingRules.some(r => r.id === ruleId) && updates.id) {
+            updatedRules.push(updates as NotificationRule);
+        }
+
+        return this.saveTestingConfig({ rules: updatedRules });
+    }
+
+    static async resetNotificationRuleRun(ruleId: string): Promise<TestingConfig> {
+        return this.updateNotificationRule(ruleId, {
+            lastRunDate: null,
+            lastRunSummary: null
+        });
+    }
+
+    static async deleteNotificationRule(ruleId: string): Promise<TestingConfig> {
+        const config = await this.getTestingConfig();
+        const existingRules = config.rules || this.getDefaultNotificationRules();
+        const updatedRules = existingRules.filter(r => r.id !== ruleId);
+        return this.saveTestingConfig({ rules: updatedRules });
+    }
 }
+

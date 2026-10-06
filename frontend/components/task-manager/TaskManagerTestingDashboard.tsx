@@ -24,8 +24,30 @@ import {
     Play,
     Check,
     Settings2,
-    RotateCcw
+    RotateCcw,
+    Plus,
+    Trash2,
+    ChevronDown,
+    ChevronUp,
+    Sliders,
+    Calendar,
+    FileText,
+    Eye,
+    Filter,
+    Sun,
+    Moon,
+    AlertTriangle,
+    Copy,
+    History,
+    X
 } from 'lucide-react';
+import type {
+    NotificationRule,
+    NotificationRuleType,
+    NotificationTaskFilters,
+    NotificationConditions,
+    NotificationCustomTemplate
+} from '@/task-manager/types';
 
 interface EmployeeItem {
     id: string;
@@ -296,7 +318,7 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
     const [selectedEmployeeId, setSelectedEmployeeId] = useState<string>('');
     const [sendKickoff, setSendKickoff] = useState(true);
 
-    // Cron Schedule & Immediate Trigger State
+    // Cron Schedule & Multi-Rule Engine State
     const [cronTiming, setCronTiming] = useState('09:00');
     const [cronEnabled, setCronEnabled] = useState(true);
     const [whitelistEnabled, setWhitelistEnabled] = useState(false);
@@ -306,6 +328,50 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
     const [triggerLoading, setTriggerLoading] = useState(false);
     const [dryRunMode, setDryRunMode] = useState(true);
     const [currentISTDisplay, setCurrentISTDisplay] = useState('');
+
+    // Phase 4: Multi-Rule Notification Management State
+    const [rules, setRules] = useState<NotificationRule[]>([]);
+    const [expandedRuleId, setExpandedRuleId] = useState<string | null>(null);
+    const [actionRuleId, setActionRuleId] = useState<string | null>(null);
+    const [showAddRuleModal, setShowAddRuleModal] = useState<boolean>(false);
+    const [ruleEditState, setRuleEditState] = useState<Record<string, NotificationRule>>({});
+    const [newRuleForm, setNewRuleForm] = useState<{
+        name: string;
+        ruleType: NotificationRuleType;
+        targetTimeIST: string;
+        daysOfWeek: number[];
+        taskFilters: NotificationTaskFilters;
+        conditions: NotificationConditions;
+        customTemplate: NotificationCustomTemplate;
+    }>({
+        name: 'Midday Progress Check-in',
+        ruleType: 'pending_reminder',
+        targetTimeIST: '14:00',
+        daysOfWeek: [1, 2, 3, 4, 5, 6],
+        taskFilters: {
+            includeTodayFixed: true,
+            includeTodayAssigned: true,
+            includeYesterdayPending: true,
+            lookbackDays: 1,
+            onlyPending: true
+        },
+        conditions: {
+            skipIfZeroTasks: true,
+            requirePendingOnly: true
+        },
+        customTemplate: {
+            headerGreeting: 'Hello {{firstName}}! 📋 Here is your afternoon task check-in:',
+            customMessage: '',
+            footerInstruction: 'Keep up the momentum! 🔥',
+            includeQuickReplies: true
+        }
+    });
+
+    // Phase 5: Notification History & Audit Trail State
+    const [auditLogs, setAuditLogs] = useState<any[]>([]);
+    const [loadingLogs, setLoadingLogs] = useState<boolean>(false);
+    const [expandedLogId, setExpandedLogId] = useState<string | null>(null);
+    const [copiedLogId, setCopiedLogId] = useState<string | null>(null);
 
     useEffect(() => {
         const updateIST = () => {
@@ -358,7 +424,7 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
                 }
             }
 
-            // Also load Testing & Cron Configuration
+            // Load Testing & Notification Rules Configuration
             try {
                 const configRes = await fetch('/api/task-manager/testing-config');
                 const configData = await configRes.json();
@@ -368,6 +434,18 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
                     setWhitelistEnabled(Boolean(configData.config.enabled));
                     setCronLastRunDate(configData.config.cronLastRunDate || null);
                     setCronLastRunSummary(configData.config.cronLastRunSummary || null);
+                    
+                    const fetchedRules = configData.config.rules || [];
+                    setRules(fetchedRules);
+                    const editMap: Record<string, NotificationRule> = {};
+                    fetchedRules.forEach((r: NotificationRule) => {
+                        editMap[r.id] = JSON.parse(JSON.stringify(r));
+                    });
+                    setRuleEditState(editMap);
+
+                    if (configData.logs && Array.isArray(configData.logs)) {
+                        setAuditLogs(configData.logs);
+                    }
                 }
             } catch (cfgErr) {
                 console.warn('[TaskManagerTestingDashboard] Failed to load testing config:', cfgErr);
@@ -447,7 +525,6 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
                 details: data.message
             });
 
-            // Refresh to update latest run date and summary
             await fetchData();
         } catch (err: any) {
             setStatusMessage({
@@ -492,6 +569,423 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
             });
         } finally {
             setResettingRun(false);
+        }
+    };
+
+    // ── Phase 4: Granular Rule Management Handlers ─────────────────────────
+    const handleToggleRule = async (rule: NotificationRule) => {
+        const nextEnabled = !rule.enabled;
+        setRules(prev => prev.map(r => r.id === rule.id ? { ...r, enabled: nextEnabled } : r));
+        try {
+            const res = await fetch('/api/task-manager/testing-config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    action: 'update_rule',
+                    ruleId: rule.id,
+                    updates: { enabled: nextEnabled }
+                })
+            });
+            const data = await res.json();
+            if (!data.success) throw new Error(data.error);
+        } catch (err: any) {
+            setRules(prev => prev.map(r => r.id === rule.id ? { ...r, enabled: rule.enabled } : r));
+            setStatusMessage({ type: 'error', title: 'Failed to toggle rule', details: err.message });
+        }
+    };
+
+    const handleUpdateRuleTime = async (ruleId: string, newTiming: string) => {
+        setRules(prev => prev.map(r => r.id === ruleId ? { ...r, targetTimeIST: newTiming } : r));
+        try {
+            await fetch('/api/task-manager/testing-config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    action: 'update_rule',
+                    ruleId,
+                    updates: { targetTimeIST: newTiming }
+                })
+            });
+            if (ruleId === 'rule_morning_digest') setCronTiming(newTiming);
+        } catch (err: any) {
+            console.error('Failed to update timing:', err);
+        }
+    };
+
+    const handleQuickOffset = async (ruleId: string, minutesAhead: number) => {
+        const d = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+        d.setMinutes(d.getMinutes() + minutesAhead);
+        const h = String(d.getHours()).padStart(2, '0');
+        const m = String(d.getMinutes()).padStart(2, '0');
+        const newTime = `${h}:${m}`;
+        await handleUpdateRuleTime(ruleId, newTime);
+        setStatusMessage({
+            type: 'success',
+            title: `Timing Set to ${newTime} IST`,
+            details: `Rule scheduled for ${minutesAhead} minute(s) from current IST. Automated cron will trigger it.`
+        });
+    };
+
+    const handleToggleDay = async (rule: NotificationRule, dayNum: number) => {
+        const currentDays = rule.daysOfWeek || [];
+        const nextDays = currentDays.includes(dayNum)
+            ? currentDays.filter(d => d !== dayNum)
+            : [...currentDays, dayNum].sort((a, b) => a - b);
+        
+        setRules(prev => prev.map(r => r.id === rule.id ? { ...r, daysOfWeek: nextDays } : r));
+        try {
+            await fetch('/api/task-manager/testing-config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    action: 'update_rule',
+                    ruleId: rule.id,
+                    updates: { daysOfWeek: nextDays }
+                })
+            });
+        } catch (err: any) {
+            console.error('Failed to update active days:', err);
+        }
+    };
+
+    const handleTriggerRule = async (ruleId: string, dryRun: boolean) => {
+        setActionRuleId(ruleId);
+        setStatusMessage(null);
+        try {
+            const res = await fetch('/api/task-manager/testing-config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    action: 'trigger_dispatch',
+                    ruleId,
+                    dryRun
+                })
+            });
+            const data = await res.json();
+            if (!res.ok || !data.success) throw new Error(data.error || 'Failed to dispatch rule');
+
+            setStatusMessage({
+                type: 'success',
+                title: dryRun ? '🛡️ Dry-Run Simulation Completed' : '⚡ Live Rule Dispatched',
+                details: data.message
+            });
+            await fetchData();
+        } catch (err: any) {
+            setStatusMessage({
+                type: 'error',
+                title: 'Rule Trigger Failed',
+                details: err.message
+            });
+        } finally {
+            setActionRuleId(null);
+        }
+    };
+
+    const handleResetRule = async (ruleId: string) => {
+        setActionRuleId(ruleId);
+        setStatusMessage(null);
+        try {
+            const res = await fetch('/api/task-manager/testing-config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    action: 'reset_rule',
+                    ruleId
+                })
+            });
+            const data = await res.json();
+            if (!res.ok || !data.success) throw new Error(data.error || 'Failed to reset rule');
+
+            setStatusMessage({
+                type: 'success',
+                title: 'Rule Run Status Reset',
+                details: 'Today\'s run stamp has been cleared. The rule is re-armed and ready to fire again!'
+            });
+            await fetchData();
+        } catch (err: any) {
+            setStatusMessage({
+                type: 'error',
+                title: 'Reset Failed',
+                details: err.message
+            });
+        } finally {
+            setActionRuleId(null);
+        }
+    };
+
+    const handleResetAllRules = async () => {
+        setActionLoading(true);
+        setStatusMessage(null);
+        try {
+            const res = await fetch('/api/task-manager/testing-config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    action: 'reset_rule',
+                    ruleId: 'all'
+                })
+            });
+            const data = await res.json();
+            if (!res.ok || !data.success) throw new Error(data.error || 'Failed to reset all rules');
+
+            setStatusMessage({
+                type: 'success',
+                title: 'All Rules Reset for Today',
+                details: 'All notification schedules are re-armed and ready to fire again today.'
+            });
+            await fetchData();
+        } catch (err: any) {
+            setStatusMessage({
+                type: 'error',
+                title: 'Reset Failed',
+                details: err.message
+            });
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    const handleDeleteRule = async (ruleId: string, ruleName: string) => {
+        if (!window.confirm(`Are you sure you want to delete notification rule "${ruleName}"?`)) return;
+        setActionLoading(true);
+        setStatusMessage(null);
+        try {
+            const res = await fetch('/api/task-manager/testing-config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    action: 'delete_rule',
+                    ruleId
+                })
+            });
+            const data = await res.json();
+            if (!res.ok || !data.success) throw new Error(data.error || 'Failed to delete rule');
+
+            setStatusMessage({
+                type: 'success',
+                title: 'Rule Deleted',
+                details: `Notification rule "${ruleName}" has been removed.`
+            });
+            if (expandedRuleId === ruleId) setExpandedRuleId(null);
+            await fetchData();
+        } catch (err: any) {
+            setStatusMessage({
+                type: 'error',
+                title: 'Delete Failed',
+                details: err.message
+            });
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    const handleSaveRuleAdvanced = async (ruleId: string) => {
+        const edited = ruleEditState[ruleId];
+        if (!edited) return;
+        setActionRuleId(ruleId);
+        setStatusMessage(null);
+        try {
+            const res = await fetch('/api/task-manager/testing-config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    action: 'update_rule',
+                    ruleId,
+                    updates: {
+                        name: edited.name,
+                        taskFilters: edited.taskFilters,
+                        conditions: edited.conditions,
+                        customTemplate: edited.customTemplate
+                    }
+                })
+            });
+            const data = await res.json();
+            if (!res.ok || !data.success) throw new Error(data.error || 'Failed to save rule settings');
+
+            setStatusMessage({
+                type: 'success',
+                title: 'Rule Settings Saved',
+                details: `Filters, conditions, and custom template updated for "${edited.name}".`
+            });
+            await fetchData();
+        } catch (err: any) {
+            setStatusMessage({
+                type: 'error',
+                title: 'Save Failed',
+                details: err.message
+            });
+        } finally {
+            setActionRuleId(null);
+        }
+    };
+
+    const handleCreateNewRule = async () => {
+        if (!newRuleForm.name.trim()) {
+            setStatusMessage({ type: 'error', title: 'Rule Name Required', details: 'Please enter a name for the rule.' });
+            return;
+        }
+        setActionLoading(true);
+        setStatusMessage(null);
+        const ruleId = `rule_${Date.now()}`;
+        const newRule: NotificationRule = {
+            id: ruleId,
+            name: newRuleForm.name.trim(),
+            enabled: true,
+            targetTimeIST: newRuleForm.targetTimeIST,
+            daysOfWeek: newRuleForm.daysOfWeek,
+            ruleType: newRuleForm.ruleType,
+            taskFilters: newRuleForm.taskFilters,
+            conditions: newRuleForm.conditions,
+            recipients: { target: 'tech_all', notifyReportingManager: true },
+            customTemplate: newRuleForm.customTemplate,
+            lastRunDate: null,
+            lastRunSummary: null
+        };
+
+        try {
+            const res = await fetch('/api/task-manager/testing-config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    action: 'update_rule',
+                    ruleId,
+                    updates: newRule
+                })
+            });
+            const data = await res.json();
+            if (!res.ok || !data.success) throw new Error(data.error || 'Failed to create rule');
+
+            setShowAddRuleModal(false);
+            setStatusMessage({
+                type: 'success',
+                title: 'Notification Rule Created',
+                details: `Rule "${newRule.name}" configured and active at ${newRule.targetTimeIST} IST.`
+            });
+            await fetchData();
+        } catch (err: any) {
+            setStatusMessage({ type: 'error', title: 'Creation Failed', details: err.message });
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    const handleMasterWhitelistToggle = async (nextVal: boolean) => {
+        setWhitelistEnabled(nextVal);
+        try {
+            const res = await fetch('/api/task-manager/testing-config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    enabled: nextVal,
+                    employees: nextVal
+                        ? [{ name: 'Sahil Gorde', phone: '8433649199' }]
+                        : []
+                })
+            });
+            const data = await res.json();
+            if (!data.success) throw new Error(data.error);
+            setStatusMessage({
+                type: 'success',
+                title: nextVal ? '🔒 Whitelist Protection Enabled' : '👥 Whitelist Protection Disabled',
+                details: nextVal
+                    ? 'All automated digests and test runs strictly target Sahil Gorde (8433649199).'
+                    : 'Caution: Outbound notifications will go to all Tech team members.'
+            });
+        } catch (err: any) {
+            setWhitelistEnabled(!nextVal);
+            setStatusMessage({ type: 'error', title: 'Failed to update whitelist', details: err.message });
+        }
+    };
+
+    const handleMasterCronToggle = async () => {
+        const nextVal = !cronEnabled;
+        setCronEnabled(nextVal);
+        try {
+            const res = await fetch('/api/task-manager/testing-config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ cronEnabled: nextVal })
+            });
+            const data = await res.json();
+            if (!data.success) throw new Error(data.error);
+            setStatusMessage({
+                type: 'success',
+                title: nextVal ? '⚡ Automated Heartbeat Resumed' : '⏸️ Automated Heartbeat Paused',
+                details: nextVal ? 'Scheduled notification rules will trigger on time.' : 'All automated cron checks are currently halted.'
+            });
+        } catch (err: any) {
+            setCronEnabled(!nextVal);
+            setStatusMessage({ type: 'error', title: 'Failed to toggle heartbeat', details: err.message });
+        }
+    };
+
+    const fetchAuditLogs = async () => {
+        setLoadingLogs(true);
+        try {
+            const res = await fetch('/api/task-manager/testing-config');
+            const data = await res.json();
+            if (data.success && data.logs) {
+                setAuditLogs(data.logs);
+            }
+        } catch (err) {
+            console.warn('[TaskManagerTestingDashboard] Failed to fetch audit logs:', err);
+        } finally {
+            setLoadingLogs(false);
+        }
+    };
+
+    const handleClearLogs = async () => {
+        if (!window.confirm('Are you sure you want to clear all notification dispatch audit logs?')) return;
+        setLoadingLogs(true);
+        try {
+            const res = await fetch('/api/task-manager/testing-config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'clear_logs' })
+            });
+            const data = await res.json();
+            if (data.success) {
+                setAuditLogs([]);
+                setStatusMessage({
+                    type: 'success',
+                    title: 'Audit Logs Cleared',
+                    details: 'Notification dispatch audit history has been successfully reset.'
+                });
+            }
+        } catch (err: any) {
+            setStatusMessage({
+                type: 'error',
+                title: 'Failed to clear logs',
+                details: err?.message
+            });
+        } finally {
+            setLoadingLogs(false);
+        }
+    };
+
+    const handleCopyLogPreview = (logId: string, text: string) => {
+        if (navigator?.clipboard) {
+            navigator.clipboard.writeText(text);
+            setCopiedLogId(logId);
+            setTimeout(() => setCopiedLogId(null), 2000);
+        }
+    };
+
+    const formatISTTime = (isoString?: string) => {
+        if (!isoString) return 'Just now';
+        try {
+            const d = new Date(isoString);
+            return d.toLocaleString('en-IN', {
+                timeZone: 'Asia/Kolkata',
+                day: 'numeric',
+                month: 'short',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hour12: true
+            });
+        } catch {
+            return isoString;
         }
     };
 
@@ -725,241 +1219,1146 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
                 </div>
             </div>
 
-            {/* Automated Daily Routine & Cron Timing Card (Phase 3 & 4) */}
+            {/* Multi-Schedule Routine & Notification Rules Manager (Phase 4) */}
             <div className={`bg-white border border-slate-200 rounded-3xl p-6 md:p-8 shadow-sm space-y-6 ${animationStep >= 3 ? 'tm-slide-up-visible' : 'tm-slide-up-hidden'}`}>
+                {/* Header Row */}
                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                     <div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
                             <Clock className="w-5 h-5 text-amber-500" />
-                            <h2 className="text-lg font-black text-slate-900 tracking-tight">
-                                Automated Daily Routine & Cron Timing
+                            <h2 className="text-lg md:text-xl font-black text-slate-900 tracking-tight">
+                                Notification Rules & Multi-Schedule Cron Engine
                             </h2>
-                            <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-100 text-amber-800 border border-amber-200">
-                                In-App Schedule
+                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-100 text-amber-900 border border-amber-300">
+                                Multi-Rule Active
+                            </span>
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-indigo-50 text-indigo-700 border border-indigo-200">
+                                IST Heartbeat
                             </span>
                         </div>
-                        <p className="text-xs text-slate-500 mt-1">
-                            Configure when daily fixed tasks and morning digests are sent to the Tech department. Modifying the time here applies immediately without redeploying.
+                        <p className="text-xs text-slate-500 mt-1 max-w-3xl">
+                            Configure multiple daily notification schedules, custom WhatsApp message templates, task selection filters, and automated carry-forward rules for the Tech department. Changes apply immediately without redeploying.
                         </p>
                     </div>
 
-                    {/* Master Active / Paused Pill */}
-                    <div className="flex items-center gap-2">
-                        <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold ${
-                            cronEnabled
-                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                                : 'bg-slate-100 text-slate-600 border border-slate-200'
-                        }`}>
-                            <span className={`w-2 h-2 rounded-full ${cronEnabled ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
-                            {cronEnabled ? 'Heartbeat Active' : 'Automation Paused'}
-                        </span>
-                    </div>
-                </div>
-
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pt-2 border-t border-slate-100">
-                    {/* Left: Schedule Configuration */}
-                    <div className="space-y-4 bg-slate-50/70 border border-slate-200 rounded-2xl p-5">
-                        <h3 className="text-xs font-black text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
-                            <Settings2 className="w-3.5 h-3.5 text-primary" />
-                            Schedule Settings
-                        </h3>
-
-                        {/* Target Dispatch Time Section */}
-                        <div className="space-y-2">
-                            <div className="flex items-center justify-between">
-                                <label className="text-xs font-bold text-slate-700">
-                                    Target Dispatch Time (IST)
-                                </label>
-                                {currentISTDisplay && (
-                                    <span className="text-[10px] font-mono text-slate-500 bg-white px-2 py-0.5 rounded-md border border-slate-200 shadow-xs">
-                                        Current IST: {currentISTDisplay}
-                                    </span>
-                                )}
-                            </div>
-
-                            <TwelveHourTimePicker
-                                value={cronTiming}
-                                onChange={(val) => setCronTiming(val)}
-                            />
-
-                            {/* Quick Test Chips */}
-                            <div className="flex items-center gap-1.5 pt-1 flex-wrap">
-                                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Quick:</span>
-                                <button
-                                    type="button"
-                                    onClick={() => setTimeOffset(2)}
-                                    className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200/80 rounded-md text-[10px] font-bold transition-colors"
-                                    title="Set to 2 minutes from current IST for testing"
-                                >
-                                    +2m Test
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => setTimeOffset(5)}
-                                    className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200/80 rounded-md text-[10px] font-bold transition-colors"
-                                    title="Set to 5 minutes from current IST for testing"
-                                >
-                                    +5m Test
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => setTimeOffset(10)}
-                                    className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200/80 rounded-md text-[10px] font-bold transition-colors"
-                                    title="Set to 10 minutes from current IST"
-                                >
-                                    +10m Test
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => setCronTiming('09:00')}
-                                    className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md text-[10px] font-bold transition-colors"
-                                    title="Reset to 09:00 AM standard daily dispatch"
-                                >
-                                    09:00 AM Standard
-                                </button>
-                            </div>
-                        </div>
-
-                        {/* Automation State Toggle Section */}
-                        <div className="pt-1">
-                            <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                                Automated Daily Routine State
-                            </label>
-                            <button
-                                type="button"
-                                onClick={() => setCronEnabled(!cronEnabled)}
-                                className={`w-full px-4 py-2.5 rounded-xl border text-sm font-bold transition-all flex items-center justify-between shadow-xs ${
-                                    cronEnabled
-                                        ? 'bg-emerald-50 border-emerald-300 text-emerald-800 hover:bg-emerald-100/60'
-                                        : 'bg-rose-50 border-rose-300 text-rose-800 hover:bg-rose-100/60'
-                                }`}
-                            >
-                                <span className="flex items-center gap-2">
-                                    <span className={`w-2.5 h-2.5 rounded-full ${cronEnabled ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
-                                    {cronEnabled ? 'Heartbeat: Enabled' : 'Heartbeat: Paused'}
-                                </span>
-                                <span className="text-xs font-semibold underline opacity-75">
-                                    {cronEnabled ? 'Click to Pause' : 'Click to Enable'}
-                                </span>
-                            </button>
-                        </div>
-
-                        {/* Whitelist Protection Toggle */}
-                        <div className="pt-1">
-                            <label className="flex items-center justify-between p-3 bg-white border border-slate-200 rounded-xl cursor-pointer hover:bg-slate-100/70 transition-colors">
-                                <div>
-                                    <span className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
-                                        <Shield className="w-3.5 h-3.5 text-primary" />
-                                        Testing Whitelist Protection (Sandbox)
-                                    </span>
-                                    <span className="text-[11px] text-slate-500 block mt-0.5">
-                                        {whitelistEnabled ? '🔒 ON: Digests go ONLY to you (Sahil Gorde).' : '👥 OFF: Digests go to all 3 Tech staff (Sahil, Lohit, Harsh).'}
-                                    </span>
-                                </div>
-                                <input
-                                    type="checkbox"
-                                    checked={whitelistEnabled}
-                                    onChange={(e) => setWhitelistEnabled(e.target.checked)}
-                                    className="w-4 h-4 text-primary rounded border-slate-300 focus:ring-primary ml-3 flex-shrink-0"
-                                />
-                            </label>
-                        </div>
+                    {/* Right: Master Heartbeat State & Current IST Clock */}
+                    <div className="flex items-center gap-2.5 flex-wrap self-start md:self-auto">
+                        {currentISTDisplay && (
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-mono font-bold bg-slate-100 border border-slate-200 text-slate-700 shadow-2xs">
+                                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                                IST {currentISTDisplay}
+                            </span>
+                        )}
 
                         <button
                             type="button"
-                            disabled={savingSchedule}
-                            onClick={handleSaveSchedule}
-                            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-bold text-xs shadow-sm transition-all disabled:opacity-50"
+                            onClick={handleMasterCronToggle}
+                            className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all border shadow-2xs cursor-pointer ${
+                                cronEnabled
+                                    ? 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100/70'
+                                    : 'bg-rose-50 text-rose-800 border-rose-300 hover:bg-rose-100/70'
+                            }`}
+                            title={cronEnabled ? 'Click to pause all automated cron checks' : 'Click to resume automated cron checks'}
                         >
-                            {savingSchedule ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
-                            {savingSchedule ? 'Saving Schedule...' : 'Save Schedule (Applies Instantly)'}
+                            <span className={`w-2 h-2 rounded-full ${cronEnabled ? 'bg-emerald-500 animate-ping' : 'bg-rose-500'}`} />
+                            <span>{cronEnabled ? 'Heartbeat: Active' : 'Heartbeat: Paused'}</span>
                         </button>
                     </div>
+                </div>
 
-                    {/* Right: Immediate Manual Trigger Actions */}
-                    <div className="space-y-4 bg-slate-50/70 border border-slate-200 rounded-2xl p-5">
-                        <div className="flex items-center justify-between">
-                            <h3 className="text-xs font-black text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
-                                <Zap className="w-3.5 h-3.5 text-amber-500" />
-                                Instant Test Actions (Zero-Wait)
-                            </h3>
-
-                            {/* Dry-run safety toggle */}
-                            <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-slate-600">
-                                <input
-                                    type="checkbox"
-                                    checked={dryRunMode}
-                                    onChange={(e) => setDryRunMode(e.target.checked)}
-                                    className="w-3.5 h-3.5 text-primary rounded border-slate-300"
-                                />
-                                <span>Dry-Run (Simulate)</span>
-                            </label>
+                {/* Whitelist Sandbox Protection Alert Banner (Loud & Clear) */}
+                <div className={`p-4 rounded-2xl border transition-all ${
+                    whitelistEnabled
+                        ? 'bg-emerald-50/90 border-emerald-300 text-emerald-950'
+                        : 'bg-amber-50/90 border-amber-300 text-amber-950'
+                }`}>
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div className="flex items-start gap-3">
+                            <Shield className={`w-5 h-5 flex-shrink-0 mt-0.5 ${whitelistEnabled ? 'text-emerald-700' : 'text-amber-700'}`} />
+                            <div>
+                                <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="text-xs font-black uppercase tracking-wider">
+                                        {whitelistEnabled ? '🔒 Whitelist Sandbox Protection: ACTIVE (Sahil Gorde — 8433649199)' : '⚠️ Whitelist Protection: DISABLED (Broadcast Mode)'}
+                                    </span>
+                                </div>
+                                <p className="text-xs mt-0.5 opacity-90 leading-relaxed font-sans">
+                                    {whitelistEnabled
+                                        ? 'Strict isolation enforced: All automated crons, midday check-ins, and manual dispatches ONLY send WhatsApp messages to your number (8433649199). Lohitaksha and Harsh are 100% excluded.'
+                                        : 'Caution: Live dispatches will send WhatsApp messages to all active Tech employees (Sahil Gorde, Lohitaksha Ranganathan, Harsh Patil).'}
+                                </p>
+                            </div>
                         </div>
 
-                        <p className="text-xs text-slate-500">
-                            Trigger generation or outbound notification immediately without waiting for the scheduled time. {dryRunMode ? '🛡️ Dry-Run active (simulates digest, 0 WhatsApp messages sent).' : '⚠️ Live Mode: Real WhatsApp messages will be dispatched!'}
-                        </p>
+                        <label className="flex items-center gap-2 cursor-pointer self-start sm:self-center bg-white/80 px-3 py-1.5 rounded-xl border border-slate-200/80 shadow-2xs hover:bg-white transition-all flex-shrink-0">
+                            <span className="text-xs font-bold text-slate-800">
+                                {whitelistEnabled ? 'Sandbox ON' : 'Sandbox OFF'}
+                            </span>
+                            <input
+                                type="checkbox"
+                                checked={whitelistEnabled}
+                                onChange={(e) => handleMasterWhitelistToggle(e.target.checked)}
+                                className="w-4 h-4 text-primary rounded border-slate-300 focus:ring-primary"
+                            />
+                        </label>
+                    </div>
+                </div>
 
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                {/* Global Controls & Rules Toolbar */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1 border-t border-slate-100">
+                    <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs font-black uppercase tracking-wider text-slate-400">
+                            Active Schedules ({rules.length}):
+                        </span>
+                        <span className="px-2 py-0.5 rounded-md text-[11px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
+                            {rules.filter(r => r.enabled).length} Enabled
+                        </span>
+                        <span className="px-2 py-0.5 rounded-md text-[11px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                            {rules.filter(r => r.lastRunDate === new Date().toISOString().slice(0, 10)).length} Dispatched Today
+                        </span>
+                    </div>
+
+                    <div className="flex items-center gap-2 flex-wrap">
+                        {/* Generate Tasks Global Trigger */}
+                        <button
+                            type="button"
+                            disabled={triggerLoading}
+                            onClick={() => handleManualTrigger('trigger_generate')}
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-xl font-bold text-xs shadow-2xs transition-all disabled:opacity-50 cursor-pointer"
+                            title="Generate today's fixed routine task assignments in the database"
+                        >
+                            {triggerLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5 text-primary" />}
+                            <span>⚡ Generate Tasks</span>
+                        </button>
+
+                        {/* Reset All Today */}
+                        <button
+                            type="button"
+                            disabled={actionLoading}
+                            onClick={handleResetAllRules}
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-xl font-bold text-xs shadow-2xs transition-all disabled:opacity-50 cursor-pointer"
+                            title="Clear today's run stamp for all rules so they can fire again"
+                        >
+                            <RotateCcw className="w-3.5 h-3.5 text-amber-600" />
+                            <span>🔄 Reset All Today</span>
+                        </button>
+
+                        {/* Add Rule Button */}
+                        <button
+                            type="button"
+                            onClick={() => setShowAddRuleModal(true)}
+                            className="flex items-center gap-1.5 px-3.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-bold text-xs shadow-xs transition-all cursor-pointer"
+                        >
+                            <Plus className="w-3.5 h-3.5 text-amber-400" />
+                            <span>Add Notification Rule</span>
+                        </button>
+                    </div>
+                </div>
+
+                {/* Rules List Cards */}
+                <div className="space-y-4">
+                    {rules.map((rule) => {
+                        const todayIST = new Date().toISOString().slice(0, 10);
+                        const isDispatchedToday = rule.lastRunDate === todayIST;
+                        const isExpanded = expandedRuleId === rule.id;
+                        const isActionLoading = actionRuleId === rule.id;
+                        const edited = ruleEditState[rule.id] || rule;
+
+                        // Visual styling based on ruleType
+                        const typeInfo = (() => {
+                            switch (rule.ruleType) {
+                                case 'morning_digest':
+                                    return {
+                                        icon: Sun,
+                                        label: 'Morning Kickoff',
+                                        badgeClass: 'bg-amber-100 text-amber-900 border-amber-300',
+                                        borderClass: 'border-l-amber-500'
+                                    };
+                                case 'pending_reminder':
+                                    return {
+                                        icon: Clock,
+                                        label: 'Midday Reminder',
+                                        badgeClass: 'bg-sky-100 text-sky-900 border-sky-300',
+                                        borderClass: 'border-l-sky-500'
+                                    };
+                                case 'eod_summary':
+                                    return {
+                                        icon: Moon,
+                                        label: 'EOD Wrap-up',
+                                        badgeClass: 'bg-indigo-100 text-indigo-900 border-indigo-300',
+                                        borderClass: 'border-l-indigo-500'
+                                    };
+                                case 'overdue_alert':
+                                    return {
+                                        icon: AlertTriangle,
+                                        label: 'Overdue Alert',
+                                        badgeClass: 'bg-rose-100 text-rose-900 border-rose-300',
+                                        borderClass: 'border-l-rose-500'
+                                    };
+                                default:
+                                    return {
+                                        icon: Clock,
+                                        label: 'Custom Rule',
+                                        badgeClass: 'bg-slate-100 text-slate-800 border-slate-300',
+                                        borderClass: 'border-l-slate-400'
+                                    };
+                            }
+                        })();
+
+                        const TypeIcon = typeInfo.icon;
+
+                        return (
+                            <div
+                                key={rule.id}
+                                className={`border border-slate-200 rounded-2xl overflow-hidden transition-all duration-200 border-l-4 ${typeInfo.borderClass} ${
+                                    rule.enabled ? 'bg-white shadow-xs' : 'bg-slate-50/80 opacity-75'
+                                }`}
+                            >
+                                {/* Rule Card Header Bar */}
+                                <div className="p-4 sm:p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                                    <div className="space-y-1.5 flex-1">
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                            <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider border ${typeInfo.badgeClass}`}>
+                                                <TypeIcon className="w-3 h-3" />
+                                                {typeInfo.label}
+                                            </span>
+
+                                            <h3 className="text-sm md:text-base font-black text-slate-900">
+                                                {rule.name}
+                                            </h3>
+
+                                            {/* Status Badge */}
+                                            {isDispatchedToday ? (
+                                                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                                    <Check className="w-3 h-3" /> Dispatched Today
+                                                </span>
+                                            ) : !rule.enabled ? (
+                                                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-slate-200 text-slate-700">
+                                                    Paused
+                                                </span>
+                                            ) : (
+                                                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-50 text-amber-800 border border-amber-200">
+                                                    <Clock className="w-3 h-3 text-amber-600" /> Pending for {rule.targetTimeIST} IST
+                                                </span>
+                                            )}
+                                        </div>
+
+                                        {/* Run summary if available */}
+                                        {rule.lastRunSummary && (
+                                            <p className="text-[11px] font-mono text-slate-500 truncate max-w-2xl">
+                                                {rule.lastRunSummary}
+                                            </p>
+                                        )}
+                                    </div>
+
+                                    {/* Enable / Disable Toggle Switch */}
+                                    <div className="flex items-center gap-3 self-start md:self-auto flex-shrink-0">
+                                        <span className="text-xs font-bold text-slate-600">
+                                            {rule.enabled ? 'Rule Active' : 'Rule Paused'}
+                                        </span>
+                                        <button
+                                            type="button"
+                                            onClick={() => handleToggleRule(rule)}
+                                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none cursor-pointer ${
+                                                rule.enabled ? 'bg-emerald-600' : 'bg-slate-300'
+                                            }`}
+                                            title={rule.enabled ? 'Click to Pause this rule' : 'Click to Enable this rule'}
+                                        >
+                                            <span
+                                                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                                                    rule.enabled ? 'translate-x-6' : 'translate-x-1'
+                                                }`}
+                                            />
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {/* Rule Card Controls Row: Time Picker, Days Chips & Action Buttons */}
+                                <div className="px-4 sm:px-5 pb-4 pt-1 flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-t border-slate-100 bg-slate-50/50">
+                                    {/* Left: Timing and Weekdays */}
+                                    <div className="flex flex-col sm:flex-row sm:items-center gap-4 flex-wrap">
+                                        {/* Target Time Picker */}
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider flex-shrink-0">
+                                                Time (IST):
+                                            </span>
+                                            <div className="w-[270px]">
+                                                <TwelveHourTimePicker
+                                                    value={rule.targetTimeIST}
+                                                    onChange={(val) => handleUpdateRuleTime(rule.id, val)}
+                                                />
+                                            </div>
+                                        </div>
+
+                                        {/* Quick Test Offset Chips */}
+                                        <div className="flex items-center gap-1.5 flex-wrap">
+                                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Test:</span>
+                                            <button
+                                                type="button"
+                                                onClick={() => handleQuickOffset(rule.id, 2)}
+                                                className="px-2 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200/80 rounded-md text-[10px] font-bold transition-colors cursor-pointer"
+                                                title="Set to 2 minutes from current IST for instant testing"
+                                            >
+                                                +2m
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => handleQuickOffset(rule.id, 5)}
+                                                className="px-2 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200/80 rounded-md text-[10px] font-bold transition-colors cursor-pointer"
+                                                title="Set to 5 minutes from current IST"
+                                            >
+                                                +5m
+                                            </button>
+                                        </div>
+
+                                        {/* Days of Week selector chips */}
+                                        <div className="flex items-center gap-1">
+                                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mr-1">Days:</span>
+                                            {[
+                                                { day: 1, label: 'M' },
+                                                { day: 2, label: 'T' },
+                                                { day: 3, label: 'W' },
+                                                { day: 4, label: 'T' },
+                                                { day: 5, label: 'F' },
+                                                { day: 6, label: 'S' },
+                                                { day: 0, label: 'S' }
+                                            ].map(({ day, label }, idx) => {
+                                                const isActive = (rule.daysOfWeek || []).includes(day);
+                                                return (
+                                                    <button
+                                                        key={`${rule.id}-day-${day}-${idx}`}
+                                                        type="button"
+                                                        onClick={() => handleToggleDay(rule, day)}
+                                                        className={`w-6 h-6 rounded-md text-[10px] font-bold transition-all flex items-center justify-center cursor-pointer ${
+                                                            isActive
+                                                                ? 'bg-slate-900 text-white shadow-2xs font-black'
+                                                                : 'bg-white border border-slate-200 text-slate-400 hover:border-slate-300'
+                                                        }`}
+                                                        title={`Click to toggle ${['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][day]}`}
+                                                    >
+                                                        {label}
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+
+                                    {/* Right: Actions Button Group */}
+                                    <div className="flex items-center gap-2 flex-wrap self-start lg:self-auto">
+                                        {/* Run Now Button */}
+                                        <button
+                                            type="button"
+                                            disabled={isActionLoading}
+                                            onClick={() => handleTriggerRule(rule.id, false)}
+                                            className="flex items-center gap-1 px-3 py-1.5 bg-primary hover:bg-primary/90 text-white rounded-xl font-bold text-xs shadow-2xs transition-all disabled:opacity-50 cursor-pointer"
+                                            title="Dispatch live notification now (strictly targets Sahil Gorde whitelist)"
+                                        >
+                                            {isActionLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                                            <span>⚡ Run Now</span>
+                                        </button>
+
+                                        {/* Dry Run Button */}
+                                        <button
+                                            type="button"
+                                            disabled={isActionLoading}
+                                            onClick={() => handleTriggerRule(rule.id, true)}
+                                            className="flex items-center gap-1 px-3 py-1.5 bg-white border border-slate-300 hover:bg-slate-100 text-slate-800 rounded-xl font-bold text-xs shadow-2xs transition-all disabled:opacity-50 cursor-pointer"
+                                            title="Simulate dispatch without sending any WhatsApp messages"
+                                        >
+                                            <Play className="w-3.5 h-3.5 text-amber-500" />
+                                            <span>🛡️ Dry-Run</span>
+                                        </button>
+
+                                        {/* Reset Today Button */}
+                                        {isDispatchedToday && (
+                                            <button
+                                                type="button"
+                                                disabled={isActionLoading}
+                                                onClick={() => handleResetRule(rule.id)}
+                                                className="flex items-center gap-1 px-2.5 py-1.5 bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-900 rounded-xl font-bold text-xs shadow-2xs transition-all disabled:opacity-50 cursor-pointer"
+                                                title="Clear today's run record so the rule can trigger again today"
+                                            >
+                                                <RotateCcw className="w-3.5 h-3.5 text-amber-700" />
+                                                <span>Reset Run</span>
+                                            </button>
+                                        )}
+
+                                        {/* Expand Filters & Template Button */}
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                if (isExpanded) {
+                                                    setExpandedRuleId(null);
+                                                } else {
+                                                    setExpandedRuleId(rule.id);
+                                                    setRuleEditState(prev => ({
+                                                        ...prev,
+                                                        [rule.id]: JSON.parse(JSON.stringify(rule))
+                                                    }));
+                                                }
+                                            }}
+                                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-bold text-xs transition-all border cursor-pointer ${
+                                                isExpanded
+                                                    ? 'bg-slate-900 text-white border-slate-900 shadow-2xs'
+                                                    : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-300'
+                                            }`}
+                                        >
+                                            <Sliders className="w-3.5 h-3.5" />
+                                            <span>{isExpanded ? 'Hide Settings' : 'Filters & Template'}</span>
+                                            {isExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                                        </button>
+
+                                        {/* Delete Custom Rule Button */}
+                                        <button
+                                            type="button"
+                                            onClick={() => handleDeleteRule(rule.id, rule.name)}
+                                            className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                                            title="Delete this rule"
+                                        >
+                                            <Trash2 className="w-4 h-4" />
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {/* Expandable Drawer: Filters, Conditions, Custom Template & Live Preview */}
+                                {isExpanded && (
+                                    <div className="p-5 md:p-6 bg-slate-50 border-t border-slate-200 space-y-6 animate-in fade-in duration-200">
+                                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                                            {/* Column 1: Task Selection Filters & Conditions */}
+                                            <div className="space-y-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs">
+                                                <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                                                    <h4 className="text-xs font-black uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+                                                        <Filter className="w-3.5 h-3.5 text-primary" /> Task Filters & Selection
+                                                    </h4>
+                                                    <span className="text-[10px] text-slate-400 font-bold">Rule ID: {rule.id}</span>
+                                                </div>
+
+                                                <div className="space-y-3">
+                                                    {/* Filter 1: Fixed Routine Tasks */}
+                                                    <label className="flex items-center justify-between p-2.5 bg-slate-50 rounded-xl border border-slate-200/80 cursor-pointer hover:bg-slate-100 transition-colors">
+                                                        <div>
+                                                            <span className="text-xs font-bold text-slate-900 block">
+                                                                Include Today&apos;s Fixed Routine Tasks
+                                                            </span>
+                                                            <span className="text-[11px] text-slate-500">
+                                                                Routine daily fixed tasks generated automatically for the Tech department.
+                                                            </span>
+                                                        </div>
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={edited.taskFilters?.includeTodayFixed ?? true}
+                                                            onChange={(e) => {
+                                                                setRuleEditState(prev => ({
+                                                                    ...prev,
+                                                                    [rule.id]: {
+                                                                        ...edited,
+                                                                        taskFilters: { ...edited.taskFilters, includeTodayFixed: e.target.checked }
+                                                                    }
+                                                                }));
+                                                            }}
+                                                            className="w-4 h-4 text-primary rounded border-slate-300 focus:ring-primary ml-3"
+                                                        />
+                                                    </label>
+
+                                                    {/* Filter 2: Ad-Hoc Assigned Tasks */}
+                                                    <label className="flex items-center justify-between p-2.5 bg-slate-50 rounded-xl border border-slate-200/80 cursor-pointer hover:bg-slate-100 transition-colors">
+                                                        <div>
+                                                            <span className="text-xs font-bold text-slate-900 block">
+                                                                Include Today&apos;s Assigned / Ad-Hoc Tasks
+                                                            </span>
+                                                            <span className="text-[11px] text-slate-500">
+                                                                Non-routine tasks assigned specifically for today by managers.
+                                                            </span>
+                                                        </div>
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={edited.taskFilters?.includeTodayAssigned ?? true}
+                                                            onChange={(e) => {
+                                                                setRuleEditState(prev => ({
+                                                                    ...prev,
+                                                                    [rule.id]: {
+                                                                        ...edited,
+                                                                        taskFilters: { ...edited.taskFilters, includeTodayAssigned: e.target.checked }
+                                                                    }
+                                                                }));
+                                                            }}
+                                                            className="w-4 h-4 text-primary rounded border-slate-300 focus:ring-primary ml-3"
+                                                        />
+                                                    </label>
+
+                                                    {/* Filter 3: Carry-Forward Past Uncompleted Tasks */}
+                                                    <label className="flex items-center justify-between p-2.5 bg-amber-50/60 rounded-xl border border-amber-200/80 cursor-pointer hover:bg-amber-100/60 transition-colors">
+                                                        <div>
+                                                            <span className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                                                                <span>🔄 Carry-Forward Incomplete Past Tasks</span>
+                                                                <span className="px-1.5 py-0.2 bg-amber-200 text-amber-900 rounded text-[9px] font-black uppercase">Carry-Forward</span>
+                                                            </span>
+                                                            <span className="text-[11px] text-slate-600 block mt-0.5">
+                                                                Queries unfinished tasks from previous days and tags them with [Carried Forward].
+                                                            </span>
+                                                        </div>
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={edited.taskFilters?.includeYesterdayPending ?? true}
+                                                            onChange={(e) => {
+                                                                setRuleEditState(prev => ({
+                                                                    ...prev,
+                                                                    [rule.id]: {
+                                                                        ...edited,
+                                                                        taskFilters: { ...edited.taskFilters, includeYesterdayPending: e.target.checked }
+                                                                    }
+                                                                }));
+                                                            }}
+                                                            className="w-4 h-4 text-amber-600 rounded border-slate-300 focus:ring-amber-500 ml-3"
+                                                        />
+                                                    </label>
+
+                                                    {/* Lookback window days */}
+                                                    {edited.taskFilters?.includeYesterdayPending && (
+                                                        <div className="pl-4 flex items-center justify-between text-xs py-1">
+                                                            <span className="font-bold text-slate-600">
+                                                                Lookback Window (Days):
+                                                            </span>
+                                                            <select
+                                                                value={edited.taskFilters?.lookbackDays || 1}
+                                                                onChange={(e) => {
+                                                                    const val = parseInt(e.target.value, 10);
+                                                                    setRuleEditState(prev => ({
+                                                                        ...prev,
+                                                                        [rule.id]: {
+                                                                            ...edited,
+                                                                            taskFilters: { ...edited.taskFilters, lookbackDays: val }
+                                                                        }
+                                                                    }));
+                                                                }}
+                                                                className="px-2.5 py-1 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-800"
+                                                            >
+                                                                <option value="1">1 Day (Yesterday only)</option>
+                                                                <option value="2">2 Days</option>
+                                                                <option value="3">3 Days (Recommended)</option>
+                                                                <option value="7">7 Days (Full past week)</option>
+                                                            </select>
+                                                        </div>
+                                                    )}
+
+                                                    {/* Filter 4: Only Pending (Incomplete) */}
+                                                    <label className="flex items-center justify-between p-2.5 bg-slate-50 rounded-xl border border-slate-200/80 cursor-pointer hover:bg-slate-100 transition-colors">
+                                                        <div>
+                                                            <span className="text-xs font-bold text-slate-900 block">
+                                                                Incomplete / Pending Tasks Only
+                                                            </span>
+                                                            <span className="text-[11px] text-slate-500">
+                                                                Hide completed tasks from the notification copy (ideal for midday reminders).
+                                                            </span>
+                                                        </div>
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={edited.taskFilters?.onlyPending ?? false}
+                                                            onChange={(e) => {
+                                                                setRuleEditState(prev => ({
+                                                                    ...prev,
+                                                                    [rule.id]: {
+                                                                        ...edited,
+                                                                        taskFilters: { ...edited.taskFilters, onlyPending: e.target.checked }
+                                                                    }
+                                                                }));
+                                                            }}
+                                                            className="w-4 h-4 text-primary rounded border-slate-300 focus:ring-primary ml-3"
+                                                        />
+                                                    </label>
+                                                </div>
+
+                                                {/* Conditions Subsection */}
+                                                <div className="pt-3 border-t border-slate-100 space-y-2">
+                                                    <h5 className="text-[11px] font-black uppercase tracking-wider text-slate-400">
+                                                        Execution Conditions
+                                                    </h5>
+                                                    <label className="flex items-center justify-between text-xs font-bold text-slate-700 cursor-pointer">
+                                                        <span>Skip Notification if 0 matching tasks</span>
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={edited.conditions?.skipIfZeroTasks ?? true}
+                                                            onChange={(e) => {
+                                                                setRuleEditState(prev => ({
+                                                                    ...prev,
+                                                                    [rule.id]: {
+                                                                        ...edited,
+                                                                        conditions: { ...edited.conditions, skipIfZeroTasks: e.target.checked }
+                                                                    }
+                                                                }));
+                                                            }}
+                                                            className="w-4 h-4 text-primary rounded border-slate-300 ml-2"
+                                                        />
+                                                    </label>
+                                                    <label className="flex items-center justify-between text-xs font-bold text-slate-700 cursor-pointer">
+                                                        <span>Skip Notification if all tasks already completed</span>
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={edited.conditions?.requirePendingOnly ?? false}
+                                                            onChange={(e) => {
+                                                                setRuleEditState(prev => ({
+                                                                    ...prev,
+                                                                    [rule.id]: {
+                                                                        ...edited,
+                                                                        conditions: { ...edited.conditions, requirePendingOnly: e.target.checked }
+                                                                    }
+                                                                }));
+                                                            }}
+                                                            className="w-4 h-4 text-primary rounded border-slate-300 ml-2"
+                                                        />
+                                                    </label>
+                                                </div>
+                                            </div>
+
+                                            {/* Column 2: Custom WhatsApp Template & Live Preview */}
+                                            <div className="space-y-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs">
+                                                <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                                                    <h4 className="text-xs font-black uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+                                                        <FileText className="w-3.5 h-3.5 text-primary" /> Custom WhatsApp Template
+                                                    </h4>
+                                                    <span className="text-[10px] text-emerald-600 font-bold flex items-center gap-1">
+                                                        <Sparkles className="w-3 h-3" /> Dynamic Tags
+                                                    </span>
+                                                </div>
+
+                                                {/* Header Greeting */}
+                                                <div>
+                                                    <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                                                        Custom Header Greeting:
+                                                    </label>
+                                                    <input
+                                                        type="text"
+                                                        value={edited.customTemplate?.headerGreeting || ''}
+                                                        placeholder="e.g. Good morning {{firstName}}! 📋"
+                                                        onChange={(e) => {
+                                                            const val = e.target.value;
+                                                            setRuleEditState(prev => ({
+                                                                ...prev,
+                                                                [rule.id]: {
+                                                                    ...edited,
+                                                                    customTemplate: { ...edited.customTemplate, headerGreeting: val }
+                                                                }
+                                                            }));
+                                                        }}
+                                                        className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-sans text-slate-800 focus:bg-white focus:outline-none focus:ring-1 focus:ring-primary"
+                                                    />
+                                                </div>
+
+                                                {/* Announcement Note */}
+                                                <div>
+                                                    <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                                                        Custom Announcement / Note (Optional):
+                                                    </label>
+                                                    <textarea
+                                                        rows={2}
+                                                        value={edited.customTemplate?.customMessage || ''}
+                                                        placeholder="e.g. 📢 Reminder: Complete client deployments before 4 PM today."
+                                                        onChange={(e) => {
+                                                            const val = e.target.value;
+                                                            setRuleEditState(prev => ({
+                                                                ...prev,
+                                                                [rule.id]: {
+                                                                    ...edited,
+                                                                    customTemplate: { ...edited.customTemplate, customMessage: val }
+                                                                }
+                                                            }));
+                                                        }}
+                                                        className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-sans text-slate-800 focus:bg-white focus:outline-none focus:ring-1 focus:ring-primary"
+                                                    />
+                                                </div>
+
+                                                {/* Footer Instruction */}
+                                                <div>
+                                                    <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                                                        Custom Footer Instructions:
+                                                    </label>
+                                                    <input
+                                                        type="text"
+                                                        value={edited.customTemplate?.footerInstruction || ''}
+                                                        placeholder="e.g. Reply 'done 1' to mark complete. Have a great day! 🚀"
+                                                        onChange={(e) => {
+                                                            const val = e.target.value;
+                                                            setRuleEditState(prev => ({
+                                                                ...prev,
+                                                                [rule.id]: {
+                                                                    ...edited,
+                                                                    customTemplate: { ...edited.customTemplate, footerInstruction: val }
+                                                                }
+                                                            }));
+                                                        }}
+                                                        className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-sans text-slate-800 focus:bg-white focus:outline-none focus:ring-1 focus:ring-primary"
+                                                    />
+                                                </div>
+
+                                                {/* Quick Replies Toggle */}
+                                                <label className="flex items-center justify-between text-xs font-bold text-slate-700 cursor-pointer pt-1">
+                                                    <span>Include Quick Reply Guide (done 1, done all)</span>
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={edited.customTemplate?.includeQuickReplies !== false}
+                                                        onChange={(e) => {
+                                                            setRuleEditState(prev => ({
+                                                                ...prev,
+                                                                [rule.id]: {
+                                                                    ...edited,
+                                                                    customTemplate: { ...edited.customTemplate, includeQuickReplies: e.target.checked }
+                                                                }
+                                                            }));
+                                                        }}
+                                                        className="w-4 h-4 text-primary rounded border-slate-300 ml-2"
+                                                    />
+                                                </label>
+
+                                                {/* Dynamic Variables Pill Tags */}
+                                                <div className="pt-2 border-t border-slate-100">
+                                                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                                                        Supported Dynamic Tags:
+                                                    </span>
+                                                    <div className="flex flex-wrap gap-1.5 text-[10px] font-mono">
+                                                        {['{{firstName}}', '{{fullName}}', '{{totalTasks}}', '{{pendingTasks}}', '{{completedTasks}}', '{{date}}'].map(tag => (
+                                                            <span
+                                                                key={tag}
+                                                                className="px-2 py-0.5 bg-slate-100 border border-slate-200 text-slate-700 rounded-md font-bold select-all cursor-pointer hover:bg-slate-200"
+                                                                title={`Copy tag ${tag}`}
+                                                            >
+                                                                {tag}
+                                                            </span>
+                                                        ))}
+                                                    </div>
+                                                </div>
+
+                                                {/* Realtime WhatsApp Bubble Preview */}
+                                                <div className="mt-3 bg-[#EFEAE2] p-3.5 rounded-2xl border border-[#D1D7DB] shadow-inner font-sans space-y-2">
+                                                    <div className="flex items-center justify-between pb-1.5 border-b border-[#D1D7DB]/60">
+                                                        <span className="text-[10px] font-black text-slate-600 uppercase tracking-wider flex items-center gap-1">
+                                                            <MessageSquare className="w-3 h-3 text-emerald-600" /> WhatsApp Live Preview (Sahil Gorde)
+                                                        </span>
+                                                        <span className="text-[9px] font-mono text-slate-400">IST</span>
+                                                    </div>
+                                                    <div className="bg-white rounded-xl p-3 shadow-xs border border-emerald-100 text-slate-800 text-[11px] font-sans leading-relaxed whitespace-pre-line">
+                                                        {/* Header */}
+                                                        {edited.customTemplate?.headerGreeting
+                                                            ? edited.customTemplate.headerGreeting
+                                                                .replace(/\{\{firstName\}\}/g, 'Sahil')
+                                                                .replace(/\{\{fullName\}\}/g, 'Sahil Gorde')
+                                                                .replace(/\{\{date\}\}/g, 'Mon, Oct 5')
+                                                                .replace(/\{\{totalTasks\}\}/g, '3')
+                                                                .replace(/\{\{pendingTasks\}\}/g, '2')
+                                                                .replace(/\{\{completedTasks\}\}/g, '1')
+                                                            : (rule.ruleType === 'morning_digest'
+                                                                ? '☀️ *Good Morning Sahil!* 👋\nHere are your tasks for today (Mon, Oct 5):'
+                                                                : rule.ruleType === 'pending_reminder'
+                                                                ? '⏳ *Midday Progress Check-in*\nHello Sahil, here is your remaining task list:'
+                                                                : rule.ruleType === 'eod_summary'
+                                                                ? '🏁 *End-of-Day Task Summary*\nHello Sahil, here is your daily wrap-up:'
+                                                                : '⚠️ *Urgent: Overdue Tasks Alert*\nHello Sahil, the following tasks are past due:')}
+
+                                                        {/* Optional note */}
+                                                        {edited.customTemplate?.customMessage && (
+                                                            `\n\n📢 *Note:* ${edited.customTemplate.customMessage}`
+                                                        )}
+
+                                                        {/* Tasks mockup */}
+                                                        {rule.ruleType === 'eod_summary' ? (
+                                                            '\n\n✅ Completed: 1\n⏳ Outstanding: 2\n\n1. Review System Architecture [Fixed] - ✅ Completed\n2. 🔄 Update API Gateway Endpoint [Carried Forward] - ⏳ Pending\n3. Deploy Test Beta Tab [Assigned] - ⏳ Pending'
+                                                        ) : rule.ruleType === 'overdue_alert' ? (
+                                                            '\n\n1. ⚠️ Update API Gateway Endpoint [⚠️ 2d overdue]\n2. ⚠️ Database Migration Check [⚠️ 1d overdue]'
+                                                        ) : (
+                                                            '\n\n1. Review System Architecture [Fixed]\n2. 🔄 Update API Gateway Endpoint [Carried Forward]\n3. Deploy Test Beta Tab [Assigned]'
+                                                        )}
+
+                                                        {/* Footer */}
+                                                        {edited.customTemplate?.footerInstruction && (
+                                                            `\n\n${edited.customTemplate.footerInstruction}`
+                                                        )}
+
+                                                        {/* Quick replies */}
+                                                        {edited.customTemplate?.includeQuickReplies !== false && (
+                                                            '\n\n💡 *Quick Reply:* Type "done 1" to mark complete, or "tasks" to refresh.'
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* Drawer Footer Actions */}
+                                        <div className="pt-2 flex items-center justify-end gap-3 border-t border-slate-200">
+                                            <button
+                                                type="button"
+                                                onClick={() => setExpandedRuleId(null)}
+                                                className="px-4 py-2 bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 rounded-xl font-bold text-xs transition-colors cursor-pointer"
+                                            >
+                                                Close
+                                            </button>
+
+                                            <button
+                                                type="button"
+                                                disabled={isActionLoading}
+                                                onClick={() => handleSaveRuleAdvanced(rule.id)}
+                                                className="flex items-center gap-1.5 px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-bold text-xs shadow-xs transition-all disabled:opacity-50 cursor-pointer"
+                                            >
+                                                {isActionLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5 text-emerald-400" />}
+                                                <span>Save Rule Settings</span>
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })}
+                </div>
+            </div>
+
+            {/* Modal: Add New Notification Rule */}
+            {showAddRuleModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150">
+                    <div className="bg-white rounded-3xl max-w-xl w-full p-6 md:p-8 shadow-2xl border border-slate-200 space-y-5 animate-in zoom-in-95 duration-150">
+                        <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                            <div>
+                                <h3 className="text-lg font-black text-slate-900">
+                                    ➕ Create New Notification Rule
+                                </h3>
+                                <p className="text-xs text-slate-500 mt-0.5">
+                                    Add an automated cron schedule rule with custom timing and filters.
+                                </p>
+                            </div>
                             <button
                                 type="button"
-                                disabled={triggerLoading}
-                                onClick={() => handleManualTrigger('trigger_generate')}
-                                className="flex items-center justify-center gap-2 px-4 py-2.5 bg-white border border-slate-300 hover:bg-slate-100 text-slate-800 rounded-xl font-bold text-xs shadow-sm transition-all disabled:opacity-50"
+                                onClick={() => setShowAddRuleModal(false)}
+                                className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
                             >
-                                {triggerLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin text-primary" /> : <Play className="w-3.5 h-3.5 text-primary" />}
-                                {triggerLoading ? 'Processing...' : '⚡ Generate Tasks Now'}
+                                <X className="w-5 h-5" />
                             </button>
+                        </div>
 
+                        {/* Quick Presets */}
+                        <div>
+                            <span className="text-[11px] font-black uppercase tracking-wider text-slate-400 block mb-1.5">
+                                Quick Preset Templates:
+                            </span>
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                                {[
+                                    { name: 'Morning Kickoff', type: 'morning_digest' as NotificationRuleType, time: '09:00' },
+                                    { name: 'Midday Reminder', type: 'pending_reminder' as NotificationRuleType, time: '14:00' },
+                                    { name: 'EOD Wrap-up', type: 'eod_summary' as NotificationRuleType, time: '18:30' },
+                                    { name: 'Overdue Alert', type: 'overdue_alert' as NotificationRuleType, time: '11:30' }
+                                ].map(preset => (
+                                    <button
+                                        key={preset.name}
+                                        type="button"
+                                        onClick={() => {
+                                            setNewRuleForm(prev => ({
+                                                ...prev,
+                                                name: preset.name,
+                                                ruleType: preset.type,
+                                                targetTimeIST: preset.time,
+                                                taskFilters: {
+                                                    ...prev.taskFilters,
+                                                    onlyPending: preset.type === 'pending_reminder' || preset.type === 'overdue_alert'
+                                                }
+                                            }));
+                                        }}
+                                        className="p-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-left text-xs font-bold text-slate-800 transition-colors cursor-pointer"
+                                    >
+                                        <span className="block truncate">{preset.name}</span>
+                                        <span className="text-[10px] text-slate-400 font-mono block">{preset.time} IST</span>
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+
+                        {/* Form Fields */}
+                        <div className="space-y-4">
+                            <div>
+                                <label className="block text-xs font-black text-slate-700 uppercase tracking-wider mb-1">
+                                    Rule Name
+                                </label>
+                                <input
+                                    type="text"
+                                    value={newRuleForm.name}
+                                    placeholder="e.g. Afternoon Team Standup Reminder"
+                                    onChange={(e) => setNewRuleForm(prev => ({ ...prev, name: e.target.value }))}
+                                    className="w-full px-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-bold text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
+                                />
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-xs font-black text-slate-700 uppercase tracking-wider mb-1">
+                                        Rule Type
+                                    </label>
+                                    <select
+                                        value={newRuleForm.ruleType}
+                                        onChange={(e) => setNewRuleForm(prev => ({ ...prev, ruleType: e.target.value as NotificationRuleType }))}
+                                        className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20"
+                                    >
+                                        <option value="morning_digest">Morning Kickoff (09:00)</option>
+                                        <option value="pending_reminder">Midday Pending Reminder (14:00)</option>
+                                        <option value="eod_summary">End-of-Day Summary (18:30)</option>
+                                        <option value="overdue_alert">Overdue Task Alert (Escalation)</option>
+                                    </select>
+                                </div>
+
+                                <div>
+                                    <label className="block text-xs font-black text-slate-700 uppercase tracking-wider mb-1">
+                                        Dispatch Time (IST)
+                                    </label>
+                                    <TwelveHourTimePicker
+                                        value={newRuleForm.targetTimeIST}
+                                        onChange={(val) => setNewRuleForm(prev => ({ ...prev, targetTimeIST: val }))}
+                                    />
+                                </div>
+                            </div>
+
+                            {/* Active Days */}
+                            <div>
+                                <label className="block text-xs font-black text-slate-700 uppercase tracking-wider mb-1.5">
+                                    Active Days of Week
+                                </label>
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                    {[
+                                        { day: 1, label: 'Mon' },
+                                        { day: 2, label: 'Tue' },
+                                        { day: 3, label: 'Wed' },
+                                        { day: 4, label: 'Thu' },
+                                        { day: 5, label: 'Fri' },
+                                        { day: 6, label: 'Sat' },
+                                        { day: 0, label: 'Sun' }
+                                    ].map(({ day, label }) => {
+                                        const isActive = newRuleForm.daysOfWeek.includes(day);
+                                        return (
+                                            <button
+                                                key={`new-rule-day-${day}`}
+                                                type="button"
+                                                onClick={() => {
+                                                    const nextDays = isActive
+                                                        ? newRuleForm.daysOfWeek.filter(d => d !== day)
+                                                        : [...newRuleForm.daysOfWeek, day].sort((a, b) => a - b);
+                                                    setNewRuleForm(prev => ({ ...prev, daysOfWeek: nextDays }));
+                                                }}
+                                                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                                                    isActive
+                                                        ? 'bg-slate-900 text-white shadow-2xs font-black'
+                                                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                                }`}
+                                            >
+                                                {label}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Modal Action Buttons */}
+                        <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-3">
                             <button
                                 type="button"
-                                disabled={triggerLoading}
-                                onClick={() => handleManualTrigger('trigger_dispatch')}
-                                className="flex items-center justify-center gap-2 px-4 py-2.5 bg-primary hover:bg-primary/90 text-white rounded-xl font-bold text-xs shadow-sm transition-all disabled:opacity-50"
+                                onClick={() => setShowAddRuleModal(false)}
+                                className="px-4 py-2 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-xl font-bold text-xs transition-colors cursor-pointer"
                             >
-                                {triggerLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
-                                {triggerLoading ? 'Dispatching...' : '📤 Send Digest Now'}
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                disabled={actionLoading || !newRuleForm.name.trim()}
+                                onClick={handleCreateNewRule}
+                                className="flex items-center gap-1.5 px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-bold text-xs shadow-xs transition-all disabled:opacity-50 cursor-pointer"
+                            >
+                                {actionLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5 text-amber-400" />}
+                                <span>Create & Arm Rule</span>
                             </button>
                         </div>
                     </div>
                 </div>
+            )}
 
-                {/* Execution Status Bar */}
-                <div className="p-3.5 bg-slate-100/80 border border-slate-200 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+            {/* Phase 5: Notification Dispatch History & Audit Trail Card */}
+            <div className={`bg-white border border-slate-200 rounded-3xl p-6 md:p-8 shadow-sm space-y-5 transition-all ${animationStep >= 3 ? 'tm-slide-up-visible' : 'tm-slide-up-hidden'}`}>
+                {/* Header */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100">
+                    <div>
+                        <div className="flex items-center gap-2.5 flex-wrap">
+                            <div className="p-2 bg-indigo-50 border border-indigo-200 rounded-xl text-indigo-600">
+                                <History className="w-5 h-5" />
+                            </div>
+                            <h2 className="text-lg md:text-xl font-black text-slate-900 tracking-tight">
+                                Notification Dispatch History & Audit Trail
+                            </h2>
+                            <span className="px-2.5 py-0.5 rounded-full text-xs font-black bg-indigo-50 text-indigo-700 border border-indigo-200">
+                                {auditLogs.length} Events
+                            </span>
+                        </div>
+                        <p className="text-xs text-slate-500 mt-1">
+                            Real-time audit trail of automated cron triggers, dry-run simulations, and live WhatsApp dispatches.
+                        </p>
+                    </div>
+
                     <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-bold text-slate-600">Latest Run Today:</span>
-                        <span className={`px-2 py-0.5 rounded font-mono font-bold text-[11px] ${
-                            cronLastRunDate === new Date().toISOString().slice(0, 10)
-                                ? 'bg-emerald-100 text-emerald-800'
-                                : 'bg-slate-200 text-slate-700'
-                        }`}>
-                            {cronLastRunDate === new Date().toISOString().slice(0, 10)
-                                ? `✅ Dispatched (${cronLastRunDate})`
-                                : `⏳ Pending / Ready for ${cronTiming} IST`}
-                        </span>
-
-                        {cronLastRunDate === new Date().toISOString().slice(0, 10) && (
+                        <button
+                            type="button"
+                            disabled={loadingLogs}
+                            onClick={fetchAuditLogs}
+                            className="flex items-center gap-1.5 px-3.5 py-2 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-xl font-bold text-xs shadow-2xs transition-colors cursor-pointer disabled:opacity-50"
+                            title="Refresh audit logs from database"
+                        >
+                            <RefreshCw className={`w-3.5 h-3.5 ${loadingLogs ? 'animate-spin text-primary' : 'text-slate-500'}`} />
+                            <span>Refresh Trail</span>
+                        </button>
+                        {auditLogs.length > 0 && (
                             <button
                                 type="button"
-                                disabled={resettingRun}
-                                onClick={handleResetRunDate}
-                                className="inline-flex items-center gap-1.5 px-2.5 py-0.5 bg-white hover:bg-slate-50 border border-slate-300 hover:border-slate-400 text-slate-700 hover:text-slate-900 rounded-md font-bold text-[11px] shadow-2xs transition-all disabled:opacity-50 cursor-pointer"
-                                title="Reset today's run status so you can test the cron again today"
+                                disabled={loadingLogs}
+                                onClick={handleClearLogs}
+                                className="flex items-center gap-1.5 px-3.5 py-2 bg-rose-50 border border-rose-200 hover:bg-rose-100 text-rose-700 rounded-xl font-bold text-xs shadow-2xs transition-colors cursor-pointer disabled:opacity-50"
+                                title="Clear all notification audit events"
                             >
-                                {resettingRun ? (
-                                    <RefreshCw className="w-3 h-3 animate-spin text-primary" />
-                                ) : (
-                                    <RotateCcw className="w-3 h-3 text-amber-600" />
-                                )}
-                                {resettingRun ? 'Resetting...' : 'Reset Run for Retesting'}
+                                <Trash2 className="w-3.5 h-3.5 text-rose-500" />
+                                <span>Clear Trail</span>
                             </button>
                         )}
                     </div>
-
-                    <div className="text-slate-500 font-mono text-[11px] truncate max-w-md">
-                        {cronLastRunSummary || 'No runs recorded for today.'}
-                    </div>
                 </div>
+
+                {/* Audit Logs List or Empty State */}
+                {auditLogs.length === 0 ? (
+                    <div className="p-8 text-center bg-slate-50/70 rounded-2xl border border-dashed border-slate-200 space-y-2">
+                        <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-500 mx-auto flex items-center justify-center border border-indigo-100">
+                            <Clock className="w-6 h-6" />
+                        </div>
+                        <h4 className="text-sm font-bold text-slate-800">No Notification Dispatches Recorded Yet</h4>
+                        <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
+                            Click <span className="font-semibold text-slate-700">🛡️ Dry-Run</span> on any rule above or trigger a live dispatch to view the full audit history trail here, including exact recipient numbers and message previews.
+                        </p>
+                    </div>
+                ) : (
+                    <div className="space-y-3">
+                        {auditLogs.map((log) => {
+                            const details = log.details || {};
+                            const isDryRun = details.dryRun || details.status === 'simulated';
+                            const isFailed = details.status === 'failed';
+                            const isSent = !isDryRun && !isFailed;
+                            const isExpanded = expandedLogId === log.id;
+                            const isCopied = copiedLogId === log.id;
+
+                            // Rule pill styling
+                            const ruleType = details.type || details.ruleType || 'morning_digest';
+                            let ruleBadgeColor = 'bg-amber-50 text-amber-800 border-amber-200';
+                            if (ruleType === 'pending_reminder') ruleBadgeColor = 'bg-sky-50 text-sky-800 border-sky-200';
+                            if (ruleType === 'eod_summary') ruleBadgeColor = 'bg-indigo-50 text-indigo-800 border-indigo-200';
+                            if (ruleType === 'overdue_alert') ruleBadgeColor = 'bg-rose-50 text-rose-800 border-rose-200';
+
+                            return (
+                                <div
+                                    key={log.id}
+                                    className={`border rounded-2xl transition-all duration-150 overflow-hidden border-l-4 ${
+                                        isFailed
+                                            ? 'border-l-rose-500'
+                                            : isDryRun
+                                            ? 'border-l-amber-500'
+                                            : 'border-l-emerald-500'
+                                    } ${
+                                        isExpanded ? 'border-slate-300 bg-slate-50/50 shadow-xs' : 'border-slate-200 bg-white hover:border-slate-300'
+                                    }`}
+                                >
+                                    <div className="p-4 flex flex-col md:flex-row md:items-center justify-between gap-3">
+                                        <div className="space-y-1.5 flex-1 min-w-0">
+                                            <div className="flex items-center gap-2 flex-wrap">
+                                                {/* Timestamp */}
+                                                <span className="text-[11px] font-mono text-slate-500 flex items-center gap-1 bg-slate-100 px-2 py-0.5 rounded-md">
+                                                    <Clock className="w-3 h-3 text-slate-400" />
+                                                    {formatISTTime(log.created_at)}
+                                                </span>
+
+                                                {/* Rule Name Pill */}
+                                                <span className={`px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider border ${ruleBadgeColor}`}>
+                                                    {details.ruleName || details.type || 'WhatsApp Notification'}
+                                                </span>
+
+                                                {/* Status Pill */}
+                                                {isDryRun ? (
+                                                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-100 text-amber-900 border border-amber-300">
+                                                        <Shield className="w-3 h-3 text-amber-600" />
+                                                        Simulated (Dry-Run)
+                                                    </span>
+                                                ) : isFailed ? (
+                                                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-rose-100 text-rose-900 border border-rose-300">
+                                                        <AlertCircle className="w-3 h-3 text-rose-600" />
+                                                        Failed
+                                                    </span>
+                                                ) : (
+                                                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-100 text-emerald-900 border border-emerald-300">
+                                                        <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                                        Live Sent
+                                                    </span>
+                                                )}
+                                            </div>
+
+                                            {/* Details: Recipient and task count */}
+                                            <div className="flex items-center gap-3 text-xs text-slate-600 flex-wrap pt-0.5">
+                                                <span className="font-bold text-slate-900">
+                                                    👤 {details.employeeName || 'Tech Employee'}
+                                                </span>
+                                                {details.phone && (
+                                                    <span className="font-mono text-slate-500">
+                                                        📱 {details.phone}
+                                                    </span>
+                                                )}
+                                                <span className="text-slate-300">•</span>
+                                                <span className="font-medium text-slate-700">
+                                                    📋 {details.taskCount !== undefined ? `${details.taskCount} task${details.taskCount === 1 ? '' : 's'}` : 'Digest sent'}
+                                                </span>
+                                                {details.error && (
+                                                    <span className="text-rose-600 font-medium">
+                                                        ⚠️ {details.error}
+                                                    </span>
+                                                )}
+                                            </div>
+                                        </div>
+
+                                        {/* Action Button: Toggle preview */}
+                                        {details.preview && (
+                                            <div className="flex items-center gap-2 self-start md:self-auto flex-shrink-0">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setExpandedLogId(isExpanded ? null : log.id)}
+                                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                                                >
+                                                    <Eye className="w-3.5 h-3.5 text-slate-500" />
+                                                    <span>{isExpanded ? 'Hide Message' : 'View Message'}</span>
+                                                    {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {/* Expanded WhatsApp Message Preview */}
+                                    {isExpanded && details.preview && (
+                                        <div className="px-4 pb-4 pt-1 border-t border-slate-100 bg-slate-50/70">
+                                            <div className="max-w-2xl bg-[#EFEAE2] p-4 rounded-2xl border border-[#D1D7DB] shadow-xs space-y-2 mt-2">
+                                                <div className="flex items-center justify-between pb-1.5 border-b border-[#D1D7DB]/60">
+                                                    <span className="text-[10px] font-black text-slate-600 uppercase tracking-wider flex items-center gap-1">
+                                                        <MessageSquare className="w-3 h-3 text-emerald-600" /> WhatsApp Message Copy
+                                                    </span>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleCopyLogPreview(log.id, details.preview)}
+                                                        className="flex items-center gap-1 text-[10px] font-bold text-slate-600 hover:text-slate-900 bg-white px-2 py-0.5 rounded-md border border-slate-200 shadow-2xs transition-colors cursor-pointer"
+                                                    >
+                                                        {isCopied ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+                                                        <span>{isCopied ? 'Copied!' : 'Copy Text'}</span>
+                                                    </button>
+                                                </div>
+                                                <div className="bg-white rounded-xl p-3 shadow-xs border border-emerald-100 text-slate-800 text-[11px] font-sans leading-relaxed whitespace-pre-line">
+                                                    {details.preview}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })}
+                    </div>
+                )}
             </div>
 
             {/* Main Interactive Control Card */}

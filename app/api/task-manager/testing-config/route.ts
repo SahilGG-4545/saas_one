@@ -7,7 +7,8 @@ export const dynamic = 'force-dynamic';
 export async function GET() {
     try {
         const config = await TaskDatabaseService.getTestingConfig();
-        return NextResponse.json({ success: true, config });
+        const logs = await TaskDatabaseService.getAuditLogs({ limit: 30, eventType: 'whatsapp_sent' });
+        return NextResponse.json({ success: true, config, logs });
     } catch (err: any) {
         console.error('[TestingConfigAPI] GET error:', err);
         return NextResponse.json({ success: false, error: err?.message || 'Failed to fetch config' }, { status: 500 });
@@ -17,6 +18,15 @@ export async function GET() {
 export async function POST(request: NextRequest) {
     try {
         const body = await request.json().catch(() => ({}));
+
+        if (body.action === 'clear_logs') {
+            await TaskDatabaseService.clearAuditLogs('whatsapp_sent');
+            return NextResponse.json({
+                success: true,
+                message: 'Notification audit logs cleared successfully.',
+                logs: []
+            });
+        }
 
         // ── Phase 3: Immediate Manual Triggers ──────────────────────────────
         const TECH_DEPARTMENT_ID = '94a74961-2dd8-453d-9728-f6f2b9ade99b';
@@ -39,6 +49,10 @@ export async function POST(request: NextRequest) {
             const dryRun = body.dryRun !== false; // default true for safety in test trigger
             const deptId = body.departmentId || TECH_DEPARTMENT_ID;
 
+            const config = await TaskDatabaseService.getTestingConfig();
+            const rules = config.rules || TaskDatabaseService.getDefaultNotificationRules(config.cronTiming);
+            const targetRule = body.ruleId ? rules.find(r => r.id === body.ruleId) : undefined;
+
             // 1. Ensure tasks exist first
             const genResult = await TaskDailyGeneratorService.generateDailyFixedTasks({
                 departmentId: deptId
@@ -47,24 +61,43 @@ export async function POST(request: NextRequest) {
             // 2. Dispatch notifications
             const notifResult = await TaskNotificationService.sendMorningNotifications({
                 departmentId: deptId,
-                dryRun
+                dryRun,
+                rule: targetRule
             });
 
-            const summary = `${dryRun ? '[Dry-Run] ' : ''}Generated ${genResult.tasksGenerated} tasks (${genResult.tasksAlreadyExisting} existing). Notified ${notifResult.notificationsSent} employees (${notifResult.skippedNoTasks} skipped).`;
+            const ruleLabel = targetRule ? `[${targetRule.name}] ` : '';
+            const summary = `${dryRun ? '[Dry-Run] ' : ''}${ruleLabel}Generated ${genResult.tasksGenerated} tasks (${genResult.tasksAlreadyExisting} existing). Notified ${notifResult.notificationsSent} employees (${notifResult.skippedNoTasks} skipped).`;
 
             if (!dryRun) {
                 const nowIST = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
                 const todayIST = `${nowIST.getFullYear()}-${String(nowIST.getMonth() + 1).padStart(2, '0')}-${String(nowIST.getDate()).padStart(2, '0')}`;
-                await TaskDatabaseService.saveTestingConfig({
-                    cronLastRunDate: todayIST,
-                    cronLastRunSummary: summary
-                });
+                
+                if (targetRule) {
+                    await TaskDatabaseService.updateNotificationRule(targetRule.id, {
+                        lastRunDate: todayIST,
+                        lastRunSummary: summary
+                    });
+                    if (targetRule.id === 'rule_morning_digest') {
+                        await TaskDatabaseService.saveTestingConfig({
+                            cronLastRunDate: todayIST,
+                            cronLastRunSummary: summary
+                        });
+                    }
+                } else {
+                    await TaskDatabaseService.saveTestingConfig({
+                        cronLastRunDate: todayIST,
+                        cronLastRunSummary: summary
+                    });
+                }
             }
+
+            const logs = await TaskDatabaseService.getAuditLogs({ limit: 30, eventType: 'whatsapp_sent' });
 
             return NextResponse.json({
                 success: true,
                 message: summary,
                 dryRun,
+                logs,
                 result: {
                     generator: genResult,
                     notifications: notifResult
@@ -72,7 +105,74 @@ export async function POST(request: NextRequest) {
             });
         }
 
+        if (body.action === 'delete_rule') {
+            const ruleId = body.ruleId;
+            if (!ruleId) {
+                return NextResponse.json({ success: false, error: 'Missing ruleId' }, { status: 400 });
+            }
+            const updatedConfig = await TaskDatabaseService.deleteNotificationRule(ruleId);
+            return NextResponse.json({
+                success: true,
+                message: `Deleted notification rule '${ruleId}'.`,
+                config: updatedConfig
+            });
+        }
+
+        // ── Phase 1 Multi-Rule Actions ─────────────────────────────────────
+        if (body.action === 'reset_rule') {
+            const ruleId = body.ruleId;
+            const config = await TaskDatabaseService.getTestingConfig();
+            const rules = config.rules || TaskDatabaseService.getDefaultNotificationRules(config.cronTiming);
+
+            if (ruleId && ruleId !== 'all') {
+                const updatedConfig = await TaskDatabaseService.resetNotificationRuleRun(ruleId);
+                // Also sync legacy if it was morning digest
+                if (ruleId === 'rule_morning_digest') {
+                    await TaskDatabaseService.saveTestingConfig({
+                        cronLastRunDate: null,
+                        cronLastRunSummary: null
+                    });
+                }
+                return NextResponse.json({
+                    success: true,
+                    message: `Reset execution status for rule '${ruleId}'.`,
+                    config: updatedConfig
+                });
+            } else {
+                // Reset all rules
+                const resetRules = rules.map(r => ({
+                    ...r,
+                    lastRunDate: null,
+                    lastRunSummary: null
+                }));
+                const updatedConfig = await TaskDatabaseService.saveTestingConfig({
+                    cronLastRunDate: null,
+                    cronLastRunSummary: null,
+                    rules: resetRules
+                });
+                return NextResponse.json({
+                    success: true,
+                    message: 'Reset execution status for all notification rules.',
+                    config: updatedConfig
+                });
+            }
+        }
+
+        if (body.action === 'update_rule') {
+            const { ruleId, updates } = body;
+            if (!ruleId || !updates) {
+                return NextResponse.json({ success: false, error: 'Missing ruleId or updates payload' }, { status: 400 });
+            }
+            const updatedConfig = await TaskDatabaseService.updateNotificationRule(ruleId, updates);
+            return NextResponse.json({
+                success: true,
+                message: `Updated notification rule '${ruleId}'.`,
+                config: updatedConfig
+            });
+        }
+
         // ── Phase 1 & 2: Update Configuration ───────────────────────────────
+
         const updatePayload: Record<string, any> = {};
 
         if (body.enabled !== undefined) updatePayload.enabled = Boolean(body.enabled);
@@ -124,6 +224,9 @@ export async function POST(request: NextRequest) {
         }
         if (body.cronLastRunSummary !== undefined) {
             updatePayload.cronLastRunSummary = body.cronLastRunSummary ? String(body.cronLastRunSummary) : null;
+        }
+        if (body.rules !== undefined && Array.isArray(body.rules)) {
+            updatePayload.rules = body.rules;
         }
 
         const savedConfig = await TaskDatabaseService.saveTestingConfig(updatePayload);
