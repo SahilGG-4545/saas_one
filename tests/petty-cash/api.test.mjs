@@ -85,3 +85,29 @@ test('detail balance uses cents so fully spent decimal amounts show exact zero',
  const {GET}=loadTs('app/api/petty-cash/[id]/route.ts',{...auth,'@/backend/lib/pettyCash/api':{pcRequest:async()=>({id})},'@/backend/lib/pettyCash/actions':{},'@/backend/lib/supabase/admin':{supabaseAdmin:{from:query}}});
  const result=await GET(new NextRequest('http://fixture'),{params:Promise.resolve({id})});assert.equal((await result.json()).balance,0);
 });
+
+test('request detail exposes credited cash, partial spending and remaining cash from ledger entries',async()=>{
+ const data={petty_cash_documents:[],petty_cash_activity:[],petty_cash_expenses:[],petty_cash_wallet_entries:[{kind:'credit',amount:'150.00'},{kind:'debit',amount:'100.00'}],petty_cash_settlement_status:null};
+ const query=table=>{const q={select:()=>q,eq:()=>q,order:()=>q,maybeSingle:()=>Promise.resolve({data:data[table],error:null}),then:resolve=>Promise.resolve({data:data[table],error:null}).then(resolve)};return q;};
+ const {GET}=loadTs('app/api/petty-cash/[id]/route.ts',{...auth,'@/backend/lib/pettyCash/api':{pcRequest:async()=>({id,workflow_version:2,status:'paid',paid_amount:150})},'@/backend/lib/pettyCash/actions':{},'@/backend/lib/supabase/admin':{supabaseAdmin:{from:query}}});
+ const response=await GET(new NextRequest('http://fixture'),{params:Promise.resolve({id})});const body=await response.json();
+ assert.equal(response.status,200);assert.deepEqual(body.wallet,{received:150,spent:100,returned:0,balance:50});assert.equal(body.balance,50);
+});
+
+test('expense history returns dated, owned request/property references and private bill metadata',async()=>{
+ const fetch=async(input,options)=>{
+  const url=new URL(typeof input==='string'?input:input.url);
+  assert.ok(url.pathname.endsWith('/rpc/pc_my_expenses'),'History must use the authorized expense RPC');
+  assert.deepEqual(JSON.parse(options.body),{actor:user,org});
+  const select=url.searchParams.get('select');
+  const expense={id,request_id:id,amount:100,expense_date:'2026-10-03',description:'Travel bill'};
+  if(select.includes('request:petty_cash_requests!request_id'))expense.request={id,request_no:'PC-2026-00002'};
+  if(select.includes('property:properties!property_id'))expense.property={id:'00000000-0000-0000-0000-000000000003',name:'Property A'};
+  if(select.includes('documents:petty_cash_documents!expense_id'))expense.documents=[{id:'00000000-0000-0000-0000-000000000099',file_name:'travel-bill.pdf',file_type:'application/pdf'}];
+  return new Response(JSON.stringify([expense]),{status:200,headers:{'Content-Range':'0-0/1'}});
+ };
+ const database=createClient('http://fixture.supabase.test','fixture-key',{global:{fetch},auth:{persistSession:false,autoRefreshToken:false}});
+ const {GET}=loadTs('app/api/petty-cash/expenses/route.ts',{...auth,'@/backend/lib/supabase/admin':{supabaseAdmin:database}});
+ const response=await GET(new NextRequest(`http://fixture/api/petty-cash/expenses?org_id=${org}`));const body=await response.json();
+ assert.equal(response.status,200);assert.equal(body.expenses[0].request?.request_no,'PC-2026-00002');assert.equal(body.expenses[0].property?.name,'Property A');assert.equal(body.expenses[0].documents?.[0]?.file_name,'travel-bill.pdf');assert.equal(body.expenses[0].documents[0].file_url,undefined);assert.equal(body.expenses[0].expense_date,'2026-10-03');
+});

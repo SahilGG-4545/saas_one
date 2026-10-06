@@ -19,7 +19,7 @@ export async function setup({ enumRoles = true } = {}){
  INSERT INTO properties(id,organization_id,name,code) VALUES ('${id(3)}','${id(1)}','Property A','A'),('${id(4)}','${id(1)}','Property B','B');
  INSERT INTO organization_memberships(user_id,organization_id,role) VALUES ('${id(10)}','${id(1)}','org_super_admin'),('${id(14)}','${id(1)}','accounts');
  INSERT INTO property_memberships(user_id,organization_id,property_id,role) VALUES ('${id(11)}','${id(1)}','${id(3)}','mst'),('${id(12)}','${id(1)}','${id(3)}','staff'),('${id(13)}','${id(1)}','${id(3)}','property_admin'),('${id(15)}','${id(1)}','${id(3)}','food_vendor'),('${id(16)}','${id(1)}','${id(3)}','staff');`);
- for(const file of ['20260723000002_petty_cash.sql','20260903000001_petty_cash_ledger.sql','20260912000002_add_assigned_approver_to_petty_cash.sql','20261003000001_petty_cash_allocation_wallet.sql','20261004000001_petty_cash_plan_completion.sql']) await db.exec(await readFile(new URL('../../supabase/migrations/'+file,import.meta.url),'utf8'));
+ for(const file of ['20260723000002_petty_cash.sql','20260903000001_petty_cash_ledger.sql','20260912000002_add_assigned_approver_to_petty_cash.sql','20261003000001_petty_cash_allocation_wallet.sql','20261004000001_petty_cash_plan_completion.sql','20261005000002_petty_cash_optional_expense_bills.sql']) await db.exec(await readFile(new URL('../../supabase/migrations/'+file,import.meta.url),'utf8'));
  await db.query('select pc_configure($1,$2,$3,$4)',[id(10),id(3),id(12),id(13)]);
  return db;
 }
