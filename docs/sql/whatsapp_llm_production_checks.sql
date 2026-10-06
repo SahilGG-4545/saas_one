@@ -14,6 +14,7 @@ SELECT check_name, ready FROM (VALUES
     ('assistant finish RPC', to_regprocedure('public.whatsapp_assistant_finish(uuid,uuid,text)') IS NOT NULL),
     ('assistant fail RPC', to_regprocedure('public.whatsapp_assistant_fail(uuid,uuid,text)') IS NOT NULL),
     ('booking range RPC', to_regprocedure('public.whatsapp_assistant_book_range(uuid,uuid,uuid,date,time,time,uuid)') IS NOT NULL),
+    ('booking notes RPC', to_regprocedure('public.whatsapp_assistant_book_range(uuid,uuid,uuid,date,time,time,uuid,text)') IS NOT NULL),
     ('ticket request ID', EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='tickets' AND column_name='wa_assistant_request_id')),
     ('ticket completion marker', EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='tickets' AND column_name='wa_assistant_completed')),
     ('ticket immutable input', EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='tickets' AND column_name='wa_assistant_input_hash')),

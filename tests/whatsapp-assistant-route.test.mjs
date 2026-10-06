@@ -61,8 +61,10 @@ test('direct boardroom request bypasses stale task context without changing task
         '@/backend/lib/whatsapp/interpreter/context':{isInterpreterPilot:async()=>true,getConversationRoutingState:async()=>({taskActive:true,facilityActive:false})},
         '@/task-manager/TaskMessageRouter':{TaskMessageRouter:{classifyMessage:()=>assert.fail('clear direct facility request must not be classified from task context'),routeInboundMessage:()=>assert.fail('no task action')}}
     });
-    assert.equal((await route.POST(request({...payload,data:{...payload.data,message:'Book boardroom today from 5 pm to 6 pm'}}))).status,200);
-    assert.equal(stored.interpreter,true);
+    for (const message of ['Book boardroom today from 5 pm to 6 pm','Book boardroom today from 5 pm to 6 pm for task planning','Book boardroom for ticket review today from 5 pm to 6 pm']) {
+        assert.equal((await route.POST(request({...payload,data:{...payload.data,message}}))).status,200);
+        assert.equal(stored.interpreter,true);
+    }
 });
 
 test('pilot persistence failure remains retryable without an early task audit mark',async()=>{

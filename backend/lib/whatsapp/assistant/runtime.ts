@@ -127,28 +127,32 @@ const dependencies = {
     },
     async findBooking(requestId: string, userId: string, expected?: string) {
         const { data, error } = await supabaseAdmin.from('meeting_room_bookings')
-            .select('id,user_id,property_id,meeting_room_id,booking_date,start_time,end_time').eq('wa_assistant_request_id', requestId).eq('user_id', userId).maybeSingle();
+            .select('id,user_id,property_id,meeting_room_id,booking_date,start_time,end_time,comment').eq('wa_assistant_request_id', requestId).eq('user_id', userId).maybeSingle();
         if (error) throw error;
         if (data && expected) {
             const tuple = JSON.parse(expected);
             if (data.property_id !== tuple[0] || data.meeting_room_id !== tuple[2] || data.booking_date !== tuple[4] || data.start_time.slice(0,5) !== tuple[5] || data.end_time.slice(0,5) !== tuple[6]) return null;
+            if (tuple.length > 7 && (data.comment || null) !== (tuple[7] || null)) return null;
         }
         return data;
     },
-    async bookRange(request: { userId: string; propertyId: string; roomId: string; date: string; startTime: string; endTime: string; requestId: string; interpreter?:boolean }) {
+    async bookRange(request: { userId: string; propertyId: string; roomId: string; date: string; startTime: string; endTime: string; requestId: string; interpreter?:boolean; purpose?:string|null }) {
         try {
+            const purpose = request.purpose?.trim() || null;
+            if (purpose && purpose.length > 500) throw Object.assign(new Error('Invalid booking purpose'), {code:'INVALID_BOOKING'});
             if (request.interpreter) {
-                const { data: existing, error } = await supabaseAdmin.from('meeting_room_bookings').select('id,property_id,meeting_room_id,booking_date,start_time,end_time')
+                const { data: existing, error } = await supabaseAdmin.from('meeting_room_bookings').select('id,property_id,meeting_room_id,booking_date,start_time,end_time,comment')
                     .eq('wa_assistant_request_id',request.requestId).eq('user_id',request.userId).maybeSingle();
                 if (error) throw error;
                 if (existing) {
                     if (existing.property_id !== request.propertyId || existing.meeting_room_id !== request.roomId || existing.booking_date !== request.date || existing.start_time.slice(0,5) !== request.startTime || existing.end_time.slice(0,5) !== request.endTime) throw Object.assign(new Error('An earlier booking exists for this request'), {code:'OPERATION_ALREADY_CREATED'});
+                    if ('purpose' in request && (existing.comment || null) !== purpose) throw Object.assign(new Error('An earlier booking exists with different notes'), {code:'OPERATION_ALREADY_CREATED'});
                     return existing;
                 }
             }
             const booking = await rpc('whatsapp_assistant_book_range', { p_user_id: request.userId, p_property_id: request.propertyId,
                 p_room_id: request.roomId, p_date: request.date, p_start_time: request.startTime, p_end_time: request.endTime,
-                p_request_id: request.requestId });
+                p_request_id: request.requestId, ...('purpose' in request ? {p_purpose:purpose} : {}) });
             await NotificationService.afterRoomBooked(booking.id).catch(error => console.error('[WhatsAppAssistant] Booking notification failed', error));
             return booking;
         } catch (error) {
@@ -157,7 +161,8 @@ const dependencies = {
             if (failure.message?.includes('INSUFFICIENT_CREDITS')) throw Object.assign(new Error('Insufficient credits'), { code: 'INSUFFICIENT_CREDITS' });
             if (failure.message?.includes('Multiple companies')) throw Object.assign(new Error('Multiple companies'), { code: 'MULTIPLE_COMPANIES' });
             if (failure.message?.includes('No active access')) throw Object.assign(new Error('Access revoked'), { code: 'ACCESS_REVOKED' });
-            if (/Invalid or past interval|Outside configured booking slots|Room is not active/.test(failure.message || '')) throw Object.assign(new Error('Booking configuration changed'), { code: 'INVALID_BOOKING' });
+            if (failure.message?.includes('OPERATION_ALREADY_CREATED')) throw Object.assign(new Error('An earlier booking exists for this request'), {code:'OPERATION_ALREADY_CREATED'});
+            if (/Invalid or past interval|Outside configured booking slots|Room is not active|Invalid booking purpose/.test(failure.message || '')) throw Object.assign(new Error('Booking configuration changed'), { code: 'INVALID_BOOKING' });
             throw error;
         }
     },

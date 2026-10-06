@@ -28,6 +28,12 @@ after choosing Book Meeting Room from the menu.
 - A committed operation is recovered before checking its occupied slot on a
   retry. Existing request uniqueness and database overlap protection remain.
   Completion messages continue through the existing notifications/outbox.
+- An explicitly supplied purpose such as **“for BD”**, **“for tech team”** or
+  **“for a client meeting”** is saved in the booking's existing notes field.
+  It is optional (up to 500 characters); omitted notes remain empty. It does not
+  change the authenticated booker, attendees, permissions or credit policy.
+  Notes are retained while collecting missing details and stored in the initial
+  booking transaction so the outbox includes them without a second update.
 
 The exact **Book Meeting Room** menu command still collects details. Providing
 details alone shows a review requiring **Confirm Booking**; an explicit instruction
@@ -35,17 +41,21 @@ to book enables immediate execution. Tickets still require **Submit Ticket**.
 
 ## Deployment and testing
 
-This change adds no environment variables, SQL migrations or AiSensy templates.
+This change adds no environment variables or AiSensy templates.
 It uses the existing interpreter settings, Groq model/key and Project API sender.
 The tenant credit migration from the preceding booking-credit change remains a
 prerequisite: `supabase/migrations/20261006000001_whatsapp_tenant_booking_credits.sql`.
+After that migration, run `supabase/migrations/20261006000002_whatsapp_booking_purpose.sql`
+before deploying the optional-notes code. It adds a service-only range-booking RPC
+overload accepting notes and preserves the seven-argument RPC as a wrapper. It
+does not alter tables, existing bookings or credit balances. It can be rerun.
 
 Test with a future time in your permitted property:
 
-> Book Boardroom tomorrow from 5 PM to 6 PM
+> Book Boardroom tomorrow from 5 PM to 6 PM for BD
 
 For a user with multiple properties, include the exact property name or answer
 the property question. Check the actual app booking and existing completion
 notification. Also test missing dates, unavailable slots, tenant credit failure,
-Task Manager replies and duplicate delivery. Local checks use simulated provider
+Task Manager replies, omitted notes and duplicate delivery. Local checks use simulated provider
 responses; live Groq/AiSensy delivery requires the deployed configuration.

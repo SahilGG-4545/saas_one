@@ -9,20 +9,21 @@ const request={phone:'919000000000',userId:'u1',propertyId:'p1',title:'Water is 
 const hash=value=>createHash('sha256').update(JSON.stringify([value.userId,value.propertyId,value.title,value.mediaUrl || null])).digest('hex');
 function harness(booking=null) {
     let markerFailure=true,calls=0;
+    const rpcCalls=[],notifications=[];
     const row={id:'ticket-1',wa_assistant_input_hash:hash(request),wa_assistant_completed:false,photo_before_url:'https://storage.example.com/stored.jpg'};
-    const admin={from(table){let updating=false;const query={select(){return query;},update(){updating=true;return query;},eq(){return query;},async maybeSingle(){return {data:table==='meeting_room_bookings'?booking:row,error:null};},then(resolve){
+    const admin={rpc:async(name,params)=>{rpcCalls.push({name,params});return {data:{id:'new-booking',comment:params.p_purpose},error:null};},from(table){let updating=false;const query={select(){return query;},update(){updating=true;return query;},eq(){return query;},async maybeSingle(){return {data:table==='meeting_room_bookings'?booking:row,error:null};},then(resolve){
         if(updating&&markerFailure){markerFailure=false;return Promise.resolve(resolve({error:new Error('marker unavailable')}));}
         if(updating)row.wa_assistant_completed=true;return Promise.resolve(resolve({error:null}));
     }};return query;}};
     const imports={'node:crypto':{randomUUID,createHash},'@/backend/lib/supabase/admin':{supabaseAdmin:admin},
         '@/backend/lib/whatsapp/processMessage':{processIncomingMessage:async(...args)=>{calls++;assert.equal(args[9],'wamid');assert.equal(args[10].skipTaskRouting,true);assert.equal(args[10].interpreterInputHash,hash(request));return {id:row.id};}},
-        '@/backend/services/AiSensyService':{},'@/backend/services/NotificationService':{},'@/backend/utils/timezone':{},'./access':{},'./engine.mjs':{},'./worker.mjs':{},
+        '@/backend/services/AiSensyService':{},'@/backend/services/NotificationService':{NotificationService:{afterRoomBooked:async id=>notifications.push(id)}},'@/backend/utils/timezone':{},'./access':{},'./engine.mjs':{},'./worker.mjs':{},
         '../interpreter/coordinator.mjs':{},'../interpreter/interpret.mjs':{},'../interpreter/delivery.mjs':{},'../interpreter/context':{},'@/task-manager/TaskDatabaseService':{},
         '../interpreter/booking-credits.mjs':{},
         '../interpreter/media.mjs':{fetchPhoto:()=>assert.fail('stored attachment must not be downloaded from expired source')},sharp:()=>assert.fail('no new image download')};
     const exports={};const compiled=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
     vm.runInNewContext(compiled+'\nexports.testDependencies = dependencies;',{exports,require:name=>{if(!(name in imports))throw new Error(name);return imports[name];},process:{env:{}},console,Date,Buffer});
-    return {create:exports.testDependencies.createTicket,dependencies:exports.testDependencies,row,get calls(){return calls;}};
+    return {create:exports.testDependencies.createTicket,dependencies:exports.testDependencies,row,rpcCalls,notifications,get calls(){return calls;}};
 }
 test('ticket retry resumes stored attachment after marker failure without downloading expired provider URL',async()=>{
     const h=harness();await assert.rejects(h.create(request),/marker unavailable/);
@@ -42,6 +43,24 @@ test('booking retry recognizes the original interval and cannot repurpose its re
     assert.equal((await h.dependencies.bookRange(booking)).id,'booking-1');
     await assert.rejects(h.dependencies.bookRange({...booking,startTime:'15:00',endTime:'16:00'}),error=>error.code==='OPERATION_ALREADY_CREATED');
     assert.equal(h.calls,0);
+});
+test('booking notes are immutable for the same operation and empty notes remain empty',async()=>{
+    const booking={userId:'u1',propertyId:'p1',roomId:'r1',date:'2026-10-06',startTime:'14:30',endTime:'15:00',requestId:'operation-id',interpreter:true,purpose:'BD'};
+    const row={id:'booking-1',property_id:'p1',meeting_room_id:'r1',booking_date:'2026-10-06',start_time:'14:30:00',end_time:'15:00:00',comment:'BD'};
+    const h=harness(row);assert.equal((await h.dependencies.bookRange(booking)).comment,'BD');
+    for (const purpose of ['tech team',null]) await assert.rejects(h.dependencies.bookRange({...booking,purpose}),error=>error.code==='OPERATION_ALREADY_CREATED');
+    assert.equal((await harness({...row,comment:null}).dependencies.bookRange({...booking,purpose:null})).comment,null);
+});
+test('the real booking adapter passes supplied notes or null to the atomic RPC before notifying',async()=>{
+    for(const purpose of ['BD',null,undefined]) {
+        const h=harness(),request={userId:'u1',propertyId:'p1',roomId:'r1',date:'2026-10-07',startTime:'17:00',endTime:'18:00',requestId:'operation-id',interpreter:true,purpose};
+        const result=await h.dependencies.bookRange(request);
+        assert.equal(result.comment,purpose||null);assert.equal(h.rpcCalls[0].name,'whatsapp_assistant_book_range');
+        assert.equal(h.rpcCalls[0].params.p_purpose,purpose||null);assert.deepEqual(h.notifications,['new-booking']);
+    }
+    const legacy=harness();
+    await legacy.dependencies.bookRange({userId:'u1',propertyId:'p1',roomId:'r1',date:'2026-10-07',startTime:'17:00',endTime:'18:00',requestId:'legacy-operation'});
+    assert.equal(Object.hasOwn(legacy.rpcCalls[0].params,'p_purpose'),false);
 });
 test('committed request cannot be reused with a corrected property, issue or photo',async()=>{
     const h=harness();

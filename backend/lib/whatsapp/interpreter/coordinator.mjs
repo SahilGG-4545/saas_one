@@ -13,11 +13,29 @@ const displayDate = date => new Intl.DateTimeFormat('en-GB', {day:'2-digit',mont
     .format(new Date(`${date}T12:00:00+05:30`));
 export const isExplicitTaskCommand = text => /^(?:tasks?|task\s*manager|my\s*tasks|view\s*tasks|status|today'?s?\s*tasks|cancel\s+tasks|(?:done|complete|finish)\s+\d+|done[-\s]*all|complete\s*all|finished\s*all|all\s*done|assign(?:\s+.*)?|team(?:\s*status)?|view\s*team\s*tasks|dept|department)$/i.test(text.trim());
 
+function bookingInstructionText(text) {
+    // Classify an explicit for-description beside a time range as metadata.
+    // The model still receives the entire message, and access/target
+    // validation still uses its source-backed fields. Separate commands stay
+    // in the instruction so they cannot silently trigger an automatic booking.
+    const separator = [...text.matchAll(/\bfor\s+/gi)].at(-1);
+    if (!separator) return text;
+    const prefix = text.slice(0,separator.index), tail = text.slice(separator.index+separator[0].length);
+    const schedule = /\b(?:today|tomorrow|from\s+\d|between\s+\d|on\s+\d)/i.exec(tail);
+    const description = schedule ? tail.slice(0,schedule.index) : tail;
+    const instruction = prefix + (schedule ? tail.slice(schedule.index) : '');
+    const clocks = instruction.replace(/\b([ap])\.m\./gi,'$1m').match(/\b(?:\d{1,2}(?:[:.]\d{2})?\s*(?:am|pm)|\d{1,2}:\d{2})\b/gi) || [];
+    if (!description.trim() || clocks.length !== 2 || isExplicitTaskCommand(description) ||
+        /(?:^|[;.!?,:\n]|\b(?:and|then)\s+)\s*(?:please\s+)?(?:create|raise|submit|complete|finish|done|assign|cancel|book|reserve|schedule)\b/i.test(description)) return text;
+    return instruction;
+}
+
 // Starting an action requires an explicit booking instruction, not just a room
 // mentioned in a task, question, cancellation or competing service request.
 export function isDirectBookingRequest(text) {
     const normalized = normalizeText(text);
-    if (/\b(?:tasks?|tickets?|do not|don t|dont|never|cancel|not|instead|or|if|unless|maybe)\b/.test(normalized)) return false;
+    if (/\b(?:do not|don t|dont|never|cancel|not|instead|or|if|unless|maybe)\b/.test(normalized) ||
+        /\b(?:tasks?|tickets?)\b/.test(normalizeText(bookingInstructionText(text)))) return false;
     return /^(?:(?:hey|hi|hello|please|can you|could you|would you|i want to|i need to|i would like to)\s+)*(?:book|reserve|schedule)\s+(?:(?:a|an|the)\s+)?(?:meeting room|conference room|boardroom|room)\b/.test(normalized);
 }
 
@@ -67,6 +85,16 @@ function mentionedChoices(text, choices) {
 
 function locationQualifier(text) {
     return text.match(/\b(?:at|in|for)\s+(?:the\s+)?(?:property\s+)?((?:[a-z]|\d+[a-z])[a-z0-9 '&,.-]*?)(?=\s+(?:today|tomorrow|from|on|at|for|starting|between|\d{1,2}[:.]\d{2}|\d{2}-\d{2}-\d{4}|\d{4}-\d{2}-\d{2})\b|$)/i)?.[1]?.trim() || null;
+}
+
+function withoutPurpose(text, purpose) {
+    const source = ` ${normalizeText(text)} `;
+    if (!purpose) return text;
+    const phrase = ` ${normalizeText(purpose)} `, index = source.lastIndexOf(phrase);
+    // Grounding alone does not prove a phrase is a note. Preserve explicit
+    // in/at locations and room mentions if the model mislabeled them as purpose.
+    return index < 0 || !/\bfor$/.test(source.slice(0,index))
+        ? text : (source.slice(0,index) + ' ' + source.slice(index+phrase.length)).trim();
 }
 
 export async function advanceConversation(input, current, deps) {
@@ -149,7 +177,8 @@ export async function advanceConversation(input, current, deps) {
             return {session:state,reply:null};
         }
     }
-    if (!input.mediaUrl && /\b(?:tasks?|done|completed|finished)\b/i.test(text) && !menuSelection) return reply('This sounds like a task update. Send TASKS or DONE followed by the task number. Your facility request is still saved.', draft);
+    const serviceInstruction = draft.workflow === 'booking' ? bookingInstructionText(text) : text;
+    if (!input.mediaUrl && /\b(?:tasks?|done|completed|finished)\b/i.test(serviceInstruction) && !menuSelection) return reply('This sounds like a task update. Send TASKS or DONE followed by the task number. Your facility request is still saved.', draft);
     if (!input.mediaUrl && /\b(?:do not|don['’]?t|never)\s+(?:create|raise|book|reserve|schedule|submit|confirm)\b/i.test(text)) {
         delete draft.autoBook;
         delete draft.review;
@@ -211,8 +240,9 @@ export async function advanceConversation(input, current, deps) {
             }
             if (draft.autoBook) {
                 // A null model field cannot erase an explicit location constraint.
-                const qualifier = locationQualifier(text);
-                const propertyMentions = mentionedChoices(text,choices);
+                const targetingText = withoutPurpose(text,validated.fields.purpose);
+                const qualifier = locationQualifier(targetingText);
+                const propertyMentions = mentionedChoices(targetingText,choices);
                 const explicitLocation = qualifier && !parseClock(qualifier) && !parseBookingDate(qualifier,now) && normalizeText(qualifier) !== normalizeText(validated.fields.room);
                 if (propertyMentions.length > 1 || explicitLocation || (propertyMentions.length === 1 && (!validated.fields.property || exactChoice(validated.fields.property,choices)))) {
                     const property = propertyMentions.length > 1 ? null : explicitLocation ? exactChoice(qualifier,choices) : propertyMentions[0];
@@ -222,7 +252,7 @@ export async function advanceConversation(input, current, deps) {
                     if (property) draft.propertyId = property.id;
                     changed = true;
                 }
-                if (validated.fields.room || /\b(?:room|boardroom)\b/i.test(text)) draft.roomEvidence = text;
+                if (validated.fields.room || /\b(?:room|boardroom)\b/i.test(targetingText)) draft.roomEvidence = targetingText;
             }
         }
         if (pendingMedia) { draft.mediaUrl = pendingMedia; changed = true; }
@@ -287,10 +317,12 @@ export async function advanceConversation(input, current, deps) {
         if (missing.length) {
             if (!room) draft.choices = {kind:'room',items:roomList.slice(0,20).map(r=>({id:r.id,name:r.name}))};
             const known=[date&&`📅 *Date:* ${displayDate(date)}`,room&&`🚪 *Room:* ${room.name}`,
-                startTime&&endTime&&`🕒 *Time:* ${displayClock(startTime)} to ${displayClock(endTime)} IST`].filter(Boolean);
+                startTime&&endTime&&`🕒 *Time:* ${displayClock(startTime)} to ${displayClock(endTime)} IST`,
+                draft.fields.purpose&&`📝 *Purpose:* ${draft.fields.purpose.trim()}`].filter(Boolean);
             return reply(`🏢 *Property:* ${property.name}${known.length?`\n${known.join('\n')}`:''}\n\nPlease send the missing details:\n${missing.join('\n')}${!room ? `\n\n*Available rooms:*\n${draft.choices.items.map((r,i)=>`${i+1}. ${r.name}`).join('\n') || 'No active rooms available.'}${roomList.length>20 ? '\nMore rooms are available; send the exact room name.' : ''}` : ''}\n\n👉 Reply with the details${!room?' or the room’s option number':''}.`, draft, '📝 Booking details');
         }
-        const fingerprint = JSON.stringify([property.id,property.name,room.id,room.name,date,startTime,endTime]);
+        const purpose = draft.fields.purpose?.trim() || null;
+        const fingerprint = JSON.stringify([property.id,property.name,room.id,room.name,date,startTime,endTime,purpose]);
         if (draft.autoBook) {
             // A retry must find a committed booking before checking its occupied
             // slot or past start time. The lookup verifies owner and input tuple.
@@ -308,11 +340,11 @@ export async function advanceConversation(input, current, deps) {
             const credit = await deps.creditSummary(user.id,property.id,{start_time:startTime,end_time:endTime});
             if (!draft.autoBook && (!confirmation || !reviewMatches(fingerprint))) {
                 setReview(fingerprint);
-                return reply(`🏢 *Property:* ${property.name}\n🚪 *Room:* ${room.name}\n📅 *Date:* ${displayDate(date)}\n🕒 *Time:* ${displayClock(startTime)} to ${displayClock(endTime)} IST${credit?`\n💳 *Credits:* ${credit}`:''}\n\n✅ Reply *Confirm Booking* to book.\n✏️ Send a correction to change the details.`, draft, '📋 Review booking');
+                return reply(`🏢 *Property:* ${property.name}\n🚪 *Room:* ${room.name}\n📅 *Date:* ${displayDate(date)}\n🕒 *Time:* ${displayClock(startTime)} to ${displayClock(endTime)} IST${purpose?`\n📝 *Purpose:* ${purpose}`:''}${credit?`\n💳 *Credits:* ${credit}`:''}\n\n✅ Reply *Confirm Booking* to book.\n✏️ Send a correction to change the details.`, draft, '📋 Review booking');
             }
             if (draft.autoBook) setReview(fingerprint);
             try {
-                const booking = await deps.bookRange({userId:user.id,propertyId:property.id,roomId:room.id,date,startTime,endTime,requestId:draft.id,interpreter:true});
+                const booking = await deps.bookRange({userId:user.id,propertyId:property.id,roomId:room.id,date,startTime,endTime,purpose,requestId:draft.id,interpreter:true});
                 if (!booking?.id) throw new Error('Booking service did not return a stored booking');
             } catch (error) {
                 if(error.code==='OPERATION_ALREADY_CREATED') {
