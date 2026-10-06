@@ -13,6 +13,7 @@ import { sendSessionReply } from '../interpreter/delivery.mjs';
 import { organizationSettings, lookupQuotedContext, recordOutgoingContext } from '../interpreter/context';
 import { TaskDatabaseService } from '@/task-manager/TaskDatabaseService';
 import { fetchPhoto } from '../interpreter/media.mjs';
+import { summarizeBookingCredits } from '../interpreter/booking-credits.mjs';
 import sharp from 'sharp';
 
 async function rpc(name: string, args: Record<string, unknown>) {
@@ -83,18 +84,7 @@ async function availableRooms(propertyId: string, date: string, startTime: strin
 }
 
 async function creditSummary(userId: string, propertyId: string, slot: { start_time: string; end_time: string }) {
-    const { data: members, error: memberError } = await supabaseAdmin.from('company_members')
-        .select('company_id, company:companies!inner(property_id)').eq('user_id', userId).eq('company.property_id', propertyId);
-    if (memberError) throw memberError;
-    if ((members || []).length > 1) return 'Multiple companies at this property. Please contact your property manager.';
-    const companyId = members?.[0]?.company_id;
-    let query = supabaseAdmin.from('meeting_room_credits').select('remaining_hours').eq('property_id', propertyId);
-    query = companyId ? query.eq('company_id', companyId) : query.eq('user_id', userId).is('company_id', null);
-    const { data: credit, error } = await query.maybeSingle();
-    if (error) throw error;
-    const minutes = (time: string) => Number(time.slice(0, 2)) * 60 + Number(time.slice(3, 5));
-    const needed = (minutes(slot.end_time) - minutes(slot.start_time)) / 60;
-    return credit ? `${needed} hours required; ${credit.remaining_hours} hours remaining` : 'No credit record; current app booking rules apply';
+    return summarizeBookingCredits(supabaseAdmin, userId, propertyId, slot);
 }
 
 const dependencies = {

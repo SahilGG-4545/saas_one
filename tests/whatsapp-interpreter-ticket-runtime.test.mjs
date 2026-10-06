@@ -18,6 +18,7 @@ function harness(booking=null) {
         '@/backend/lib/whatsapp/processMessage':{processIncomingMessage:async(...args)=>{calls++;assert.equal(args[9],'wamid');assert.equal(args[10].skipTaskRouting,true);assert.equal(args[10].interpreterInputHash,hash(request));return {id:row.id};}},
         '@/backend/services/AiSensyService':{},'@/backend/services/NotificationService':{},'@/backend/utils/timezone':{},'./access':{},'./engine.mjs':{},'./worker.mjs':{},
         '../interpreter/coordinator.mjs':{},'../interpreter/interpret.mjs':{},'../interpreter/delivery.mjs':{},'../interpreter/context':{},'@/task-manager/TaskDatabaseService':{},
+        '../interpreter/booking-credits.mjs':{},
         '../interpreter/media.mjs':{fetchPhoto:()=>assert.fail('stored attachment must not be downloaded from expired source')},sharp:()=>assert.fail('no new image download')};
     const exports={};const compiled=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
     vm.runInNewContext(compiled+'\nexports.testDependencies = dependencies;',{exports,require:name=>{if(!(name in imports))throw new Error(name);return imports[name];},process:{env:{}},console,Date,Buffer});

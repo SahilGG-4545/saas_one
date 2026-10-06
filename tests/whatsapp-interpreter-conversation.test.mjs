@@ -31,7 +31,7 @@ test('menu booking collects grounded details, decimal clocks, and requires confi
     assert.equal((await h.send('hi')).reply.key,'menu');
     await h.send('Book Meeting Room');
     const prepared=await h.send('Book conference room 1 today from 2.30pm to 3 pm');
-    assert.match(prepared.reply.text,/14:30.*15:00/);
+    assert.match(prepared.reply.text,/2:30 PM.*3:00 PM/);
     assert.equal(h.calls.length,0);
     const requestId=h.state.drafts.booking.id;
     await h.send('confirm booking');
@@ -215,7 +215,7 @@ test('relative date midnight and singleton room replacement require a new review
     const revision=h.state.drafts.booking.revision;
     h.deps.now=()=>new Date('2026-10-05T18:31:00Z');
     const midnight=await h.send('Confirm Booking');
-    assert.match(midnight.reply.text,/2026-10-06/);assert.equal(h.calls.length,0);
+    assert.match(midnight.reply.text,/06 Oct 2026/);assert.equal(h.calls.length,0);
     assert.ok(h.state.drafts.booking.revision>revision);
     h.deps.rooms=async()=>[{id:'r2',name:'Room B'}];h.deps.availableRooms=async()=>[{id:'r2'}];
     const replaced=await h.send('Confirm Booking');
@@ -264,4 +264,26 @@ test('completed ticket recovery uses the same trimmed issue as original creation
     h.deps.now=()=>new Date('2026-10-05T07:00:00Z');
     h.deps.findTicket=async(_id,_user,expected)=>{assert.equal(expected.title,'Water is leaking');return {id:'stored',property_id:'p1'};};
     const result=await h.send('Submit Ticket');assert.equal(result.reply,null);assert.equal(h.calls.length,0);
+});
+test('booking review is readable, omits non-tenant credits, and still requires the explicit confirmation',async()=>{
+    const h=harness({creditSummary:async()=>null});
+    await h.send('Book Meeting Room');
+    const review=await h.send('Book conference room 1 today from 2.30pm to 3 pm');
+    assert.match(review.reply.text,/📋.*Review booking/);
+    assert.match(review.reply.text,/🏢 \*Property:\* SS Plaza/);
+    assert.match(review.reply.text,/🕒 \*Time:\* 2:30 PM.*3:00 PM IST/);
+    assert.doesNotMatch(review.reply.text,/credit|null|undefined/i);
+    h.deps.interpret=async()=>({ok:true,intent:'unclear',fields:fields({})});
+    const uncertain=await h.send('Book the room');
+    assert.match(uncertain.reply.text,/Confirm Booking/);assert.equal(h.calls.length,0);
+    await h.send('Confirm Booking');assert.equal(h.calls.length,1);
+});
+test('property and room prompts put each numbered choice on its own line and keep partial details',async()=>{
+    const h=harness({properties:async()=>[{id:'p1',name:'SS Plaza',organization_id:'o1'},{id:'p2',name:'Other Office',organization_id:'o1'}],interpret:async()=>({ok:true,intent:'details',fields:fields({date:'today',start:'3 pm',end:'4 pm'})})});
+    const property=await h.send('Book Meeting Room');assert.match(property.reply.text,/🏢.*Choose a property/);
+    assert.match(property.reply.text,/\n1\. SS Plaza\n2\. Other Office/);
+    await h.send('1');
+    const room=await h.send('today 3 pm to 4 pm');assert.match(room.reply.text,/📝.*Booking details/);
+    assert.match(room.reply.text,/\n1\. Conference Room 1\n2\. Conference Room 2/);
+    assert.equal(h.state.drafts.booking.fields.start,'3 pm');assert.equal(h.calls.length,0);
 });

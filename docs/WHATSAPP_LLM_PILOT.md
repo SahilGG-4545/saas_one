@@ -79,6 +79,20 @@ These diagnostics do not change routing, grant access or disclose phone numbers,
 
 ## Templates and notifications
 
+### Tenant-only WhatsApp booking credits and message formatting
+
+Apply `supabase/migrations/20261006000001_whatsapp_tenant_booking_credits.sql` before deploying the tenant-credit update. It adds a service-role-only `whatsapp_assistant_requires_credits(uuid,uuid)` policy function and replaces both WhatsApp booking RPC definitions. It does not change tables, existing bookings or balances. Reapplying it preserves data. This SQL has only been tested in isolated PGlite databases; it was not run against production here.
+
+The selected property's active tenant, super-tenant and legacy tenant-user roles require credits. A master admin or active organization admin/owner with scope over that property books without tenant credits. A tenant role or admin role in another property/organization does not determine this property's credit policy. Non-tenants skip company-credit lookup and deduction. Tenants use the property's company allocation, or their individual allocation when no company is linked. Missing or insufficient allocation prevents booking. Atomic availability checks, credit deductions and idempotency remain enforced by the database.
+
+The AI follow-ups use WhatsApp bold headings, blank lines, numbered choices, emojis and 12-hour times with IST. Property, room, date and time are shown separately in the review; the credit line appears only for tenants. Ticket review uses the same formatting and retains optional photos. An unclear message after review repeats the exact confirmation instruction; it cannot create a booking. Existing menu and notification campaigns remain in use. Formatted free-form replies do not require new approved templates; existing notice-template fallback keeps its one text parameter.
+
+After applying the migration, this read-only check should return true:
+
+```sql
+SELECT to_regprocedure('public.whatsapp_assistant_requires_credits(uuid,uuid)') IS NOT NULL AS tenant_credit_policy_ready;
+```
+
 | Message | Delivery |
 | --- | --- |
 | HI greeting and Create Ticket / Book Meeting Room buttons | Existing `fms_whatsapp_menu_v1` API campaign |

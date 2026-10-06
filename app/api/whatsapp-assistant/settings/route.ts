@@ -35,7 +35,9 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ config:parsed.success ? parsed.data : defaultSettings, userId:auth.user?.id,
             readiness:{ llm:!!process.env.GROQ_TASK_CHAT_API_KEY, projectApi:!!process.env.AISENSY_PROJECT_ID && !!process.env.AISENSY_PROJECT_API_KEY,
                 globalEnabled:process.env.WHATSAPP_LLM_INTERPRETER_ENABLED === 'true' && process.env.AISENSY_ASSISTANT_ENABLED === 'true' } });
-    } catch { return NextResponse.json({error:'Settings unavailable. Check the interpreter migration.'},{status:503}); }
+    } catch { return NextResponse.json({error:req.nextUrl.searchParams.get('view')==='users'
+        ? 'Organization users could not be loaded. Retry loading settings.'
+        : 'Settings unavailable. Check the interpreter migration.'},{status:503}); }
 }
 
 export async function PUT(req: NextRequest) {

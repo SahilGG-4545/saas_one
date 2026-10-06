@@ -10,7 +10,8 @@ export async function getOrganizationUsers(admin, organizationId) {
             const query = admin.from(table).select(table === 'property_memberships'
                 ? `properties!inner(organization_id),${profile}` : profile)
                 .eq(table === 'property_memberships' ? 'properties.organization_id' : 'organization_id', organizationId)
-                .eq('is_active', true).order('id');
+                .eq('is_active', true).order('user_id');
+            if (table === 'property_memberships') query.order('property_id');
             const { data, error } = await query.range(offset, offset + pageSize - 1);
             if (error) throw error;
             rows.push(...(data || []));

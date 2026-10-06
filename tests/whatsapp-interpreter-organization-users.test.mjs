@@ -7,7 +7,10 @@ test('organization picker scopes both membership sources, deduplicates and reads
     const alice={id:'alice',full_name:'Alice',email:'alice@example.com',phone:'9000000000',is_approved:true};
     const bob={id:'bob',full_name:'Bob',phone:null,approval_status:'pending'};
     const rows={organization_memberships:Array.from({length:500},()=>({user:alice})),property_memberships:[{user:alice},{user:bob},{user:{id:'deleted',deleted_at:'today'}}]};
-    const admin={from(table){const filters={};const q={select(){return q;},eq(k,v){filters[k]=v;return q;},order(){return q;},async range(start,end){
+    const admin={from(table){const filters={};const q={select(){return q;},eq(k,v){filters[k]=v;return q;},order(column){
+        // Memberships use composite keys, with no synthetic id column.
+        assert.ok(['user_id',...(table==='property_memberships'?['property_id']:[])].includes(column),`Unknown membership column: ${column}`);return q;
+    },async range(start,end){
         reads.push({table,filters:{...filters},start});return {data:rows[table].slice(start,end+1),error:null};
     }};return q;}};
     const result=await getOrganizationUsers(admin,'org-a');
