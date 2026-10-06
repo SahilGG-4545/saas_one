@@ -10,6 +10,14 @@ test('pilot defaults off and rejects arbitrary tools, models and secrets in orga
     assert.equal(pilotAllowed({...defaultSettings,enabled:true,pilotUserIds:[uid]},uid),true);
     for(const extra of [{model:'override'},{apiKey:'secret'},{actions:['task.complete']},{defaultDate:'invent'}]) assert.equal(settingsSchema.safeParse({...defaultSettings,...extra}).success,false);
 });
+test('old settings remain selected-user only; all-user mode is explicit and respects disable',()=>{
+    const old={enabled:true,bookingEnabled:true,ticketEnabled:true,defaultDate:'ask',pilotUserIds:[]};
+    assert.equal(settingsSchema.parse(old).accessMode,'selected');
+    assert.equal(pilotAllowed(old,uid),false);
+    assert.equal(pilotAllowed({...old,accessMode:'all'},uid),true);
+    assert.equal(pilotAllowed({...old,accessMode:'all',enabled:false},uid),false);
+    assert.equal(settingsSchema.safeParse({...old,accessMode:'unknown'}).success,false);
+});
 test('database restricts settings to active org super admin and hides outgoing reply context',async()=>{
     const db=new PGlite();
     try {
