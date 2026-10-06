@@ -8,7 +8,7 @@ import { handleFreeformTest } from '@/whatsapp-test/freeformTest';
 import { TaskMessageRouter } from '@/task-manager/TaskMessageRouter';
 import { TaskIdempotencyService } from '@/task-manager/TaskIdempotencyService';
 import { isInterpreterPilot, lookupQuotedContext, getConversationRoutingState } from '@/backend/lib/whatsapp/interpreter/context';
-import { isExplicitTaskCommand } from '@/backend/lib/whatsapp/interpreter/coordinator.mjs';
+import { isExplicitTaskCommand, isDirectBookingRequest } from '@/backend/lib/whatsapp/interpreter/coordinator.mjs';
 
 export const runtime = 'nodejs';
 export const maxDuration = 120;
@@ -73,7 +73,7 @@ export async function POST(req: NextRequest) {
             }
         } catch { return NextResponse.json({error:'Reply context unavailable; retry delivery'},{status:503}); }
     }
-    if (interpreter && !explicitTask && !input.mediaUrl && !input.quotedIds?.length &&
+    if (interpreter && !explicitTask && !input.mediaUrl && !input.quotedIds?.length && !isDirectBookingRequest(input.text) &&
         !/^(hi|hello|hey|menu|help|options|create ticket|book meeting room|confirm booking|submit ticket|add photo|no photo|remove photo|without photo)$/i.test(input.text.trim())) {
         try {
             const contexts = await getConversationRoutingState(input.phone);

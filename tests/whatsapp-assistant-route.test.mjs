@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import ts from 'typescript';
 import * as protocol from '../backend/lib/whatsapp/assistant/protocol.mjs';
-import { isExplicitTaskCommand } from '../backend/lib/whatsapp/interpreter/coordinator.mjs';
+import { isExplicitTaskCommand, isDirectBookingRequest } from '../backend/lib/whatsapp/interpreter/coordinator.mjs';
 
 const require = createRequire(import.meta.url);
 const next = require('next/server');
@@ -27,7 +27,7 @@ function handler(env, enqueue = async () => 'event-1', overrides = {}) {
         '@/task-manager/TaskMessageRouter': {TaskMessageRouter:{routeInboundMessage:async()=>({handledByTaskManager:false})}},
         '@/task-manager/TaskIdempotencyService': {TaskIdempotencyService:{isDuplicateWebhook:async()=>false,recordProcessedWebhook:()=>{}}},
         '@/backend/lib/whatsapp/interpreter/context': {isInterpreterPilot:async()=>false,lookupQuotedContext:async()=>null,getConversationRoutingState:async()=>({taskActive:false,facilityActive:false})},
-        '@/backend/lib/whatsapp/interpreter/coordinator.mjs': {isExplicitTaskCommand},
+        '@/backend/lib/whatsapp/interpreter/coordinator.mjs': {isExplicitTaskCommand,isDirectBookingRequest},
         ...overrides,
     };
     imports['@/backend/lib/whatsapp/interpreter/context']={getConversationRoutingState:async()=>({taskActive:false,facilityActive:false}),...imports['@/backend/lib/whatsapp/interpreter/context']};
@@ -54,6 +54,15 @@ test('pilot persists before task audit dedup and retains quoted IDs and service 
     assert.equal(stored.interpreter,true);
     assert.deepEqual(Array.from(stored.quotedIds),['old-prompt','alias']);
     assert.equal(stored.inboundAt,new Date(1791201600*1000).toISOString());
+});
+test('direct boardroom request bypasses stale task context without changing task commands',async()=>{
+    let stored;
+    const route=handler({},async input=>{stored=input;return 'direct-booking';},{
+        '@/backend/lib/whatsapp/interpreter/context':{isInterpreterPilot:async()=>true,getConversationRoutingState:async()=>({taskActive:true,facilityActive:false})},
+        '@/task-manager/TaskMessageRouter':{TaskMessageRouter:{classifyMessage:()=>assert.fail('clear direct facility request must not be classified from task context'),routeInboundMessage:()=>assert.fail('no task action')}}
+    });
+    assert.equal((await route.POST(request({...payload,data:{...payload.data,message:'Book boardroom today from 5 pm to 6 pm'}}))).status,200);
+    assert.equal(stored.interpreter,true);
 });
 
 test('pilot persistence failure remains retryable without an early task audit mark',async()=>{
