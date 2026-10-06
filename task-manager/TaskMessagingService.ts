@@ -1,4 +1,7 @@
 import { AiSensyService } from '@/backend/services/AiSensyService';
+import { providerIds } from '@/backend/lib/whatsapp/interpreter/delivery.mjs';
+import { recordOutgoingContext } from '@/backend/lib/whatsapp/interpreter/context';
+import { randomUUID } from 'node:crypto';
 
 const PROJECT_API_BASE = 'https://apis.aisensy.com/project-apis/v1/project';
 
@@ -47,6 +50,11 @@ export class TaskMessagingService {
                 return false;
             }
 
+            if (process.env.WHATSAPP_LLM_INTERPRETER_ENABLED === 'true') {
+                const body = await res.json().catch(() => null);
+                await recordOutgoingContext(destination, providerIds(body), { workflow:'task', conversationId:randomUUID() })
+                    .catch(() => console.warn('[TaskMessagingService] Reply context could not be saved'));
+            }
             return true;
         } catch (error) {
             console.error('[TaskMessagingService] Freeform send network error:', error);
@@ -69,6 +77,8 @@ export class TaskMessagingService {
             campaignName,
             templateParams: params.templateParams,
         });
+        if (res.success && res.messageIds?.length) await recordOutgoingContext(this.formatPhone(params.phone),res.messageIds,{workflow:'task',conversationId:randomUUID()})
+            .catch(() => console.warn('[TaskMessagingService] Template reply context could not be saved'));
         return res.success;
     }
 

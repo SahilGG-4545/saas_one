@@ -70,6 +70,26 @@ test('migration and booking RPC enforce property scope, credits, idempotency, an
     } finally { await db.close(); }
 });
 
+test('production readiness SQL verifies the installed assistant and pilot migrations',async()=>{
+    const db=await database();
+    try {
+        await db.exec(`CREATE TABLE organizations(id uuid PRIMARY KEY);
+            CREATE TABLE conversation_context(id uuid); CREATE TABLE task_audit_logs(id uuid);
+            CREATE SCHEMA auth; CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql AS $$SELECT NULL::uuid$$;`);
+        await db.exec(await readFile(new URL('../supabase/migrations/20261005000002_whatsapp_llm_interpreter.sql',import.meta.url),'utf8'));
+        const sql=await readFile(new URL('../docs/sql/whatsapp_llm_production_checks.sql',import.meta.url),'utf8');
+        const ready=await db.query(sql);
+        assert.equal(ready.rows.length,22);assert.deepEqual(ready.rows.filter(row=>!row.ready),[]);
+        await db.exec(`DROP FUNCTION whatsapp_assistant_properties(uuid);
+            ALTER TABLE tickets DROP CONSTRAINT tickets_wa_assistant_request_id_key;
+            ALTER TABLE meeting_room_bookings DROP CONSTRAINT meeting_room_bookings_wa_assistant_request_id_key;
+            ALTER TABLE meeting_room_bookings DROP CONSTRAINT meeting_room_no_overlap;
+            ALTER TABLE tickets DROP COLUMN wa_assistant_input_hash;`);
+        assert.deepEqual((await db.query(sql)).rows.filter(row=>!row.ready).map(row=>row.check_name),[
+            'assistant property access RPC','booking idempotency uniqueness','booking overlap protection','ticket idempotency uniqueness','ticket immutable input']);
+    } finally {await db.close();}
+});
+
 test('event RPCs deduplicate, serialize a sender, persist prompts, and expire sessions', async () => {
     const db = await database();
     try {
