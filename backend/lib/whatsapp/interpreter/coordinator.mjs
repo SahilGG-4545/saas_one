@@ -4,6 +4,13 @@ import { audienceAllows } from './config.mjs';
 
 const TTL = 20 * 60 * 1000;
 const blank = () => ({ llmVersion: 1, active: null, drafts: {} });
+const message = (heading, text) => `*${heading}*\n\n${text}`;
+const displayClock = clock => {
+    const [hour, minute] = clock.split(':').map(Number);
+    return `${hour % 12 || 12}:${String(minute).padStart(2, '0')} ${hour >= 12 ? 'PM' : 'AM'}`;
+};
+const displayDate = date => new Intl.DateTimeFormat('en-GB', {day:'2-digit',month:'short',year:'numeric',timeZone:'Asia/Kolkata'})
+    .format(new Date(`${date}T12:00:00+05:30`));
 export const isExplicitTaskCommand = text => /^(?:tasks?|task\s*manager|my\s*tasks|view\s*tasks|status|today'?s?\s*tasks|cancel\s+tasks|(?:done|complete|finish)\s+\d+|done[-\s]*all|complete\s*all|finished\s*all|all\s*done|assign(?:\s+.*)?|team(?:\s*status)?|view\s*team\s*tasks|dept|department)$/i.test(text.trim());
 
 export function parseClock(value) {
@@ -29,9 +36,12 @@ function exactChoice(expression, choices) {
 export async function advanceConversation(input, current, deps) {
     const now = deps.now();
     const state = current?.llmVersion === 1 ? structuredClone(current) : blank();
-    const reply = (text, draft = null) => ({ session: state, reply: { key: 'notice', params: [text], text,
+    const reply = (body, draft = null, heading = '💬 Autopilot') => {
+        const text = message(heading, body);
+        return { session: state, reply: { key: 'notice', params: [text], text,
         workflow: draft?.workflow || 'menu', conversationId: draft?.id || input.requestId,
-        revision: draft?.revision || 0, lastInboundAt: input.inboundAt || now.toISOString() } });
+        revision: draft?.revision || 0, lastInboundAt: input.inboundAt || now.toISOString() } };
+    };
     const user = await deps.findUser(input.phone);
     if (!user || (state.userId && state.userId !== user.id)) {
         return { session: null, reply: { key: 'notice', params: ['Your number could not be linked to an approved account. Contact your property manager.'], text: 'Your number could not be linked to an approved account. Contact your property manager.', lastInboundAt: input.inboundAt || now.toISOString() } };
@@ -122,7 +132,9 @@ export async function advanceConversation(input, current, deps) {
         if (text) {
             const result = await deps.interpret({ workflow: draft.workflow, text, pending: Object.keys(draft.fields) });
             const validated = result.ok ? validateTurn({ intent: result.intent, fields: result.fields }, draft.workflow, text) : result;
-            if (!validated.ok || validated.intent !== 'details') return reply('I could not safely understand that message for this request. Please send the requested details again. For task updates, send TASKS.', draft);
+            if (!validated.ok || validated.intent !== 'details') return reply(draft.review
+                ? `Your request is saved.\n\n✅ If the details in the latest review are correct, reply *${draft.workflow==='booking'?'Confirm Booking':'Submit Ticket'}*.\n✏️ Otherwise, send the details you want to change.\n\nFor task updates, send *TASKS*.`
+                : `Please send the ${draft.workflow==='booking'?'booking details':'issue description'} requested above.\n\nFor task updates, send *TASKS*.`, draft, '💬 Let’s continue');
             for (const [field, value] of Object.entries(validated.fields)) if (value !== null) { draft.fields[field] = value; changed = true; }
             if (validated.fields.room) delete draft.roomId;
             if (validated.fields.property) {
@@ -140,7 +152,7 @@ export async function advanceConversation(input, current, deps) {
     if (!property) {
         // Never show another organization's data through a model-proposed property name.
         draft.choices = { kind: 'property', items: choices.slice(0, 20).map(p => ({ id:p.id, name:p.name })) };
-        return reply(`Choose the property for this ${draft.workflow} (reply with its name or number):\n${draft.choices.items.map((p,i)=>`${i+1}. ${p.name}`).join('\n')}${choices.length>20 ? '\nMore properties are available; send the exact property name.' : ''}`, draft);
+        return reply(`Where would you like to ${draft.workflow==='booking'?'book a meeting room':'create a ticket'}?\n\n${draft.choices.items.map((p,i)=>`${i+1}. ${p.name}`).join('\n')}\n\n👉 Reply with the *property name or option number*.${choices.length>20 ? '\nMore properties are available; send the exact property name.' : ''}`, draft, '🏢 Choose a property');
     }
     const cfg = configs.get(property.organization_id);
     if (confirmation && recovered.has(draft.workflow)) {
@@ -154,13 +166,13 @@ export async function advanceConversation(input, current, deps) {
     };
     if (draft.workflow === 'ticket') {
         const issue = draft.fields.issue?.trim();
-        if (!issue) return reply(`What is the issue at ${property.name}? Send a description or a photo with the issue in its caption. A photo is optional.`, draft);
+        if (!issue) return reply(`🏢 *Property:* ${property.name}\n\n📝 What is the issue? Send a short description.\n📷 You can also send a photo with the issue in its caption.\n\nA photo is *optional*.`, draft, '🎫 Create a ticket');
         if (issue.length > 2000) return reply('Please shorten the issue description to 2,000 characters.', draft);
-        if (normalized === 'add photo') return reply('Send a photo now, or reply Submit Ticket to continue without a photo.', draft);
+        if (normalized === 'add photo') return reply('Send your photo now.\n\n✅ To continue without a photo, reply *Submit Ticket*.', draft, '📷 Add a photo');
         const fingerprint = JSON.stringify([property.id,property.name,issue,draft.mediaUrl || null]);
         if (!confirmation || !reviewMatches(fingerprint)) {
             setReview(fingerprint);
-            return reply(`Create a ticket at ${property.name}:\n${issue}\n${draft.mediaUrl ? 'Photo attached.' : 'Photo is optional: send one now if needed.'}\nReply Submit Ticket to create it, or send a correction.`, draft);
+            return reply(`🏢 *Property:* ${property.name}\n\n📝 *Issue:*\n${issue}\n\n📷 ${draft.mediaUrl ? 'Photo attached.' : 'Photo is optional: send one now if needed.'}\n\n✅ Reply *Submit Ticket* to create it.\n✏️ Send a correction to change the details.`, draft, '🎫 Review ticket');
         }
         let ticket;
         try {
@@ -182,12 +194,14 @@ export async function advanceConversation(input, current, deps) {
         const date = draft.fields.date ? parseBookingDate(draft.fields.date, now) : cfg.defaultDate === 'today' ? parseBookingDate('today',now) : null;
         const startTime = parseClock(draft.fields.start), endTime = parseClock(draft.fields.end);
         const missing = [];
-        if (!date) missing.push('date (today, tomorrow, or DD-MM-YYYY)');
-        if (!room) missing.push('meeting room');
-        if (!startTime || !endTime) missing.push('both start and end times with AM/PM (e.g. 2.30 PM to 3 PM) or 24-hour HH:MM');
+        if (!date) missing.push('📅 *Date:* today, tomorrow, or DD-MM-YYYY');
+        if (!room) missing.push('🚪 *Room:* choose from the list below');
+        if (!startTime || !endTime) missing.push('🕒 *Time:* both start and end times with AM/PM (e.g. 2:30 PM to 3:00 PM) or 24-hour HH:MM');
         if (missing.length) {
             if (!room) draft.choices = {kind:'room',items:roomList.slice(0,20).map(r=>({id:r.id,name:r.name}))};
-            return reply(`For ${property.name}, please send: ${missing.join('; ')}.${!room ? `\nRooms: ${draft.choices.items.map((r,i)=>`${i+1}. ${r.name}`).join('; ') || 'No active rooms available.'}${roomList.length>20 ? '\nMore rooms are available; send the exact room name.' : ''}` : ''}`, draft);
+            const known=[date&&`📅 *Date:* ${displayDate(date)}`,room&&`🚪 *Room:* ${room.name}`,
+                startTime&&endTime&&`🕒 *Time:* ${displayClock(startTime)} to ${displayClock(endTime)} IST`].filter(Boolean);
+            return reply(`🏢 *Property:* ${property.name}${known.length?`\n${known.join('\n')}`:''}\n\nPlease send the missing details:\n${missing.join('\n')}${!room ? `\n\n*Available rooms:*\n${draft.choices.items.map((r,i)=>`${i+1}. ${r.name}`).join('\n') || 'No active rooms available.'}${roomList.length>20 ? '\nMore rooms are available; send the exact room name.' : ''}` : ''}\n\n👉 Reply with the details${!room?' or the room’s option number':''}.`, draft, '📝 Booking details');
         }
         if (endTime <= startTime) { delete draft.review; return reply('The end time must be later than the start time on the same day. Please send both times again.', draft); }
         if (Date.parse(`${date}T${startTime}:00+05:30`) <= now.getTime()) { delete draft.review; return reply('The start time has passed. Please send a future date and time.', draft); }
@@ -198,7 +212,7 @@ export async function advanceConversation(input, current, deps) {
             const fingerprint = JSON.stringify([property.id,property.name,room.id,room.name,date,startTime,endTime]);
             if (!confirmation || !reviewMatches(fingerprint)) {
                 setReview(fingerprint);
-                return reply(`Book ${room.name} at ${property.name}\n${date}, ${startTime} to ${endTime} IST\n${credit}\nReply Confirm Booking to book, or send a correction.`, draft);
+                return reply(`🏢 *Property:* ${property.name}\n🚪 *Room:* ${room.name}\n📅 *Date:* ${displayDate(date)}\n🕒 *Time:* ${displayClock(startTime)} to ${displayClock(endTime)} IST${credit?`\n💳 *Credits:* ${credit}`:''}\n\n✅ Reply *Confirm Booking* to book.\n✏️ Send a correction to change the details.`, draft, '📋 Review booking');
             }
             try {
                 const booking = await deps.bookRange({userId:user.id,propertyId:property.id,roomId:room.id,date,startTime,endTime,requestId:draft.id,interpreter:true});

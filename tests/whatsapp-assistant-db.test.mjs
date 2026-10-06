@@ -30,6 +30,7 @@ async function database() {
     await db.exec(await readFile(new URL('../supabase/migrations/20261001000001_whatsapp_assistant.sql', import.meta.url), 'utf8'));
     await db.exec(await readFile(new URL('../supabase/migrations/20261002000001_whatsapp_assistant_permanent_failures.sql', import.meta.url), 'utf8'));
     await db.exec(await readFile(new URL('../supabase/migrations/20261003000001_whatsapp_message_booking.sql', import.meta.url), 'utf8'));
+    await db.exec(await readFile(new URL('../supabase/migrations/20261006000001_whatsapp_tenant_booking_credits.sql', import.meta.url), 'utf8'));
     await db.exec(`
         INSERT INTO users(id) VALUES ('${uuid(1)}'),('${uuid(2)}'),('${uuid(3)}');
         INSERT INTO properties(id,name,organization_id) VALUES ('${uuid(10)}','Hub One','${uuid(20)}'),('${uuid(11)}','Hub Two','${uuid(20)}'),('${uuid(12)}','Other Org','${uuid(21)}');
@@ -155,4 +156,52 @@ test('natural time-range booking is atomic, scoped, idempotent and covered by co
         assert.equal((await db.query('select count(*)::int as n from meeting_room_bookings')).rows[0].n, 1);
         assert.equal((await db.query("select has_function_privilege('authenticated','whatsapp_assistant_book_range(uuid,uuid,uuid,date,time,time,uuid)','EXECUTE') as allowed")).rows[0].allowed, false);
     } finally { await db.close(); }
+});
+test('WhatsApp bookings charge only tenant roles at the selected property, never staff or admins',async()=>{
+    const db=await database();
+    try {
+        const book=(user,request,range=false)=>range
+            ? db.query('select whatsapp_assistant_book_range($1,$2,$3,$4,$5,$6,$7) as booking',[uuid(user),uuid(10),uuid(30),'2099-10-02','10:00','11:00',uuid(request)])
+            : db.query('select whatsapp_assistant_book($1,$2,$3,$4,$5,$6) as booking',[uuid(user),uuid(10),uuid(30),uuid(40),'2099-10-01',uuid(request)]);
+        await db.exec(`INSERT INTO company_members VALUES('${uuid(1)}','${uuid(50)}'); UPDATE meeting_room_credits SET remaining_hours=0 WHERE id='${uuid(60)}';`);
+        assert.ok((await book(1,700)).rows[0].booking.id,'admin ignores even an existing company credit allocation');
+        assert.ok((await book(1,701,true)).rows[0].booking.id);
+        assert.equal((await db.query('select count(*)::int as n from meeting_room_credit_log')).rows[0].n,0);
+        await db.exec(`UPDATE meeting_room_credits SET remaining_hours=2 WHERE id='${uuid(60)}';
+            UPDATE property_memberships SET role='staff' WHERE user_id='${uuid(2)}';`);
+        assert.ok((await db.query('select whatsapp_assistant_book_range($1,$2,$3,$4,$5,$6,$7) as booking',[uuid(2),uuid(10),uuid(30),'2099-10-03','10:00','11:00',uuid(702)])).rows[0].booking.id);
+        assert.equal(Number((await db.query('select remaining_hours from meeting_room_credits where id=$1',[uuid(60)])).rows[0].remaining_hours),2);
+        assert.equal((await db.query('select count(*)::int as n from meeting_room_credit_log')).rows[0].n,0);
+    } finally {await db.close();}
+});
+test('tenant bookings without an allocation are rejected; tenant role in another property does not charge admins',async()=>{
+    const db=await database();
+    try {
+        await db.exec(`DELETE FROM meeting_room_credits WHERE id='${uuid(60)}';`);
+        await assert.rejects(db.query('select whatsapp_assistant_book($1,$2,$3,$4,$5,$6)',[uuid(2),uuid(10),uuid(30),uuid(40),'2099-10-01',uuid(710)]),/INSUFFICIENT_CREDITS/);
+        await assert.rejects(db.query('select whatsapp_assistant_book_range($1,$2,$3,$4,$5,$6,$7)',[uuid(2),uuid(10),uuid(30),'2099-10-02','10:00','11:00',uuid(711)]),/INSUFFICIENT_CREDITS/);
+        await db.exec(`INSERT INTO property_memberships VALUES('${uuid(3)}','${uuid(10)}','tenant',true);`);
+        assert.ok((await db.query('select whatsapp_assistant_book_range($1,$2,$3,$4,$5,$6,$7) as booking',[uuid(3),uuid(11),uuid(31),'2099-10-02','10:00','11:00',uuid(712)])).rows[0].booking.id);
+        assert.equal((await db.query('select count(*)::int as n from meeting_room_credit_log')).rows[0].n,0);
+    } finally {await db.close();}
+});
+test('tenant credit policy respects selected-property roles and active org admin overrides; migration is repeatable',async()=>{
+    const db=await database();
+    try {
+        const requires=async(user,property=10)=>(await db.query('select whatsapp_assistant_requires_credits($1,$2) as required',[uuid(user),uuid(property)])).rows[0].required;
+        assert.equal(await requires(2),true);assert.equal(await requires(2,11),false);
+        for(const role of ['super_tenant','tenant_user']) {
+            await db.query('update property_memberships set role=$1 where user_id=$2',[role,uuid(2)]);assert.equal(await requires(2),true);
+        }
+        await db.exec(`INSERT INTO organization_memberships VALUES('${uuid(2)}','${uuid(21)}','org_super_admin',true);`);
+        assert.equal(await requires(2),true,'org admin in another organization does not waive tenant charges');
+        await db.exec(`INSERT INTO organization_memberships VALUES('${uuid(2)}','${uuid(20)}','org_super_admin',true);`);
+        assert.equal(await requires(2),false);
+        await db.exec(`UPDATE organization_memberships SET is_active=false WHERE user_id='${uuid(2)}' AND organization_id='${uuid(20)}';`);
+        assert.equal(await requires(2),true);
+        await db.exec(`UPDATE users SET is_master_admin=true WHERE id='${uuid(2)}';`);assert.equal(await requires(2),false);
+        await db.exec(await readFile(new URL('../supabase/migrations/20261006000001_whatsapp_tenant_booking_credits.sql',import.meta.url),'utf8'));
+        assert.equal(Number((await db.query('select remaining_hours from meeting_room_credits where id=$1',[uuid(60)])).rows[0].remaining_hours),2);
+        assert.equal((await db.query("select has_function_privilege('authenticated','whatsapp_assistant_requires_credits(uuid,uuid)','EXECUTE') as allowed")).rows[0].allowed,false);
+    } finally {await db.close();}
 });
