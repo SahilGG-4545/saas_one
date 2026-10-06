@@ -38,7 +38,7 @@ async function run() {
         cronLastRunDate: null
     });
 
-    const req2 = new NextRequest('http://localhost:3000/api/cron/task-manager?action=auto', {
+    const req2 = new NextRequest('http://localhost:3000/api/cron/task-manager?action=auto&dryRun=true', {
         headers: { authorization: `Bearer ${process.env.CRON_SECRET || 'dev'}` }
     });
     const res2 = await GET(req2);
