@@ -204,7 +204,7 @@ export async function drainWhatsAppPhone(phone: string) {
             settings: organizationSettings, interpret: async (turn: {workflow:string;text:string;pending?:string[]}) => {
                 const started = Date.now();
                 const result = await interpretTurn(turn);
-                console.info('[WhatsAppInterpreter]', {workflow:turn.workflow,accepted:result.ok,reason:result.reason || result.intent,durationMs:Date.now()-started});
+                console.info('[WhatsAppInterpreter]', {workflow:turn.workflow,accepted:result.ok,reason:'reason' in result ? result.reason : 'intent' in result ? result.intent : 'unknown',durationMs:Date.now()-started});
                 return result;
             }, quote: lookupQuotedContext,
             hasTaskContext: async (destination: string) => !!(await TaskDatabaseService.getConversationContext(destination, 'TASK_MANAGER')) });

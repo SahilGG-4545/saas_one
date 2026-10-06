@@ -61,3 +61,52 @@ test('model timeout, malformed schema, empty completion and rate limits preserve
     }
     assert.equal((await interpretTurn({ workflow: 'ticket', text: 'AC leaking' }, { env: { GROQ_TASK_CHAT_API_KEY: 'test' }, fetch: async () => { throw new Error('AbortError'); } })).ok, false);
 });
+
+test('admin preview identifies rejected Groq requests without exposing provider text or credentials', async () => {
+    const { interpretTurn } = await load();
+    for (const [status, code, hint] of [
+        [401, 'invalid_api_key', /API key/i],
+        [403, 'model_permission_blocked', /access/i],
+        [404, 'model_not_found', /model/i],
+        [400, 'model_decommissioned', /model/i],
+        [400, 'json_validate_failed', /JSON/i],
+        [429, 'rate_limit_exceeded', /limit/i],
+        [503, 'service_unavailable', /temporarily/i],
+    ]) {
+        const result = await interpretTurn({ workflow: 'booking', text: 'Book conference room 1 tomorrow from 2.30 PM to 3 PM' }, {
+            env: { GROQ_TASK_CHAT_API_KEY: 'private-test-key' }, includeDiagnostics: true,
+            fetch: async () => Response.json({ error: { code, message: 'private-test-key and private user text', failed_generation: 'private generated text' } }, { status }),
+        });
+        assert.equal(result.ok, false);
+        assert.equal(result.reason, status === 429 ? 'rate_limited' : 'provider_error');
+        assert.equal(result.diagnostics.httpStatus, status);
+        assert.equal(result.diagnostics.model, 'llama-3.3-70b-versatile');
+        assert.equal(result.diagnostics.errorCode, code);
+        assert.match(result.diagnostics.hint, hint);
+        assert.equal(JSON.stringify(result).includes('private'), false);
+    }
+});
+
+test('preview diagnoses non-JSON provider errors and drops unrecognized error codes', async () => {
+    const { interpretTurn } = await load();
+    for (const response of [new Response('private upstream response', { status: 502 }),
+        Response.json({ error: { code: 'private-user-text', message: 'private error' } }, { status: 400 })]) {
+        const result = await interpretTurn({ workflow: 'ticket', text: 'AC leaking' }, {
+            env: { GROQ_TASK_CHAT_API_KEY: 'test', GROQ_TASK_CHAT_MODEL: 'existing-model' }, includeDiagnostics: true, fetch: async () => response,
+        });
+        assert.equal(result.reason, 'provider_error');
+        assert.equal(result.diagnostics.errorCode, 'unknown');
+        assert.equal(result.diagnostics.model, 'existing-model');
+        assert.equal(JSON.stringify(result).includes('private'), false);
+    }
+});
+
+test('ordinary WhatsApp interpretation keeps provider diagnostics private and makes one call', async () => {
+    const { interpretTurn } = await load();
+    let calls = 0;
+    const result = await interpretTurn({ workflow: 'ticket', text: 'AC leaking' }, {
+        env: { GROQ_TASK_CHAT_API_KEY: 'test' }, fetch: async () => { calls++; return Response.json({ error: { code: 'invalid_api_key' } }, { status: 401 }); },
+    });
+    assert.deepEqual(result, { ok: false, reason: 'provider_error' });
+    assert.equal(calls, 1);
+});

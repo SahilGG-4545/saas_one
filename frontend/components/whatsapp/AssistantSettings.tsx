@@ -14,6 +14,7 @@ export default function AssistantSettings({organizationId}:{organizationId:strin
     const [workflow,setWorkflow]=useState<'booking'|'ticket'>('booking');
     const [sample,setSample]=useState('Book conference room 1 tomorrow from 2.30 PM to 3 PM');
     const [preview,setPreview]=useState('');
+    const [previewExplanation,setPreviewExplanation]=useState('');
     const [readiness,setReadiness]=useState<{llm:boolean;projectApi:boolean;globalEnabled:boolean}|null>(null);
     useEffect(()=>{
         const controller=new AbortController();
@@ -26,12 +27,18 @@ export default function AssistantSettings({organizationId}:{organizationId:strin
     },[organizationId]);
     async function request(method:'PUT'|'POST') {
         setBusy(true);setStatus('');
+        if(method==='POST'){setPreview('');setPreviewExplanation('');}
         try {
             const body=method==='PUT'?{organizationId,config:{...config,pilotUserIds:users.split(/[\s,]+/).filter(Boolean)}}:{organizationId,workflow,text:sample};
             const response=await fetch('/api/whatsapp-assistant/settings',{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
             const data=await response.json();if(!response.ok)throw new Error(data.error);
             if(method==='PUT'){setConfig(data.config);setStatus('WhatsApp AI settings saved.');}
-            else setPreview(JSON.stringify(data,null,2));
+            else {
+                setPreview(JSON.stringify(data,null,2));
+                setPreviewExplanation(data.result?.ok
+                    ? 'AI interpreted the message. This preview has not created a booking or ticket.'
+                    : `${data.result?.diagnostics?.hint || 'AI could not interpret the message. Check the result below.'} No booking or ticket was created.`);
+            }
         } catch(error){setStatus(error instanceof Error?error.message:'Request failed');}
         finally{setBusy(false);}
     }
@@ -46,11 +53,13 @@ export default function AssistantSettings({organizationId}:{organizationId:strin
             <button type="button" className="text-sm underline" onClick={()=>setUsers([...new Set([...users.split(/[\s,]+/).filter(Boolean),userId])].join('\n'))}>Add my account to the pilot</button>
             <div><button type="button" className="bg-primary text-white rounded px-4 py-2" onClick={()=>request('PUT')}>Save AI settings</button></div>
             <h4 className="font-semibold">Try a message without creating anything</h4>
+            <p className="text-sm text-slate-600">This checks whether AI understands your message. It does not send WhatsApp messages or create bookings or tickets.</p>
             <select aria-label="Preview workflow" className="border rounded p-2" value={workflow} onChange={event=>setWorkflow(event.target.value as typeof workflow)}><option value="booking">Meeting-room booking</option><option value="ticket">Ticket creation</option></select>
             <textarea aria-label="Sample WhatsApp message" className="block border rounded p-2 w-full" value={sample} rows={2} onChange={event=>setSample(event.target.value)}/>
             <button type="button" className="border rounded px-4 py-2" onClick={()=>request('POST')}>Preview interpretation</button>
         </fieldset>
         {status&&<p role="status" className="text-sm">{status}</p>}
+        {previewExplanation&&<p role="status" className="text-sm">{previewExplanation}</p>}
         {preview&&<pre className="bg-slate-50 rounded p-3 text-xs whitespace-pre-wrap">{preview}</pre>}
     </section>;
 }
