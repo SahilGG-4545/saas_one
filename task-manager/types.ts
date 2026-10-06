@@ -155,6 +155,7 @@ export interface NotificationRule {
     targetTimeIST: string;          // "09:00", "14:30", "18:30"
     daysOfWeek: number[];           // [1, 2, 3, 4, 5, 6] (1=Mon ... 6=Sat, 0=Sun)
     ruleType: NotificationRuleType;
+    departmentId?: string | null;   // Phase 5: Optional Department-scope (null/'all' = company-wide or default)
     taskFilters: NotificationTaskFilters;
     conditions: NotificationConditions;
     recipients: NotificationRecipients;
@@ -163,6 +164,22 @@ export interface NotificationRule {
     lastRunSummary?: string | null; // Summary string of last run
 }
 
+
+export interface WhatsAppKillSwitches {
+    globalHalt: boolean;                  // Master emergency switch: true = STOP ALL WHATSAPP MESSAGES
+    haltReason?: string | null;           // Optional reason e.g. "Maintenance or Emergency Stop"
+    haltedAt?: string | null;             // ISO timestamp when halt was engaged
+    haltedBy?: string | null;             // Name or email of who engaged halt
+    departmentHalt?: Record<string, boolean>; // departmentId -> boolean (true = paused)
+    messageTypeHalt?: {
+        morning_digest?: boolean;         // Pause Morning Task Digests
+        pending_reminder?: boolean;       // Pause Midday Progress Reminders
+        eod_summary?: boolean;            // Pause Evening Wrap-up Summaries
+        overdue_alert?: boolean;          // Pause Overdue Alerts
+        manager_kickoff?: boolean;        // Pause Manager Onboarding Kickoffs
+        employee_kickoff?: boolean;       // Pause Employee Onboarding Kickoffs
+    };
+}
 
 export interface TestingConfig {
     enabled: boolean;
@@ -174,5 +191,7 @@ export interface TestingConfig {
     cronLastRunDate?: string | null; // YYYY-MM-DD (legacy fallback)
     cronLastRunSummary?: string | null; // Last run stats (legacy fallback)
     rules?: NotificationRule[]; // Multi-rule notification engine
+    killSwitches?: WhatsAppKillSwitches; // Phase 2: Multi-level WhatsApp kill switches
 }
+
 

@@ -238,6 +238,44 @@ export class TaskNotificationService {
         }
     }
 
+    /**
+     * Formats task items into a clean list for Meta-approved templates (fills {{1}}).
+     * Since the Meta templates already have fixed headers (e.g. "☀️ Good Morning! Here is your daily task kickoff:")
+     * and footers, {{1}} receives just the formatted task items list.
+     */
+    static buildTemplateTaskParam(ruleType: string | undefined, tasks: Array<TaskAssignment & { isCarriedForward?: boolean }>): string {
+        if (tasks.length === 0) {
+            return 'No tasks assigned for today.';
+        }
+
+        if (ruleType === 'eod_summary') {
+            const completed = tasks.filter(t => t.status === 'completed');
+            const summaryLine = `Completed today: ${completed.length}/${tasks.length} tasks`;
+            const lines = tasks.map((task, idx) => {
+                const status = task.status === 'completed' ? 'Completed ✅' : 'Pending ⏳';
+                const carryPrefix = task.isCarriedForward ? '🔄 [Carried Forward] ' : '';
+                return `${idx + 1}. ${carryPrefix}${task.title} [${status}]`;
+            }).join('\n');
+            return `${summaryLine}\n${lines}`;
+        }
+
+        if (ruleType === 'pending_reminder') {
+            const pending = tasks.filter(t => t.status !== 'completed');
+            const targetTasks = pending.length > 0 ? pending : tasks;
+            return targetTasks.map((task, idx) => {
+                const carryPrefix = task.isCarriedForward ? '🔄 [Carried Forward] ' : '';
+                return `${idx + 1}. ${carryPrefix}${task.title} [Pending ⏳]`;
+            }).join('\n');
+        }
+
+        // Default / morning_digest:
+        return tasks.map((task, idx) => {
+            const status = task.status === 'completed' ? 'Completed ✅' : 'Pending ⏳';
+            const carryPrefix = task.isCarriedForward ? '🔄 [Carried Forward] ' : '';
+            return `${idx + 1}. ${carryPrefix}${task.title} [${status}]`;
+        }).join('\n');
+    }
+
 
     /**
      * Executes the morning notification pipeline:
@@ -280,6 +318,36 @@ export class TaskNotificationService {
                 });
             }
         }
+
+        // Phase 2: Kill Switch Pre-Check (Halt dispatch if global or department kill switch is engaged)
+        if (!options.dryRun) {
+            const gatekeeper = await TaskMessagingService.isMessagingAllowed({
+                departmentId: options.departmentId,
+                ruleType: options.rule?.ruleType,
+            });
+
+            if (!gatekeeper.allowed) {
+                console.warn(`[TaskNotificationService] 🛑 Dispatch halted by Kill Switch: ${gatekeeper.reason}`);
+                return {
+                    success: false,
+                    date: targetDate,
+                    totalEmployeesChecked: employees.length,
+                    notificationsSent: 0,
+                    skippedNoTasks: 0,
+                    skippedNoPhone: 0,
+                    failed: 0,
+                    details: [{
+                        employeeId: 'all',
+                        employeeName: 'System Gatekeeper',
+                        phone: '',
+                        taskCount: 0,
+                        status: 'failed',
+                        digestPreview: `[BLOCKED BY KILL SWITCH] ${gatekeeper.reason}`
+                    }]
+                };
+            }
+        }
+
         let sentCount = 0;
         let skippedNoTasksCount = 0;
         let skippedNoPhoneCount = 0;
@@ -375,9 +443,14 @@ export class TaskNotificationService {
                 continue;
             }
 
-            // Dispatch message via TaskMessagingService
+            // Dispatch message via TaskMessagingService with rule-specific campaign, departmentId, and clean {{1}} parameter
             try {
-                const sent = await TaskMessagingService.sendMessage(phone, digest);
+                const templateTaskParam = this.buildTemplateTaskParam(options.rule?.ruleType, tasks);
+                const sent = await TaskMessagingService.sendMessage(phone, digest, {
+                    departmentId: options.departmentId,
+                    ruleType: options.rule?.ruleType,
+                    templateParams: [templateTaskParam],
+                });
 
                 if (sent) {
                     sentCount++;

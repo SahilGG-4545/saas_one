@@ -28,7 +28,44 @@ export async function GET() {
 
         if (empErr) throw empErr;
 
-        // Fetch Tech department specific summary
+        // Fetch all active departments
+        const { data: rawDepts, error: deptErr } = await supabaseAdmin
+            .from('departments')
+            .select('*')
+            .eq('is_active', true)
+            .order('name', { ascending: true });
+
+        if (deptErr) {
+            console.warn('[ManagerRoleAPI] Failed to fetch departments:', deptErr);
+        }
+        const departments = rawDepts || [];
+
+        // Fetch Phase 2 WhatsApp Kill Switches
+        const killSwitches = await TaskDatabaseService.getKillSwitches();
+
+        // Build per-department statistics
+        const departmentSummaries: Record<string, any> = {};
+        for (const dept of departments) {
+            const members = (employees || []).filter(e =>
+                e.department_id === dept.id ||
+                (e.department && e.department.toLowerCase() === dept.name.toLowerCase())
+            );
+            const manager = members.find(e => e.task_role === 'reporting_manager') || null;
+            const isDeptHalted = Boolean(killSwitches.globalHalt || killSwitches.departmentHalt?.[dept.id]);
+
+            departmentSummaries[dept.id] = {
+                id: dept.id,
+                name: dept.name,
+                code: dept.code,
+                manager,
+                members,
+                memberCount: members.length,
+                whatsappStatus: isDeptHalted ? 'paused' : 'active',
+                rulesCount: dept.name.toLowerCase() === 'tech' ? 3 : 0
+            };
+        }
+
+        // Fetch Tech department specific summary for 100% backward compatibility
         const techEmployees = (employees || []).filter(e => 
             (e.department && e.department.toLowerCase() === 'tech') ||
             e.department_id === '94a74961-2dd8-453d-9728-f6f2b9ade99b'
@@ -38,6 +75,10 @@ export async function GET() {
 
         return NextResponse.json({
             success: true,
+            killSwitches,
+            globalWhatsAppStatus: killSwitches.globalHalt ? 'paused' : 'active',
+            departments,
+            departmentSummaries,
             employees: employees || [],
             techSummary: {
                 manager: techManager,
@@ -87,9 +128,9 @@ export async function POST(request: NextRequest) {
 
             await TaskDatabaseService.logAudit({
                 eventType: 'manager_role_assigned',
-                actorId: profile.user_id || profile.id,
-                targetEmployeeId: profile.id,
-                details: { role: 'reporting_manager', department: profile.department }
+                actorId: profile.user_id || null,
+                targetEmployeeId: profile.user_id || null,
+                details: { role: 'reporting_manager', department: profile.department, profileId: profile.id }
             });
 
             // Fetch department team members for kickoff message
@@ -112,19 +153,31 @@ export async function POST(request: NextRequest) {
                 const deptName = profile.department || 'Tech';
                 const teamMembersList = teamNames || 'Sahil, Harsh';
 
-                // 1. Send Meta-approved Manager Kickoff campaign template (Opens 24h window when buttons tapped)
-                const campaignName = process.env.AISENSY_MANAGER_CAMPAIGN_NAME || 'tm_manager_kickoff_v1';
-                const templateRes = await AiSensyService.sendTemplate({
-                    phone: targetPhone,
-                    campaignName,
-                    templateParams: [managerName, deptName, teamMembersList]
+                // Phase 2: Check Kill Switch Gatekeeper for manager_kickoff
+                const gatekeeper = await TaskMessagingService.isMessagingAllowed({
+                    departmentId: profile.department_id,
+                    messageType: 'manager_kickoff'
                 });
 
-                if (templateRes.success) {
-                    whatsappSent = true;
-                    whatsappDetails = `Meta template (${campaignName}) dispatched successfully with params [${managerName}, ${deptName}, ${teamMembersList}].`;
+                if (!gatekeeper.allowed) {
+                    whatsappSent = false;
+                    whatsappDetails = `Kickoff blocked by Kill Switch: ${gatekeeper.reason}`;
+                    console.warn(`[ManagerRoleAPI] 🛑 Manager kickoff blocked for ${targetPhone}: ${gatekeeper.reason}`);
                 } else {
-                    whatsappDetails = `WhatsApp send error: ${templateRes.error || 'Failed to dispatch'}`;
+                    // 1. Send Meta-approved Manager Kickoff campaign template (Opens 24h window when buttons tapped)
+                    const campaignName = process.env.AISENSY_MANAGER_CAMPAIGN_NAME || 'tm_manager_kickoff_v1';
+                    const templateRes = await AiSensyService.sendTemplate({
+                        phone: targetPhone,
+                        campaignName,
+                        templateParams: [managerName, deptName, teamMembersList]
+                    });
+
+                    if (templateRes.success) {
+                        whatsappSent = true;
+                        whatsappDetails = `Meta template (${campaignName}) dispatched successfully with params [${managerName}, ${deptName}, ${teamMembersList}].`;
+                    } else {
+                        whatsappDetails = `WhatsApp send error: ${templateRes.error || 'Failed to dispatch'}`;
+                    }
                 }
             }
 
@@ -151,9 +204,9 @@ export async function POST(request: NextRequest) {
 
             await TaskDatabaseService.logAudit({
                 eventType: 'manager_role_removed',
-                actorId: profile.user_id || profile.id,
-                targetEmployeeId: profile.id,
-                details: { previousRole: 'reporting_manager', newRole: 'employee', department: profile.department }
+                actorId: profile.user_id || null,
+                targetEmployeeId: profile.user_id || null,
+                details: { previousRole: 'reporting_manager', newRole: 'employee', department: profile.department, profileId: profile.id }
             });
 
             return NextResponse.json({
@@ -189,6 +242,20 @@ export async function POST(request: NextRequest) {
                 }
             }
 
+            // Phase 2: Check Kill Switch Gatekeeper for employee_kickoff
+            const gatekeeper = await TaskMessagingService.isMessagingAllowed({
+                departmentId: profile.department_id,
+                messageType: 'employee_kickoff'
+            });
+
+            if (!gatekeeper.allowed) {
+                console.warn(`[ManagerRoleAPI] 🛑 Employee kickoff blocked for ${targetPhone}: ${gatekeeper.reason}`);
+                return NextResponse.json({
+                    success: false,
+                    error: `Messaging Blocked by Kill Switch: ${gatekeeper.reason}`
+                }, { status: 403 });
+            }
+
             const campaignName = process.env.AISENSY_EMPLOYEE_CAMPAIGN_NAME || 'tm_employee_kickoff_v1';
             const templateRes = await AiSensyService.sendTemplate({
                 phone: targetPhone,
@@ -205,15 +272,143 @@ export async function POST(request: NextRequest) {
 
             await TaskDatabaseService.logAudit({
                 eventType: 'employee_kickoff_sent',
-                actorId: profile.user_id || profile.id,
-                targetEmployeeId: profile.id,
-                details: { campaignName, empName, deptName, managerName, targetPhone }
+                actorId: profile.user_id || null,
+                targetEmployeeId: profile.user_id || null,
+                details: { campaignName, empName, deptName, managerName, targetPhone, profileId: profile.id }
             });
 
             return NextResponse.json({
                 success: true,
                 message: `Employee kickoff template (${campaignName}) dispatched to ${fullName} (${targetPhone}).`,
                 details: { empName, deptName, managerName, campaignName }
+            });
+        }
+
+        // ── Action D: Send Manager Kickoff Template Directly (Phase 3) ───────────
+        if (action === 'send_manager_kickoff') {
+            const targetPhone = (body.overridePhone || phone || '').trim();
+            if (!targetPhone) {
+                return NextResponse.json({ success: false, error: 'Manager has no phone number registered' }, { status: 400 });
+            }
+
+            const managerName = profile.first_name || fullName.split(' ')[0] || fullName;
+            const deptName = profile.department || 'Tech';
+
+            // Fetch team members list for template param
+            let teamNames = '';
+            if (profile.department_id) {
+                const team = await TaskDatabaseService.getEmployeesByDepartment(profile.department_id);
+                teamNames = team
+                    .filter(m => m.id !== profile.user_id && m.profile_id !== profile.id)
+                    .map(m => m.name.split(' ')[0])
+                    .join(', ');
+            }
+            const teamMembersList = teamNames || 'Team Members';
+
+            // Phase 2 Check Kill Switch Gatekeeper for manager_kickoff
+            const gatekeeper = await TaskMessagingService.isMessagingAllowed({
+                departmentId: profile.department_id,
+                messageType: 'manager_kickoff'
+            });
+
+            if (!gatekeeper.allowed) {
+                console.warn(`[ManagerRoleAPI] 🛑 Manager kickoff blocked for ${targetPhone}: ${gatekeeper.reason}`);
+                return NextResponse.json({
+                    success: false,
+                    error: `Messaging Blocked by Kill Switch: ${gatekeeper.reason}`
+                }, { status: 403 });
+            }
+
+            const campaignName = process.env.AISENSY_MANAGER_CAMPAIGN_NAME || 'tm_manager_kickoff_v1';
+            const templateRes = await AiSensyService.sendTemplate({
+                phone: targetPhone,
+                campaignName,
+                templateParams: [managerName, deptName, teamMembersList]
+            });
+
+            if (!templateRes.success) {
+                return NextResponse.json({
+                    success: false,
+                    error: templateRes.error || 'Failed to dispatch manager kickoff template'
+                }, { status: 500 });
+            }
+
+            await TaskDatabaseService.logAudit({
+                eventType: 'manager_kickoff_sent',
+                actorId: profile.user_id || null,
+                targetEmployeeId: profile.user_id || null,
+                details: { campaignName, managerName, deptName, teamMembersList, targetPhone, profileId: profile.id }
+            });
+
+            return NextResponse.json({
+                success: true,
+                message: `Manager kickoff template (${campaignName}) dispatched to ${fullName} (${targetPhone}).`,
+                details: { managerName, deptName, teamMembersList, campaignName }
+            });
+        }
+
+        // ── Action E: Transfer Employee Department (Phase 4) ────────────────────
+        if (action === 'transfer_department') {
+            const { targetDepartmentId } = body;
+            if (!targetDepartmentId) {
+                return NextResponse.json({ success: false, error: 'Missing targetDepartmentId' }, { status: 400 });
+            }
+
+            // Verify target department
+            const { data: targetDept, error: deptErr } = await supabaseAdmin
+                .from('departments')
+                .select('*')
+                .eq('id', targetDepartmentId)
+                .single();
+
+            if (deptErr || !targetDept) {
+                return NextResponse.json({ success: false, error: 'Target department not found' }, { status: 404 });
+            }
+
+            const oldDeptId = profile.department_id;
+            const oldDeptName = profile.department;
+
+            // Revert manager role if transferred out unless explicitly kept
+            const newRole = body.keepRole ? profile.task_role : 'employee';
+
+            const { error: updateErr } = await supabaseAdmin
+                .from('employee_profiles')
+                .update({
+                    department_id: targetDept.id,
+                    department: targetDept.name,
+                    task_role: newRole,
+                    updated_at: new Date().toISOString()
+                })
+                .eq('id', profile.id);
+
+            if (updateErr) throw updateErr;
+
+            await TaskDatabaseService.logAudit({
+                eventType: 'employee_transferred',
+                actorId: profile.user_id || null,
+                targetEmployeeId: profile.user_id || null,
+                details: {
+                    employeeName: fullName,
+                    profileId: profile.id,
+                    fromDepartmentId: oldDeptId,
+                    fromDepartment: oldDeptName,
+                    toDepartmentId: targetDept.id,
+                    toDepartment: targetDept.name,
+                    previousRole: profile.task_role,
+                    newRole
+                }
+            });
+
+            return NextResponse.json({
+                success: true,
+                message: `Successfully transferred ${fullName} from ${oldDeptName || 'Unassigned'} to ${targetDept.name}.`,
+                employee: {
+                    id: profile.id,
+                    name: fullName,
+                    departmentId: targetDept.id,
+                    department: targetDept.name,
+                    taskRole: newRole
+                }
             });
         }
 

@@ -4,10 +4,18 @@ import { TaskDatabaseService } from '@/task-manager/TaskDatabaseService';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export async function GET(request: NextRequest) {
     try {
+        const { searchParams } = new URL(request.url);
+        const eventType = searchParams.get('eventType');
+        const limitParam = searchParams.get('limit');
+        const limit = limitParam ? parseInt(limitParam, 10) : 50;
+
         const config = await TaskDatabaseService.getTestingConfig();
-        const logs = await TaskDatabaseService.getAuditLogs({ limit: 30, eventType: 'whatsapp_sent' });
+        const logs = await TaskDatabaseService.getAuditLogs({
+            limit,
+            eventType: (!eventType || eventType === 'all') ? undefined : eventType
+        });
         return NextResponse.json({ success: true, config, logs });
     } catch (err: any) {
         console.error('[TestingConfigAPI] GET error:', err);
@@ -19,12 +27,83 @@ export async function POST(request: NextRequest) {
     try {
         const body = await request.json().catch(() => ({}));
 
+        if (body.action === 'get_logs') {
+            const eventType = (!body.eventType || body.eventType === 'all') ? undefined : body.eventType;
+            const limit = body.limit || 50;
+            const logs = await TaskDatabaseService.getAuditLogs({ limit, eventType, eventTypes: body.eventTypes });
+            return NextResponse.json({ success: true, logs });
+        }
+
         if (body.action === 'clear_logs') {
-            await TaskDatabaseService.clearAuditLogs('whatsapp_sent');
+            const eventType = body.eventType || 'all';
+            await TaskDatabaseService.clearAuditLogs(eventType);
             return NextResponse.json({
                 success: true,
                 message: 'Notification audit logs cleared successfully.',
                 logs: []
+            });
+        }
+
+        // ── Phase 2: Kill Switch Actions ─────────────────────────────────────
+        if (body.action === 'toggle_global_kill_switch') {
+            const halt = Boolean(body.halt);
+            const reason = body.reason || (halt ? 'Emergency stop engaged by administrator' : null);
+            const actor = body.actor || 'Admin';
+            const updatedSwitches = await TaskDatabaseService.toggleGlobalKillSwitch(halt, reason, actor);
+            const updatedConfig = await TaskDatabaseService.getTestingConfig();
+            return NextResponse.json({
+                success: true,
+                message: halt
+                    ? '🛑 Global WhatsApp Kill Switch ENGAGED. All automated messages halted company-wide.'
+                    : '🟢 Global WhatsApp Kill Switch DISENGAGED. Automated messaging resumed.',
+                killSwitches: updatedSwitches,
+                config: updatedConfig,
+            });
+        }
+
+        if (body.action === 'toggle_department_kill_switch') {
+            const { departmentId, halt } = body;
+            if (!departmentId) {
+                return NextResponse.json({ success: false, error: 'Missing departmentId' }, { status: 400 });
+            }
+            const updatedSwitches = await TaskDatabaseService.toggleDepartmentKillSwitch(departmentId, Boolean(halt));
+            const updatedConfig = await TaskDatabaseService.getTestingConfig();
+            return NextResponse.json({
+                success: true,
+                message: Boolean(halt)
+                    ? 'Department WhatsApp Kill Switch engaged (Messaging paused for this department).'
+                    : 'Department WhatsApp Kill Switch disengaged (Messaging active for this department).',
+                killSwitches: updatedSwitches,
+                config: updatedConfig,
+            });
+        }
+
+        if (body.action === 'toggle_message_type_kill_switch') {
+            const { messageType, halt } = body;
+            if (!messageType) {
+                return NextResponse.json({ success: false, error: 'Missing messageType' }, { status: 400 });
+            }
+            const updatedSwitches = await TaskDatabaseService.toggleMessageTypeKillSwitch(messageType, Boolean(halt));
+            const updatedConfig = await TaskDatabaseService.getTestingConfig();
+            return NextResponse.json({
+                success: true,
+                message: Boolean(halt)
+                    ? `Message category '${messageType}' paused.`
+                    : `Message category '${messageType}' resumed.`,
+                killSwitches: updatedSwitches,
+                config: updatedConfig,
+            });
+        }
+
+        if (body.action === 'update_kill_switches') {
+            const updates = body.killSwitches || {};
+            const updatedSwitches = await TaskDatabaseService.updateKillSwitches(updates);
+            const updatedConfig = await TaskDatabaseService.getTestingConfig();
+            return NextResponse.json({
+                success: true,
+                message: 'Kill switches updated successfully.',
+                killSwitches: updatedSwitches,
+                config: updatedConfig,
             });
         }
 
@@ -227,6 +306,9 @@ export async function POST(request: NextRequest) {
         }
         if (body.rules !== undefined && Array.isArray(body.rules)) {
             updatePayload.rules = body.rules;
+        }
+        if (body.killSwitches !== undefined && typeof body.killSwitches === 'object') {
+            updatePayload.killSwitches = body.killSwitches;
         }
 
         const savedConfig = await TaskDatabaseService.saveTestingConfig(updatePayload);
