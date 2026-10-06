@@ -1502,9 +1502,9 @@ const OrgAdminDashboard = () => {
                                     : 'text-text-secondary hover:bg-primary/10 hover:text-primary'
                                     }`}
                             >
-                                <FlaskConical className={`w-4 h-4 transition-transform ${activeTab === 'task_testing' ? '' : 'group-hover:scale-110 text-amber-500'}`} />
-                                <span className="flex-1 text-left">Task Testing</span>
-                                <span className="text-[10px] uppercase font-extrabold px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-600 dark:text-amber-400">Beta</span>
+                                <Building2 className={`w-4 h-4 transition-transform ${activeTab === 'task_testing' ? '' : 'group-hover:scale-110 text-amber-500'}`} />
+                                <span className="flex-1 text-left">Control Center</span>
+                                <span className="text-[10px] uppercase font-extrabold px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-600 dark:text-amber-400">Dept & WA</span>
                             </button>
                             <button
                                 onClick={() => handleTabChange('ai_tickets')}

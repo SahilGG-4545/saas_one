@@ -13,6 +13,7 @@ import {
     TestingConfig,
     NotificationRule,
     NotificationTaskFilters,
+    WhatsAppKillSwitches,
 } from './types';
 
 function mapProfileToEmployee(profile: any): Employee {
@@ -497,20 +498,48 @@ export class TaskDatabaseService {
 
     // ── Audit Logging (Phase 17 Foundation) ──────────────────────────────────
     static async logAudit(params: {
-        eventType: string;
-        actorId?: string;
-        targetEmployeeId?: string;
-        taskId?: string;
+        eventType?: string;
+        event_type?: string;
+        actorId?: string | null;
+        actor_id?: string | null;
+        targetEmployeeId?: string | null;
+        target_employee_id?: string | null;
+        taskId?: string | null;
+        task_id?: string | null;
         details?: Record<string, any>;
     }): Promise<void> {
         try {
-            await supabaseAdmin.from('task_audit_logs').insert({
-                event_type: params.eventType,
-                actor_id: params.actorId || null,
-                target_employee_id: params.targetEmployeeId || null,
-                task_id: params.taskId || null,
+            const eventType = params.eventType || params.event_type || 'unknown';
+            const actorId = params.actorId || params.actor_id || null;
+            const targetEmployeeId = params.targetEmployeeId || params.target_employee_id || null;
+            const taskId = params.taskId || params.task_id || null;
+            const { error: insErr } = await supabaseAdmin.from('task_audit_logs').insert({
+                event_type: eventType,
+                actor_id: actorId,
+                target_employee_id: targetEmployeeId,
+                task_id: taskId,
                 details: params.details || {}
             });
+
+            if (insErr) {
+                // Fallback if FK constraint on users(id) failed
+                if (insErr.code === '23503' || insErr.message?.includes('foreign key')) {
+                    await supabaseAdmin.from('task_audit_logs').insert({
+                        event_type: eventType,
+                        actor_id: null,
+                        target_employee_id: null,
+                        task_id: null,
+                        details: {
+                            ...(params.details || {}),
+                            fallbackReason: 'FK constraint bypassed',
+                            attemptedActorId: actorId,
+                            attemptedTargetEmployeeId: targetEmployeeId,
+                        }
+                    });
+                } else {
+                    console.warn('[TaskDatabaseService] Non-blocking audit log insert error:', insErr.message);
+                }
+            }
         } catch (err) {
             console.warn('[TaskDatabaseService] Non-blocking audit log failure:', err);
         }
@@ -518,16 +547,23 @@ export class TaskDatabaseService {
 
     static async getAuditLogs(params: {
         eventType?: string;
+        eventTypes?: string[];
         limit?: number;
     } = {}): Promise<any[]> {
         let query = supabaseAdmin
             .from('task_audit_logs')
             .select('*')
             .order('created_at', { ascending: false })
-            .limit(params.limit || 20);
+            .limit(params.limit || 50);
 
-        if (params.eventType) {
-            query = query.eq('event_type', params.eventType);
+        if (params.eventTypes && params.eventTypes.length > 0) {
+            query = query.in('event_type', params.eventTypes);
+        } else if (params.eventType && params.eventType !== 'all') {
+            if (params.eventType.includes(',')) {
+                query = query.in('event_type', params.eventType.split(',').map(s => s.trim()));
+            } else {
+                query = query.eq('event_type', params.eventType);
+            }
         }
 
         const { data, error } = await query;
@@ -538,12 +574,15 @@ export class TaskDatabaseService {
         return data || [];
     }
 
-    static async clearAuditLogs(eventType = 'whatsapp_sent'): Promise<void> {
+    static async clearAuditLogs(eventType?: string): Promise<void> {
         try {
-            await supabaseAdmin
-                .from('task_audit_logs')
-                .delete()
-                .eq('event_type', eventType);
+            let query = supabaseAdmin.from('task_audit_logs').delete();
+            if (eventType && eventType !== 'all') {
+                query = query.eq('event_type', eventType);
+            } else {
+                query = query.neq('id', '00000000-0000-0000-0000-000000000000');
+            }
+            await query;
         } catch (err) {
             console.warn('[TaskDatabaseService] Error clearing audit logs:', err);
         }
@@ -630,6 +669,24 @@ export class TaskDatabaseService {
         ];
     }
 
+    static getDefaultKillSwitches(): WhatsAppKillSwitches {
+        return {
+            globalHalt: false,
+            haltReason: null,
+            haltedAt: null,
+            haltedBy: null,
+            departmentHalt: {},
+            messageTypeHalt: {
+                morning_digest: false,
+                pending_reminder: false,
+                eod_summary: false,
+                overdue_alert: false,
+                manager_kickoff: false,
+                employee_kickoff: false,
+            },
+        };
+    }
+
     static async getTestingConfig(): Promise<TestingConfig> {
         const { data } = await supabaseAdmin
             .from('conversation_context')
@@ -643,16 +700,33 @@ export class TaskDatabaseService {
             ? raw.rules
             : this.getDefaultNotificationRules(raw.cronTiming);
 
+        const defaultSwitches = this.getDefaultKillSwitches();
+        const killSwitches: WhatsAppKillSwitches = {
+            ...defaultSwitches,
+            ...(raw.killSwitches || {}),
+            departmentHalt: {
+                ...(defaultSwitches.departmentHalt || {}),
+                ...(raw.killSwitches?.departmentHalt || {}),
+            },
+            messageTypeHalt: {
+                ...(defaultSwitches.messageTypeHalt || {}),
+                ...(raw.killSwitches?.messageTypeHalt || {}),
+            },
+        };
+
         return {
             enabled: Boolean(raw.enabled),
             manager: raw.manager,
             notifyManager: raw.notifyManager,
-            employees: Array.isArray(raw.employees) ? raw.employees : [],
+            employees: (Array.isArray(raw.employees) && raw.employees.length > 0)
+                ? raw.employees
+                : [{ name: 'Sahil Gorde', phone: '8433649199' }],
             cronTiming: raw.cronTiming || '09:00',
             cronEnabled: raw.cronEnabled !== undefined ? Boolean(raw.cronEnabled) : true,
             cronLastRunDate: raw.cronLastRunDate || null,
             cronLastRunSummary: raw.cronLastRunSummary || null,
             rules,
+            killSwitches,
         };
     }
 
@@ -661,6 +735,18 @@ export class TaskDatabaseService {
         const merged: TestingConfig = {
             ...existing,
             ...config,
+            killSwitches: config.killSwitches !== undefined ? {
+                ...existing.killSwitches,
+                ...config.killSwitches,
+                departmentHalt: {
+                    ...(existing.killSwitches?.departmentHalt || {}),
+                    ...(config.killSwitches?.departmentHalt || {}),
+                },
+                messageTypeHalt: {
+                    ...(existing.killSwitches?.messageTypeHalt || {}),
+                    ...(config.killSwitches?.messageTypeHalt || {}),
+                },
+            } : existing.killSwitches,
         };
 
         // Sync legacy cronTiming with rule_morning_digest
@@ -682,7 +768,6 @@ export class TaskDatabaseService {
                 return r;
             });
         }
-
 
         const expiresAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
         await supabaseAdmin
@@ -732,5 +817,146 @@ export class TaskDatabaseService {
         const updatedRules = existingRules.filter(r => r.id !== ruleId);
         return this.saveTestingConfig({ rules: updatedRules });
     }
+
+    // ── Phase 2: Kill Switch Safety Methods ──────────────────────────────
+    static async getKillSwitches(): Promise<WhatsAppKillSwitches> {
+        const config = await this.getTestingConfig();
+        return config.killSwitches || this.getDefaultKillSwitches();
+    }
+
+    static async updateKillSwitches(updates: Partial<WhatsAppKillSwitches>): Promise<WhatsAppKillSwitches> {
+        const current = await this.getKillSwitches();
+        const merged: WhatsAppKillSwitches = {
+            ...current,
+            ...updates,
+            departmentHalt: {
+                ...(current.departmentHalt || {}),
+                ...(updates.departmentHalt || {}),
+            },
+            messageTypeHalt: {
+                ...(current.messageTypeHalt || {}),
+                ...(updates.messageTypeHalt || {}),
+            },
+        };
+
+        if (updates.globalHalt !== undefined) {
+            merged.globalHalt = Boolean(updates.globalHalt);
+            if (merged.globalHalt) {
+                merged.haltedAt = new Date().toISOString();
+            } else {
+                merged.haltedAt = null;
+                merged.haltReason = null;
+            }
+        }
+
+        await this.saveTestingConfig({ killSwitches: merged });
+
+        // Record audit trail event for safety tracking
+        await this.logAudit({
+            event_type: 'kill_switch_updated',
+            actor_id: null,
+            target_employee_id: null,
+            task_id: null,
+            details: {
+                globalHalt: merged.globalHalt,
+                haltReason: merged.haltReason,
+                departmentHalt: merged.departmentHalt,
+                messageTypeHalt: merged.messageTypeHalt,
+            },
+        }).catch(err => {
+            console.warn('[TaskDatabaseService] Failed to record kill_switch_updated audit log:', err?.message);
+        });
+
+        return merged;
+    }
+
+    static async toggleGlobalKillSwitch(halt: boolean, reason?: string, actor?: string): Promise<WhatsAppKillSwitches> {
+        return this.updateKillSwitches({
+            globalHalt: halt,
+            haltReason: reason || (halt ? 'Emergency WhatsApp halt engaged by admin' : null),
+            haltedBy: actor || null,
+        });
+    }
+
+    static async toggleDepartmentKillSwitch(departmentId: string, halt: boolean): Promise<WhatsAppKillSwitches> {
+        const current = await this.getKillSwitches();
+        const departmentHalt = { ...(current.departmentHalt || {}) };
+        departmentHalt[departmentId] = halt;
+        return this.updateKillSwitches({ departmentHalt });
+    }
+
+    static async toggleMessageTypeKillSwitch(messageType: string, halt: boolean): Promise<WhatsAppKillSwitches> {
+        const current = await this.getKillSwitches();
+        const messageTypeHalt = { ...(current.messageTypeHalt || {}) };
+        (messageTypeHalt as any)[messageType] = halt;
+        return this.updateKillSwitches({ messageTypeHalt });
+    }
+
+    // ── Phase 4: Employee Department Transfer ────────────────────────────────
+    static async transferEmployeeDepartment(params: {
+        employeeId: string;
+        targetDepartmentId: string;
+        actorId?: string;
+        keepRole?: boolean;
+    }): Promise<{ success: boolean; employee: any }> {
+        const { employeeId, targetDepartmentId, actorId, keepRole } = params;
+
+        const { data: targetDept, error: deptErr } = await supabaseAdmin
+            .from('departments')
+            .select('*')
+            .eq('id', targetDepartmentId)
+            .single();
+
+        if (deptErr || !targetDept) {
+            throw new Error('Target department not found');
+        }
+
+        const { data: profile, error: empErr } = await supabaseAdmin
+            .from('employee_profiles')
+            .select('*')
+            .or(`id.eq.${employeeId},user_id.eq.${employeeId}`)
+            .single();
+
+        if (empErr || !profile) {
+            throw new Error('Employee profile not found');
+        }
+
+        const fullName = [profile.first_name, profile.last_name].filter(Boolean).join(' ').trim() || profile.email;
+        const oldDeptId = profile.department_id;
+        const oldDeptName = profile.department;
+        const newRole = keepRole ? profile.task_role : 'employee';
+
+        const { data: updatedEmp, error: updateErr } = await supabaseAdmin
+            .from('employee_profiles')
+            .update({
+                department_id: targetDept.id,
+                department: targetDept.name,
+                task_role: newRole,
+                updated_at: new Date().toISOString()
+            })
+            .eq('id', profile.id)
+            .select('*')
+            .single();
+
+        if (updateErr) throw updateErr;
+
+        await this.logAudit({
+            eventType: 'employee_transferred',
+            actorId: actorId || profile.user_id || null,
+            targetEmployeeId: profile.user_id || null,
+            details: {
+                employeeName: fullName,
+                fromDepartmentId: oldDeptId,
+                fromDepartment: oldDeptName,
+                toDepartmentId: targetDept.id,
+                toDepartment: targetDept.name,
+                previousRole: profile.task_role,
+                newRole
+            }
+        });
+
+        return { success: true, employee: updatedEmp };
+    }
 }
+
 
