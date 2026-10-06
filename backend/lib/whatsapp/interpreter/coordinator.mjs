@@ -106,6 +106,7 @@ export async function advanceConversation(input, current, deps) {
         workflow: draft?.workflow || 'menu', conversationId: draft?.id || input.requestId,
         revision: draft?.revision || 0, lastInboundAt: input.inboundAt || now.toISOString() } };
     };
+    const photoFailure = draft => reply('📷 The photo could not be downloaded or read. It has not been attached to a new ticket.\n\nSend a new JPG, PNG or WebP photo, or reply *No Photo* to continue without it.',draft,'📷 Photo needs attention');
     const user = await deps.findUser(input.phone);
     if (!user || (state.userId && state.userId !== user.id)) {
         return { session: null, reply: { key: 'notice', params: ['Your number could not be linked to an approved account. Contact your property manager.'], text: 'Your number could not be linked to an approved account. Contact your property manager.', lastInboundAt: input.inboundAt || now.toISOString() } };
@@ -121,7 +122,8 @@ export async function advanceConversation(input, current, deps) {
     const recovered = new Map();
     for (const [workflow, draft] of Object.entries(state.drafts)) {
         const accessible = draft.userId === user.id && (!draft.propertyId || allowed(workflow).some(p => p.id === draft.propertyId));
-        if (accessible && state.active === workflow && (input.text.trim().toLowerCase() === (workflow === 'booking' ? 'confirm booking' : 'submit ticket') || (workflow === 'booking' && draft.autoBook && draft.review))) {
+        if (accessible && state.active === workflow && (input.text.trim().toLowerCase() === (workflow === 'booking' ? 'confirm booking' : 'submit ticket') ||
+            (workflow === 'ticket' && input.text.trim().toLowerCase() === 'submit' && draft.review) || (workflow === 'booking' && draft.autoBook && draft.review))) {
             const expected = workflow === 'ticket' ? {propertyId:draft.propertyId,title:draft.fields.issue?.trim(),mediaUrl:draft.mediaUrl || null} : draft.review?.fingerprint;
             const outcome = await (workflow === 'booking' ? deps.findBooking : deps.findTicket)(draft.id, user.id, expected);
             if (outcome?.id && (!outcome.property_id || outcome.property_id === draft.propertyId)) recovered.set(workflow,outcome);
@@ -178,7 +180,7 @@ export async function advanceConversation(input, current, deps) {
         }
     }
     const serviceInstruction = draft.workflow === 'booking' ? bookingInstructionText(text) : text;
-    if (!input.mediaUrl && /\b(?:tasks?|done|completed|finished)\b/i.test(serviceInstruction) && !menuSelection) return reply('This sounds like a task update. Send TASKS or DONE followed by the task number. Your facility request is still saved.', draft);
+    if (!input.mediaUrl && (/\btasks?\b/i.test(serviceInstruction) || /^(?:done|completed|finished)(?:\s|$)/i.test(serviceInstruction)) && !menuSelection) return reply('This sounds like a task update. Send TASKS or DONE followed by the task number. Your facility request is still saved.', draft);
     if (!input.mediaUrl && /\b(?:do not|don['’]?t|never)\s+(?:create|raise|book|reserve|schedule|submit|confirm)\b/i.test(text)) {
         delete draft.autoBook;
         delete draft.review;
@@ -190,7 +192,7 @@ export async function advanceConversation(input, current, deps) {
     if (draft.autoBook && /\b(?:if|unless|maybe)\b/.test(normalized)) {
         return reply('Please confirm your condition is satisfied, then send a clear booking instruction with the requested details.', draft, '📝 Clarify booking details');
     }
-    if (!input.quotedIds?.length && !input.mediaUrl && /^(?:yes|no|done|cancel|\d+)$/.test(normalized) &&
+    if (!input.quotedIds?.length && !input.mediaUrl && /^(?:yes|no|done|cancel|submit|\d+)$/.test(normalized) &&
         (Object.keys(state.drafts).length > 1 || await deps.hasTaskContext?.(input.phone))) {
         return reply('That short reply could refer to more than one conversation. Reply to the latest service prompt, or send Confirm Booking / Submit Ticket. For task updates, send TASKS.', draft);
     }
@@ -199,12 +201,14 @@ export async function advanceConversation(input, current, deps) {
         delete state.drafts[state.active]; state.active = null;
         return reply('This request was cancelled. Send HI to start another request.');
     }
-    const confirmation = !input.mediaUrl && (draft.workflow === 'booking' ? /^confirm booking$/ : /^submit ticket$/).test(normalized);
-    if (!input.mediaUrl && /^(yes|confirm|submit|no)$/.test(normalized)) return reply('Please use Confirm Booking or Submit Ticket for the selected request, or send a correction.', draft);
+    if (!input.mediaUrl && draft.workflow === 'ticket' && draft.mediaRejected && /^(submit|submit ticket)$/.test(normalized)) return photoFailure(draft);
+    const confirmation = !input.mediaUrl && ((draft.workflow === 'booking' ? /^confirm booking$/ : /^submit ticket$/).test(normalized) ||
+        (draft.workflow === 'ticket' && normalized === 'submit' && draft.review?.revision === draft.revision));
+    if (!confirmation && !input.mediaUrl && /^(yes|confirm|submit|no)$/.test(normalized)) return reply('Please use Confirm Booking or Submit Ticket for the selected request, or send a correction.', draft);
     const choices = allowed(draft.workflow);
     let changed = false;
     if (!input.mediaUrl && draft.workflow==='ticket' && /^(no photo|remove photo|without photo)$/.test(normalized)) {
-        delete draft.mediaUrl;changed=true;
+        delete draft.mediaUrl;delete draft.mediaRejected;changed=true;
     } else if (!selected && !confirmation && !input.mediaUrl && /^\d+$/.test(text) && draft.choices) {
         const option = draft.choices.items[Number(text) - 1];
         if (!option) return reply('Please choose one of the option numbers shown in the latest message.', draft);
@@ -255,7 +259,7 @@ export async function advanceConversation(input, current, deps) {
                 if (validated.fields.room || /\b(?:room|boardroom)\b/i.test(targetingText)) draft.roomEvidence = targetingText;
             }
         }
-        if (pendingMedia) { draft.mediaUrl = pendingMedia; changed = true; }
+        if (pendingMedia) { draft.mediaUrl = pendingMedia;delete draft.mediaRejected;changed = true; }
     }
     if (changed) { draft.revision++; delete draft.review; delete draft.choices; }
     if (!draft.propertyId && choices.length === 1 && !draft.fields.property) draft.propertyId = choices[0].id;
@@ -278,12 +282,13 @@ export async function advanceConversation(input, current, deps) {
     if (draft.workflow === 'ticket') {
         const issue = draft.fields.issue?.trim();
         if (!issue) return reply(`🏢 *Property:* ${property.name}\n\n📝 What is the issue? Send a short description.\n📷 You can also send a photo with the issue in its caption.\n\nA photo is *optional*.`, draft, '🎫 Create a ticket');
+        if (draft.mediaRejected && normalized !== 'add photo') return photoFailure(draft);
         if (issue.length > 2000) return reply('Please shorten the issue description to 2,000 characters.', draft);
-        if (normalized === 'add photo') return reply('Send your photo now.\n\n✅ To continue without a photo, reply *Submit Ticket*.', draft, '📷 Add a photo');
+        if (normalized === 'add photo') return reply(`Send your photo now.\n\n✅ To continue without a photo, reply *${draft.mediaUrl?'No Photo':'Submit Ticket'}*.`, draft, '📷 Add a photo');
         const fingerprint = JSON.stringify([property.id,property.name,issue,draft.mediaUrl || null]);
         if (!confirmation || !reviewMatches(fingerprint)) {
             setReview(fingerprint);
-            return reply(`🏢 *Property:* ${property.name}\n\n📝 *Issue:*\n${issue}\n\n📷 ${draft.mediaUrl ? 'Photo attached.' : 'Photo is optional: send one now if needed.'}\n\n✅ Reply *Submit Ticket* to create it.\n✏️ Send a correction to change the details.`, draft, '🎫 Review ticket');
+            return reply(`🏢 *Property:* ${property.name}\n\n📝 *Issue:*\n${issue}\n\n📷 ${draft.mediaUrl ? 'Photo received; it will be checked when you submit.' : 'Photo is optional: send one now if needed.'}\n\n✅ Reply *Submit* or *Submit Ticket* to create it.\n✏️ Send a correction to change the details.`, draft, '🎫 Review ticket');
         }
         let ticket;
         try {
@@ -296,7 +301,8 @@ export async function advanceConversation(input, current, deps) {
             }
             if(error.code!=='INVALID_MEDIA')throw error;
             delete draft.review;
-            return reply('The photo could not be accepted. Send a supported photo again, or reply No Photo to continue without it.',draft);
+            draft.mediaRejected = true;
+            return photoFailure(draft);
         }
         if (!ticket?.id) throw new Error('Ticket service did not return a stored ticket');
     } else {

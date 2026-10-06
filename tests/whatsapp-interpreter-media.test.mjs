@@ -31,3 +31,21 @@ test('download pins DNS, rejects redirects and non-image content, and bounds str
 test('private DNS result is rejected before requesting the image',async()=>{
     await assert.rejects(fetchPhoto('https://media.aisensy.com/photo',{env:{WHATSAPP_MEDIA_ALLOWED_HOSTS:'media.aisensy.com'},lookup:async()=>[{address:'127.0.0.1'}],request:()=>assert.fail('no private network request')}),/Invalid photo/);
 });
+
+test('a real provider image with a binary content type is accepted by its image signature',async()=>{
+    const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aN1kAAAAASUVORK5CYII=','base64');
+    const base={env:{WHATSAPP_MEDIA_ALLOWED_HOSTS:'media.aisensy.com'},lookup:async()=>[{address:'8.8.8.8'}]};
+    for(const mime of ['application/octet-stream','binary/octet-stream','']) {
+        const fixture=requestFixture({mime,chunks:[png]});
+        assert.deepEqual(await fetchPhoto('https://media.aisensy.com/photo',{...base,request:fixture.request}),png);
+    }
+    const text=requestFixture({mime:'application/octet-stream',chunks:[Buffer.from('<html>access denied</html>')]});
+    await assert.rejects(fetchPhoto('https://media.aisensy.com/photo',{...base,request:text.request}),error=>error.code==='INVALID_MEDIA'&&error.mediaReason==='unsupported_type');
+});
+
+test('photo diagnostics distinguish host configuration and expired links without returning a signed URL',async()=>{
+    assert.throws(()=>validateMediaUrl('https://unconfigured.example/photo?token=secret',{}),error=>error.code==='INVALID_MEDIA'&&error.mediaReason==='host_not_allowed'&&!JSON.stringify(error).includes('secret'));
+    const fixture=requestFixture({status:403});
+    await assert.rejects(fetchPhoto('https://media.aisensy.com/photo?token=secret',{env:{WHATSAPP_MEDIA_ALLOWED_HOSTS:'media.aisensy.com'},lookup:async()=>[{address:'8.8.8.8'}],request:fixture.request}),
+        error=>error.mediaReason==='http_error'&&error.httpStatus===403&&!JSON.stringify(error).includes('secret'));
+});
