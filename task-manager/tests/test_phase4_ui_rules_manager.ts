@@ -6,7 +6,6 @@ async function run() {
     console.log('🧪 Starting Phase 4 Testing Dashboard UI & Multi-Rule Management Verification Tests...\n');
 
     const { TaskDatabaseService } = await import('../TaskDatabaseService');
-    const { NotificationRule } = await import('../types');
 
     // ── Test 1: Fetch Testing Config & Multi-Rule Data Structure ────────────
     console.log('--- Test 1: Verify getTestingConfig returns structured rules list ---');

@@ -48,6 +48,9 @@ async function runPhase5AuditTests() {
             customMessage: 'Automated Phase 5 Test Run',
             footerInstruction: 'Reply "done 1" when completed.',
             includeQuickReplies: true
+        },
+        recipients: {
+            target: 'whitelist'
         }
     };
 
