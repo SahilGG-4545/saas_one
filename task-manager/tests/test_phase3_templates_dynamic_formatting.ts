@@ -7,7 +7,6 @@ async function run() {
 
     const { TaskNotificationService } = await import('../TaskNotificationService');
     const { TaskDatabaseService } = await import('../TaskDatabaseService');
-    const { NotificationRule } = await import('../types');
 
     // 1. Identify test employee (Sahil Gorde)
     const employees = await TaskDatabaseService.getAllEmployees();

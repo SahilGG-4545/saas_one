@@ -8,7 +8,6 @@ async function run() {
     const { supabaseAdmin } = await import('../../backend/lib/supabase/admin');
     const { TaskDatabaseService } = await import('../TaskDatabaseService');
     const { TaskNotificationService } = await import('../TaskNotificationService');
-    const { NotificationRule } = await import('../types');
 
     // 1. Identify test employee (Sahil Gorde)
     const employees = await TaskDatabaseService.getAllEmployees();
