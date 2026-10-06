@@ -71,3 +71,11 @@ test('eligible sender is logged as AI without changing organization or account r
     assert.equal(app.logs[0][1].route,'ai');
     assert.equal(app.logs[0][1].reason,'eligible');
 });
+test('all-user ingress still requires a unique approved sender and active properties',async()=>{
+    const ready={WHATSAPP_LLM_INTERPRETER_ENABLED:'true',AISENSY_ASSISTANT_ENABLED:'true',AISENSY_PROJECT_ID:'private-project-id'};
+    const settings={...config.defaultSettings,enabled:true,accessMode:'all',pilotUserIds:[]};
+    assert.equal(await eligibility({env:ready,settings}).check({phone:'919876543210',projectId:'private-project-id'}),true);
+    for(const extra of [{user:null},{properties:[]}]) {
+        assert.equal(await eligibility({env:ready,settings,...extra}).check({phone:'919876543210',projectId:'private-project-id'}),false);
+    }
+});

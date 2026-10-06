@@ -1,5 +1,6 @@
 import { normalizeText, validateTurn } from './contracts.mjs';
 import { parseBookingDate } from '../assistant/protocol.mjs';
+import { audienceAllows } from './config.mjs';
 
 const TTL = 20 * 60 * 1000;
 const blank = () => ({ llmVersion: 1, active: null, drafts: {} });
@@ -41,7 +42,7 @@ export async function advanceConversation(input, current, deps) {
     for (const orgId of new Set(properties.map(p => p.organization_id))) configs.set(orgId, await deps.settings(orgId));
     const allowed = workflow => properties.filter(p => {
         const cfg = configs.get(p.organization_id);
-        return cfg?.enabled && cfg.pilotUserIds.includes(user.id) && cfg[workflow === 'booking' ? 'bookingEnabled' : 'ticketEnabled'];
+        return audienceAllows(cfg, user.id) && cfg[workflow === 'booking' ? 'bookingEnabled' : 'ticketEnabled'];
     });
     const recovered = new Map();
     for (const [workflow, draft] of Object.entries(state.drafts)) {

@@ -4,7 +4,7 @@ Implemented on `feat/whatsapp-llm-interpreter`. This pilot uses the existing AiS
 
 ## Try the interpreter without creating anything
 
-After deploying the branch and applying its additive migration to your test database, open **Account Settings → WhatsApp (AiSensy) Service → WhatsApp AI pilot** as an approved **Organization Super Admin**. The preview works independently of pilot enablement. Enter a booking or ticket message and click **Preview interpretation**. It shows extracted source phrases and `executed: false`; it never books, creates a ticket or saves a draft.
+After deploying the branch and applying its additive migration to your test database, open **Account Settings → WhatsApp (AiSensy) Service → WhatsApp AI** as an approved **Organization Super Admin**. The preview works independently of pilot enablement. Enter a booking or ticket message and click **Preview interpretation**. It shows extracted source phrases and `executed: false`; it never books, creates a ticket or saves a draft.
 
 Example: `Book conference room 1 tomorrow from 2.30 PM to 3 PM`. Preview should return room/date/start/end phrases. An omitted property stays null. The real conversation resolves IDs only from the sender's current app permissions.
 
@@ -28,7 +28,18 @@ The interpreter reads **only `GROQ_TASK_CHAT_API_KEY`**; it never falls back to 
 
 Apply `supabase/migrations/20261005000002_whatsapp_llm_interpreter.sql` after the existing assistant and message-booking migrations. It adds organization settings, private outgoing reply aliases, `tickets.wa_assistant_completed` to distinguish a fully processed ticket from an interrupted attachment/assignment pipeline, and `wa_assistant_input_hash` to keep committed ticket details immutable during recovery. It does not replace booking/ticket RPCs or migrate existing records. No live database migration was run from this workspace.
 
-In organization settings, add your account with **Add my account to the pilot**, enable the desired two actions, and save. Enable `WHATSAPP_LLM_INTERPRETER_ENABLED=true` in the test deployment after the keys, migration and campaigns are ready. Both the global switch and organization/user allowlist must match. Incoming messages must carry the configured AiSensy project ID. Non-pilot senders continue through existing routing.
+In organization settings, choose **Selected users — testing**, search organization users by name, email or phone, and add the accounts you want to test. **Add my account to testing** remains a shortcut. Enable the desired actions and save. Enable `WHATSAPP_LLM_INTERPRETER_ENABLED=true` in the test deployment after the keys, migration and campaigns are ready. Both the global switch and organization enablement must be on; selected-user mode additionally requires the matched account in the saved test selection. Incoming messages must carry the configured AiSensy project ID. Non-pilot senders continue through existing routing.
+
+## Selecting test users and enabling everyone
+
+**Who can use WhatsApp AI** has two saved modes:
+
+- **Selected users — testing**: search all active organization/property members by name, email or phone, then add or remove testers. Pending users or users missing a valid profile phone number are shown but cannot be added. Deleted profiles are excluded. Up to 100 testers can be selected; all-user mode has no tester-list limit.
+- **All authorized users — live**: explicitly select this after testing and save. Approved, uniquely matched senders can use only the enabled services in properties they already have access to. Organization enablement, global switches, the AiSensy project check, booking credits, availability and explicit confirmations still apply. Anonymous or ambiguous-number senders gain no access.
+
+Existing settings without a mode remain **selected users** and preserve their selections. Switching to all users preserves that list so you can return to testing. Unavailable selections are shown for removal and cannot be saved in selected-user mode. The picker and settings updates require an approved, active Super Admin membership in the same organization. Both ingress and conversation execution enforce the saved audience mode.
+
+This user-selection update uses the existing JSON settings column; no additional SQL or environment variables are needed. Changing the audience only takes effect after **Save AI settings**. Other organizations retain their own audience and service settings.
 
 ## Controlled testing on production
 
@@ -37,8 +48,8 @@ Use the same existing AiSensy project and webhook URL. Do not change Task Manage
 1. Keep `WHATSAPP_LLM_INTERPRETER_ENABLED=false` in Vercel **Production** while preparing. Keep the existing `AISENSY_ASSISTANT_ENABLED` value; enable it before activating this pilot if it is currently false.
 2. In the production Supabase SQL Editor, run the complete additive migration **`supabase/migrations/20261005000002_whatsapp_llm_interpreter.sql`** once. It is safe to reapply and does not modify task tables or enable any account. Existing assistant/message-booking and Task Manager migrations must already be installed; do not blindly reapply those earlier migrations.
 3. Run **`docs/sql/whatsapp_llm_production_checks.sql`**. Every `ready` result must be true. It only checks schema objects; it does not read user messages, change data or contact providers.
-4. After the branch is pushed, reviewed and merged, deploy it with the flag still false. In **Account Settings → WhatsApp (AiSensy) Service → WhatsApp AI pilot**, use **Preview interpretation** first, then enable the organization and add **only your own account** to the pilot. Save. If testing another account, add that exact account UUID; do not add all users.
-5. Set `WHATSAPP_LLM_INTERPRETER_ENABLED=true` in Vercel **Production** and redeploy. All non-allowlisted users retain their existing routing. Keep menu/notice and all current Task Manager/Omnichannel campaigns active.
+4. After the branch is pushed, reviewed and merged, deploy it with the flag still false. In **Account Settings → WhatsApp (AiSensy) Service → WhatsApp AI**, use **Preview interpretation** first, then enable the organization, choose **Selected users — testing**, and add the desired testers using the user search. Save. UUID entry is no longer required.
+5. Set `WHATSAPP_LLM_INTERPRETER_ENABLED=true` in Vercel **Production** and redeploy. In selected-user mode, users outside the test selection retain their existing routing. Keep menu/notice and all current Task Manager/Omnichannel campaigns active.
 6. Send HI → Book Meeting Room, supply a real room and future date/time, review, and Confirm Booking. Send HI → Create Ticket, describe the issue, and Submit Ticket. These confirmations create real production records and consume real booking credits. Verify the app records and existing requester notifications.
 7. Also send TASKS, DONE 1, TEAM STATUS (with the appropriate manager role) and CANCEL TASKS. Test Task Manager's numbered system choices when it has a pending choice and no facility request. During a pending booking, explicit task commands use the current Task Manager handler and leave the facility draft intact. An unquoted number with both contexts requires clarification. Unknown task-only replies retain Task Manager's existing help response. Old quoted task mutations still ask you to retrieve today's list instead of applying stale task numbering.
 

@@ -4,6 +4,7 @@ import { createClient } from '@/frontend/utils/supabase/server';
 import { supabaseAdmin } from '@/backend/lib/supabase/admin';
 import { settingsSchema, defaultSettings } from '@/backend/lib/whatsapp/interpreter/config.mjs';
 import { interpretTurn } from '@/backend/lib/whatsapp/interpreter/interpret.mjs';
+import { getOrganizationUsers } from '@/backend/lib/whatsapp/interpreter/organization-users.mjs';
 
 async function authorize(organizationId: string) {
     if (!z.string().uuid().safeParse(organizationId).success) return { error: NextResponse.json({ error: 'Valid organization ID required' }, { status: 400 }) };
@@ -25,6 +26,9 @@ export async function GET(req: NextRequest) {
         const organizationId = req.nextUrl.searchParams.get('organizationId') || '';
         const auth = await authorize(organizationId);
         if (auth.error) return auth.error;
+        if (req.nextUrl.searchParams.get('view') === 'users') {
+            return NextResponse.json({ users: await getOrganizationUsers(supabaseAdmin, organizationId) }, { headers: { 'Cache-Control': 'private, no-store' } });
+        }
         const { data, error } = await supabaseAdmin.from('whatsapp_interpreter_settings').select('config').eq('organization_id',organizationId).maybeSingle();
         if (error) throw error;
         const parsed = settingsSchema.safeParse(data?.config || defaultSettings);
@@ -40,6 +44,13 @@ export async function PUT(req: NextRequest) {
         if (!parsed.success) return NextResponse.json({error:'Invalid interpreter settings'},{status:400});
         const auth = await authorize(parsed.data.organizationId);
         if (auth.error) return auth.error;
+        if (parsed.data.config.accessMode === 'selected' && parsed.data.config.pilotUserIds.length) {
+            const users = await getOrganizationUsers(supabaseAdmin, parsed.data.organizationId);
+            const allowed = new Set(users.filter(user => user.selectable).map(user => user.id));
+            if (parsed.data.config.pilotUserIds.some(id => !allowed.has(id))) {
+                return NextResponse.json({ error: 'Choose active, approved organization users with a valid WhatsApp phone number. Remove unavailable selections before saving.' }, { status: 400 });
+            }
+        }
         const { error } = await supabaseAdmin.from('whatsapp_interpreter_settings').upsert({ organization_id:parsed.data.organizationId,config:parsed.data.config,updated_at:new Date().toISOString() });
         if (error) throw error;
         return NextResponse.json({config:parsed.data.config});

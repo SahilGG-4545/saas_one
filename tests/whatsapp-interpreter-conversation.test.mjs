@@ -42,6 +42,21 @@ test('menu booking collects grounded details, decimal clocks, and requires confi
     await h.send('confirm booking');
     assert.equal(h.calls.length,1);
 });
+test('all-user mode works for booking and tickets but excludes other organizations and disabled services',async()=>{
+    const h=harness({properties:async()=>[{id:'p1',name:'SS Plaza',organization_id:'o1'},{id:'private',name:'Private Office',organization_id:'o2'}],
+        settings:async org=>({enabled:true,accessMode:org==='o1'?'all':'selected',pilotUserIds:[],bookingEnabled:true,ticketEnabled:false,defaultDate:'ask'})});
+    const booking=await h.send('Book Meeting Room');
+    assert.equal(h.state.active,'booking');
+    assert.equal(h.state.drafts.booking.propertyId,'p1');
+    assert.doesNotMatch(booking.reply.text,/Private Office/);
+    assert.match((await h.send('Create Ticket')).reply.text,/not enabled/);
+    h.deps.settings=async()=>({enabled:true,accessMode:'all',pilotUserIds:[],bookingEnabled:true,ticketEnabled:true,defaultDate:'ask'});
+    await h.send('Create Ticket');
+    assert.equal(h.state.active,'ticket');
+    h.deps.properties=async()=>[];
+    await h.send('Submit Ticket');
+    assert.equal(h.calls.length,0);
+});
 
 test('no menu selection, task commands, invalid model output and injected fields cannot create tickets',async()=>{
     const h=harness({interpret:async()=>({ok:true,intent:'details',fields:fields({issue:'invented issue'})})});
@@ -52,6 +67,17 @@ test('no menu selection, task commands, invalid model output and injected fields
     await h.send('lights not working');
     await h.send('submit ticket');
     assert.equal(h.calls.length,0);
+});
+test('all-user mode creates through the existing services only after explicit confirmation and can be restricted again',async()=>{
+    const h=harness({settings:async()=>({enabled:true,accessMode:'all',pilotUserIds:[],bookingEnabled:true,ticketEnabled:true,defaultDate:'ask'})});
+    await h.send('Book Meeting Room');await h.send('Book conference room 1 today from 2.30pm to 3 pm');
+    assert.equal(h.calls.length,0);await h.send('Confirm Booking');assert.equal(h.calls[0][0],'book');
+    h.deps.interpret=async()=>({ok:true,intent:'details',fields:fields({issue:'Water is leaking'})});
+    await h.send('Create Ticket');await h.send('Water is leaking');
+    assert.equal(h.calls.length,1);await h.send('Submit Ticket');assert.equal(h.calls[1][0],'ticket');
+    await h.send('Book Meeting Room');
+    h.deps.settings=async()=>({enabled:true,accessMode:'selected',pilotUserIds:[],bookingEnabled:true,ticketEnabled:true,defaultDate:'ask'});
+    await h.send('Confirm Booking');assert.equal(h.calls.length,2);assert.equal(h.state.drafts.booking,undefined);
 });
 
 test('ticket photos optional; selected ticket does not delegate to Task Manager',async()=>{
