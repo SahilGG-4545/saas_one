@@ -138,3 +138,24 @@ test('excluded tenant/vendor shells deny direct petty-cash links',async()=>{
     const page=await browser.newPage();try{for(const role of ['tenant','tenant_user','super_tenant','vendor','food_vendor']) {await page.goto(`${base}/${org}/petty-cash?role=${role}`);await page.getByRole('alert').waitFor();assert.equal(await page.getByRole('link',{name:'Petty Cash',exact:true}).count(),0);}}finally{await page.close();}
 });
 console.log(`Dashboard browser artifacts: ${scratch}`);
+
+for(const width of [1440,390])test(`Accounts navigation keeps Petty Cash visible above the footer with a long table at ${width}px`,{timeout:60000},async()=>{
+    const height=width===390?600:800;const page=await browser.newPage({viewport:{width,height}});const errors=[];page.on('pageerror',error=>errors.push(error.message));
+    try{
+        await page.goto(`${base}/${org}/accounts?role=accounts`);await page.getByRole('heading',{name:'Payment Tracker — local fixture'}).waitFor();
+        if(width===390)await page.getByRole('button',{name:'Open menu',exact:true}).click();
+        const sidebar=page.locator('aside:visible');const cash=sidebar.getByRole('link',{name:'Petty Cash',exact:true});await cash.waitFor();
+        const cashBefore=await cash.boundingBox();const tracker=await sidebar.getByRole('link',{name:'Payment Tracker',exact:true}).boundingBox();
+        assert.ok(cashBefore.y-tracker.y<240,'Management Hub should immediately follow finance links, without filling the page height');
+        const asideBefore=await sidebar.boundingBox();assert.ok(asideBefore.height<=height,'Sidebar must fit within the viewport');
+        const signOut=await sidebar.getByRole('button',{name:'Sign out',exact:true}).boundingBox();assert.ok(signOut.y>=0&&signOut.y+signOut.height<=height,'Sign out must be visible without scrolling the table');
+        assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Layout must not overflow horizontally');
+        await page.screenshot({path:join(scratch,`accounts-sidebar-${width}.png`)});
+        if(width===1440){
+            await page.evaluate(()=>window.scrollTo(0,document.documentElement.scrollHeight));assert.ok(await page.evaluate(()=>window.scrollY>1000),'Fixture must reproduce a long payment table');
+            const cashAfter=await cash.boundingBox();assert.ok(Math.abs(cashAfter.y-cashBefore.y)<2,'Petty Cash must stay visible when the payment table scrolls');await page.screenshot({path:join(scratch,'accounts-sidebar-scrolled.png')});
+        }
+        await cash.click();await page.getByTestId('petty-body').waitFor();assert.equal(new URL(page.url()).pathname,`/${org}/petty-cash`);if(width===390)assert.equal(await page.getByRole('button',{name:'Close menu',exact:true}).count(),0);
+        assert.deepEqual(errors,[]);
+    }catch(error){await page.screenshot({path:join(scratch,`accounts-sidebar-failure-${width}.png`)});throw error;}finally{await page.close();}
+});
