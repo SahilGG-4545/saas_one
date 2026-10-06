@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 import ts from 'typescript';
 import { createRequire } from 'node:module';
 import * as protocol from '../backend/lib/whatsapp/assistant/protocol.mjs';
-import { isExplicitTaskCommand } from '../backend/lib/whatsapp/interpreter/coordinator.mjs';
+import { isExplicitTaskCommand, isDirectBookingRequest } from '../backend/lib/whatsapp/interpreter/coordinator.mjs';
 const next=createRequire(import.meta.url)('next/server');
 const sources=Object.fromEntries(await Promise.all(['task-manager/TaskErrorHandler.ts','task-manager/TaskCommandHandler.ts','task-manager/TaskMessageRouter.ts','app/api/webhooks/aisensy/route.ts'].map(async path=>[path,await readFile(new URL('../'+path,import.meta.url),'utf8')])));
 function load(path,imports){const exports={};vm.runInNewContext(ts.transpileModule(sources[path],{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,
@@ -29,7 +29,7 @@ function setup({facilityActive=false,choice=false,testingConfig=null}={}){
         '@/whatsapp-test/freeformTest':{handleFreeformTest:async()=>false},
         '@/task-manager/TaskMessageRouter':router,
         '@/task-manager/TaskIdempotencyService':{TaskIdempotencyService:{isDuplicateWebhook:async()=>false,recordProcessedWebhook(){}}},
-        '@/backend/lib/whatsapp/interpreter/coordinator.mjs':{isExplicitTaskCommand},
+        '@/backend/lib/whatsapp/interpreter/coordinator.mjs':{isExplicitTaskCommand,isDirectBookingRequest},
         '@/backend/lib/whatsapp/interpreter/context':{isInterpreterPilot:async()=>true,lookupQuotedContext:async()=>({workflow:'task'}),
             getConversationRoutingState:async()=>({taskActive:contexts.has('TASK_MANAGER'),taskChoicePending:contexts.get('TASK_MANAGER')?.context_data?.state==='AWAITING_SYSTEM_CHOICE',facilityActive})},
     });

@@ -30,7 +30,7 @@ test('menu booking collects grounded details, decimal clocks, and requires confi
     const h=harness();
     assert.equal((await h.send('hi')).reply.key,'menu');
     await h.send('Book Meeting Room');
-    const prepared=await h.send('Book conference room 1 today from 2.30pm to 3 pm');
+    const prepared=await h.send('conference room 1 today from 2.30pm to 3 pm');
     assert.match(prepared.reply.text,/2:30 PM.*3:00 PM/);
     assert.equal(h.calls.length,0);
     const requestId=h.state.drafts.booking.id;
@@ -70,7 +70,7 @@ test('no menu selection, task commands, invalid model output and injected fields
 });
 test('all-user mode creates through the existing services only after explicit confirmation and can be restricted again',async()=>{
     const h=harness({settings:async()=>({enabled:true,accessMode:'all',pilotUserIds:[],bookingEnabled:true,ticketEnabled:true,defaultDate:'ask'})});
-    await h.send('Book Meeting Room');await h.send('Book conference room 1 today from 2.30pm to 3 pm');
+    await h.send('Book Meeting Room');await h.send('conference room 1 today from 2.30pm to 3 pm');
     assert.equal(h.calls.length,0);await h.send('Confirm Booking');assert.equal(h.calls[0][0],'book');
     h.deps.interpret=async()=>({ok:true,intent:'details',fields:fields({issue:'Water is leaking'})});
     await h.send('Create Ticket');await h.send('Water is leaking');
@@ -93,7 +93,7 @@ test('ticket photos optional; selected ticket does not delegate to Task Manager'
 test('fresh access revocation blocks confirmation and rendering draft details',async()=>{
     const h=harness();
     await h.send('Book Meeting Room');
-    await h.send('Book conference room 1 today from 2.30pm to 3 pm');
+    await h.send('conference room 1 today from 2.30pm to 3 pm');
     h.deps.properties=async()=>[];
     const result=await h.send('confirm booking');
     assert.equal(h.calls.length,0);
@@ -103,7 +103,7 @@ test('fresh access revocation blocks confirmation and rendering draft details',a
 test('switching workflows preserves separate drafts; unknown and stale quotes never execute',async()=>{
     const h=harness({quote:async()=>null});
     await h.send('Book Meeting Room');
-    await h.send('Book conference room 1 today from 2.30pm to 3 pm');
+    await h.send('conference room 1 today from 2.30pm to 3 pm');
     const original=h.state.drafts.booking.id;
     await h.send('Create Ticket');
     assert.equal(h.state.drafts.booking.id,original);
@@ -143,7 +143,7 @@ test('multiple properties require a scoped choice; unknown property is not silen
 test('task notification and bare yes cannot confirm a booking or consume numbered property choices',async()=>{
     const h=harness({hasTaskContext:async()=>true});
     await h.send('Book Meeting Room');
-    await h.send('Book conference room 1 today from 2.30pm to 3 pm');
+    await h.send('conference room 1 today from 2.30pm to 3 pm');
     const original=structuredClone(h.state.drafts.booking.fields);
     await h.send('yes');
     await h.send('I completed the inspection task at 3 pm');
@@ -163,7 +163,7 @@ test('menu button can start collection if provider has not returned campaign mes
 test('correction invalidates prior review and unavailable room or insufficient credits never reports success',async()=>{
     const h=harness();
     await h.send('Book Meeting Room');
-    await h.send('Book conference room 1 today from 2.30pm to 3 pm');
+    await h.send('conference room 1 today from 2.30pm to 3 pm');
     h.deps.interpret=async()=>({ok:true,intent:'details',fields:fields({start:'4 pm',end:'5 pm'})});
     await h.send('instead 4 pm to 5 pm');
     h.deps.availableRooms=async()=>[];
@@ -190,7 +190,7 @@ test('captioned photo is grounded ticket evidence; bare photo asks for issue and
 test('completed operation is recovered after worker crash without recreating resource',async()=>{
     const h=harness({findBooking:async()=>({id:'already-created'})});
     await h.send('Book Meeting Room');
-    await h.send('Book conference room 1 today from 2.30pm to 3 pm');
+    await h.send('conference room 1 today from 2.30pm to 3 pm');
     h.deps.availableRooms=async()=>[];
     await h.send('Confirm Booking');
     assert.equal(h.calls.length,0);assert.equal(h.state.active,null);
@@ -199,7 +199,7 @@ test('completed operation is recovered after worker crash without recreating res
 test('expired draft and changed account cannot be confirmed',async()=>{
     const h=harness();
     await h.send('Book Meeting Room');
-    await h.send('Book conference room 1 today from 2.30pm to 3 pm');
+    await h.send('conference room 1 today from 2.30pm to 3 pm');
     h.deps.now=()=>new Date('2026-10-05T07:00:00Z');
     await h.send('Confirm Booking');
     assert.equal(h.calls.length,0);
@@ -234,7 +234,7 @@ test('failed photo-caption interpretation cannot change a reviewed ticket',async
 });
 
 test('committed booking is recovered even if its time and draft expiry have passed',async()=>{
-    const h=harness();await h.send('Book Meeting Room');await h.send('Book conference room 1 today from 2.30pm to 3 pm');
+    const h=harness();await h.send('Book Meeting Room');await h.send('conference room 1 today from 2.30pm to 3 pm');
     h.deps.now=()=>new Date('2026-10-05T10:00:00Z');
     h.deps.findBooking=async()=>({id:'stored',property_id:'p1'});
     const result=await h.send('Confirm Booking');assert.equal(result.reply,null);assert.equal(h.calls.length,0);
@@ -268,7 +268,7 @@ test('completed ticket recovery uses the same trimmed issue as original creation
 test('booking review is readable, omits non-tenant credits, and still requires the explicit confirmation',async()=>{
     const h=harness({creditSummary:async()=>null});
     await h.send('Book Meeting Room');
-    const review=await h.send('Book conference room 1 today from 2.30pm to 3 pm');
+    const review=await h.send('conference room 1 today from 2.30pm to 3 pm');
     assert.match(review.reply.text,/📋.*Review booking/);
     assert.match(review.reply.text,/🏢 \*Property:\* SS Plaza/);
     assert.match(review.reply.text,/🕒 \*Time:\* 2:30 PM.*3:00 PM IST/);
@@ -286,4 +286,193 @@ test('property and room prompts put each numbered choice on its own line and kee
     const room=await h.send('today 3 pm to 4 pm');assert.match(room.reply.text,/📝.*Booking details/);
     assert.match(room.reply.text,/\n1\. Conference Room 1\n2\. Conference Room 2/);
     assert.equal(h.state.drafts.booking.fields.start,'3 pm');assert.equal(h.calls.length,0);
+});
+test('complete direct booking needs no greeting or menu and books once with the real selected details',async()=>{
+    const h=harness({interpret:async()=>({ok:true,intent:'details',fields:fields({room:'Conference Room 1',date:'today',start:'2.30pm',end:'3 pm'})})});
+    const result=await h.send('Book Conference Room 1 today from 2.30pm to 3 pm');
+    assert.equal(result.reply,null);assert.equal(h.calls.length,1);assert.equal(h.calls[0][0],'book');
+    assert.equal(h.calls[0][1].roomId,'r1');assert.equal(h.calls[0][1].startTime,'14:30');
+    assert.equal(h.state.active,null);
+});
+test('direct request with missing property keeps details and books only after an allowed property choice',async()=>{
+    const h=harness({properties:async()=>[{id:'p1',name:'SS Plaza',organization_id:'o1'},{id:'p2',name:'Other Office',organization_id:'o1'}]});
+    const missing=await h.send('Please book conference room 1 today from 2.30pm to 3 pm');
+    assert.match(missing.reply.text,/Choose a property/);assert.equal(h.calls.length,0);
+    assert.equal(h.state.drafts.booking.fields.start,'2.30pm');
+    const result=await h.send('1');assert.equal(result.reply,null);assert.equal(h.calls.length,1);
+    assert.equal(h.calls[0][1].propertyId,'p1');
+});
+test('direct booking carries only a permitted legacy property choice across the template-to-AI switch',async()=>{
+    const h=harness({properties:async()=>[{id:'p1',name:'SS Plaza',organization_id:'o1'},{id:'p2',name:'Other Office',organization_id:'o1'}]});
+    const result=await advanceConversation({phone:'919000000000',messageId:'wamid',requestId:'new-request',text:'Book conference room 1 today from 2.30pm to 3 pm'},
+        {step:'booking_request',id:'old-request',property:{id:'p1',name:'Untrusted old name'},date:'2099-01-01',startTime:'18:00'},h.deps);
+    assert.equal(result.reply,null);assert.equal(h.calls.length,1);
+    assert.equal(h.calls[0][1].requestId,'new-request');assert.equal(h.calls[0][1].propertyId,'p1');assert.equal(h.calls[0][1].date,'2026-10-05');
+});
+test('auto-book requires an explicit date, preserves task ambiguity, and cannot bypass availability or credits',async()=>{
+    const h=harness({settings:async()=>({enabled:true,bookingEnabled:true,ticketEnabled:true,pilotUserIds:['u1'],defaultDate:'today'}),
+        interpret:async()=>({ok:true,intent:'details',fields:fields({room:'conference room 1',start:'3 pm',end:'4 pm'})})});
+    assert.match((await h.send('Book conference room 1 from 3 pm to 4 pm')).reply.text,/Date/);assert.equal(h.calls.length,0);
+    h.deps.interpret=async()=>({ok:true,intent:'details',fields:fields({date:'today'})});
+    h.deps.availableRooms=async()=>[];
+    assert.match((await h.send('today')).reply.text,/unavailable/);assert.equal(h.calls.length,0);
+    h.deps.availableRooms=async()=>[{id:'r1'}];
+    h.deps.bookRange=async()=>{throw Object.assign(new Error('credits'),{code:'INSUFFICIENT_CREDITS'});};
+    assert.match((await h.send('today')).reply.text,/credits/);assert.equal(h.calls.length,0);
+});
+test('negated, informational and task-related booking text cannot start an automatic booking',async()=>{
+    for(const text of ['Do not book conference room 1 today from 2.30pm to 3 pm','Is conference room 1 booked today?','I completed the task to book conference room 1 today','Assign task: book conference room 1 today','Book conference room 1 and create a ticket']) {
+        const h=harness({interpret:()=>assert.fail('must not interpret as direct booking')});
+        await h.send(text);assert.equal(h.calls.length,0);assert.equal(h.state.active,null);
+    }
+});
+test('replayed direct request recovers the committed booking before its own occupied slot blocks it',async()=>{
+    const h=harness({findBooking:async()=>({id:'already-created',property_id:'p1'}),availableRooms:()=>assert.fail('completed operation is recovered before availability')});
+    const result=await h.send('Book conference room 1 today from 2.30pm to 3 pm');assert.equal(result.reply,null);assert.equal(h.calls.length,0);
+});
+test('explicit booking instruction after menu selection also books immediately',async()=>{
+    const h=harness();await h.send('Book Meeting Room');
+    assert.equal((await h.send('Book conference room 1 today from 2.30pm to 3 pm')).reply,null);
+    assert.equal(h.calls.length,1);
+});
+test('direct booking never accepts unknown or task quotes, ungrounded output or inaccessible legacy property',async()=>{
+    for (const quote of [null,{workflow:'task'}]) {
+        const h=harness({quote:async()=>quote,interpret:()=>assert.fail('quoted request cannot start booking')});
+        assert.ok((await h.send('Book conference room 1 today from 2.30pm to 3 pm',{quotedIds:['old-message']})).reply);
+        assert.equal(h.calls.length,0);
+    }
+    for (const interpretation of [{ok:false,reason:'rate_limited'},{ok:true,intent:'unclear',fields:fields({})},{ok:true,intent:'details',fields:fields({date:'tomorrow',room:'conference room 1',start:'2.30pm',end:'3 pm'})}]) {
+        const h=harness({interpret:async()=>interpretation});
+        assert.ok((await h.send('Book conference room 1 today from 2.30pm to 3 pm')).reply);
+        assert.equal(h.calls.length,0);assert.notEqual(h.state.drafts.booking.autoBook,true);
+    }
+    const h=harness({properties:async()=>[{id:'p1',name:'SS Plaza',organization_id:'o1'},{id:'p2',name:'Other Office',organization_id:'o1'}]});
+    const response=await advanceConversation({phone:'919000000000',requestId:'new',text:'Book conference room 1 today from 2.30pm to 3 pm'},
+        {step:'booking_request',property:{id:'private',name:'Hidden property'}},h.deps);
+    assert.match(response.reply.text,/Choose a property/);assert.doesNotMatch(response.reply.text,/Hidden property/);assert.equal(h.calls.length,0);
+});
+test('negation pauses automatic booking until the user explicitly authorizes it again',async()=>{
+    const h=harness({interpret:async()=>({ok:true,intent:'details',fields:fields({room:'conference room 1',start:'2.30pm',end:'3 pm'})})});
+    await h.send('Book conference room 1 from 2.30pm to 3 pm');
+    await h.send('Do not book the room');
+    h.deps.interpret=async()=>({ok:true,intent:'details',fields:fields({date:'today'})});
+    assert.match((await h.send('today')).reply.text,/Confirm Booking/);assert.equal(h.calls.length,0);
+});
+test('automatic booking keeps the requested calendar date when a missing-detail reply crosses midnight',async()=>{
+    const h=harness({now:()=>new Date('2026-10-05T18:28:00Z'),
+        interpret:async()=>({ok:true,intent:'details',fields:fields({room:'conference room 1',date:'today'})})});
+    await h.send('Book conference room 1 today');
+    h.deps.now=()=>new Date('2026-10-05T18:31:00Z');
+    h.deps.interpret=async()=>({ok:true,intent:'details',fields:fields({start:'5 pm',end:'6 pm'})});
+    assert.match((await h.send('5 pm to 6 pm')).reply.text,/future date/);assert.equal(h.calls.length,0);
+});
+test('automatic booking rejects competing dates or intervals even if a model picks one grounded subset',async()=>{
+    for (const text of ['Book conference room 1 today and tomorrow from 3 pm to 4 pm',
+        'Book conference room 1 today from 3 pm to 4 pm and from 5 pm to 6 pm']) {
+        const h=harness({interpret:async()=>({ok:true,intent:'details',fields:fields({room:'conference room 1',date:'today',start:'3 pm',end:'4 pm'})})});
+        assert.ok((await h.send(text)).reply);assert.equal(h.calls.length,0);
+    }
+});
+test('automatic booking cannot discard an explicit property that the model omitted',async()=>{
+    const h=harness({interpret:async()=>({ok:true,intent:'details',fields:fields({room:'conference room 1',date:'today',start:'3 pm',end:'4 pm'})})});
+    assert.match((await h.send('Book conference room 1 in Private Building today from 3 pm to 4 pm')).reply.text,/Choose a property/);
+    assert.equal(h.calls.length,0);assert.equal(h.state.drafts.booking.propertyId,undefined);
+    assert.equal((await h.send('1')).reply,null);assert.equal(h.calls[0][1].propertyId,'p1');
+});
+test('automatic booking asks which room when a model selects a subset of competing room names',async()=>{
+    const h=harness();
+    assert.match((await h.send('Book conference room 1 and conference room 2 today from 2.30pm to 3 pm')).reply.text,/Available rooms/);
+    assert.equal(h.calls.length,0);assert.equal((await h.send('1')).reply,null);assert.equal(h.calls[0][1].roomId,'r1');
+});
+test('room ambiguity is retained while an automatic request waits for property selection',async()=>{
+    const h=harness({properties:async()=>[{id:'p1',name:'SS Plaza',organization_id:'o1'},{id:'p2',name:'Other Office',organization_id:'o1'}]});
+    await h.send('Book conference room 1 and conference room 2 today from 2.30pm to 3 pm');
+    assert.match((await h.send('1')).reply.text,/Available rooms/);assert.equal(h.calls.length,0);
+    assert.equal((await h.send('1')).reply,null);assert.equal(h.calls.length,1);
+});
+test('an unknown room omitted by the model cannot become an automatic singleton room booking',async()=>{
+    const h=harness({rooms:async()=>[{id:'r1',name:'Conference Room 1'}],
+        interpret:async()=>({ok:true,intent:'details',fields:fields({date:'today',start:'3 pm',end:'4 pm'})})});
+    assert.match((await h.send('Book room Unknown today from 3 pm to 4 pm')).reply.text,/Available rooms/);assert.equal(h.calls.length,0);
+});
+test('a known explicit property omitted by the model can resolve only to that permitted property',async()=>{
+    const h=harness({properties:async()=>[{id:'p1',name:'SS Plaza',organization_id:'o1'},{id:'p2',name:'Other Office',organization_id:'o1'}]});
+    assert.equal((await h.send('Book conference room 1 in SS Plaza today from 2.30pm to 3 pm')).reply,null);
+    assert.equal(h.calls[0][1].propertyId,'p1');
+});
+test('conditional and empty-extraction replies cannot trigger a pending automatic booking',async()=>{
+    const h=harness({interpret:async()=>({ok:true,intent:'details',fields:fields({room:'conference room 1',start:'3 pm',end:'4 pm'})})});
+    await h.send('Book conference room 1 from 3 pm to 4 pm');
+    h.deps.interpret=async()=>({ok:true,intent:'details',fields:fields({date:'today'})});
+    assert.ok((await h.send('today if finance approves')).reply);assert.equal(h.calls.length,0);
+    h.deps.availableRooms=async()=>[];await h.send('today');assert.equal(h.calls.length,0);
+    h.deps.availableRooms=async()=>[{id:'r1'}];h.deps.interpret=async()=>({ok:true,intent:'details',fields:fields({})});
+    assert.ok((await h.send('how is everything going?')).reply);assert.equal(h.calls.length,0);
+});
+test('an explicit permitted property replaces a saved property even when extraction omits it',async()=>{
+    const h=harness({properties:async()=>[{id:'p1',name:'SS Plaza',organization_id:'o1'},{id:'p2',name:'Other Office',organization_id:'o1'}],
+        interpret:async()=>({ok:true,intent:'details',fields:fields({room:'conference room 1',date:'today',start:'3 pm',end:'4 pm'})})});
+    await h.send('Book Meeting Room');await h.send('1');
+    assert.equal((await h.send('Book conference room 1 for Other Office today from 3 pm to 4 pm')).reply,null);
+    assert.equal(h.calls[0][1].propertyId,'p2');
+});
+test('a model-extracted shorter room name cannot override the explicit longer room target',async()=>{
+    const h=harness({rooms:async()=>[{id:'r1',name:'Boardroom'},{id:'r2',name:'Boardroom East'}],availableRooms:async()=>[{id:'r1'},{id:'r2'}],
+        interpret:async()=>({ok:true,intent:'details',fields:fields({room:'Boardroom',date:'today',start:'3 pm',end:'4 pm'})})});
+    assert.match((await h.send('Book Boardroom East today from 3 pm to 4 pm')).reply.text,/Available rooms/);assert.equal(h.calls.length,0);
+    assert.equal((await h.send('2')).reply,null);assert.equal(h.calls[0][1].roomId,'r2');
+});
+test('the screenshot wording books Boardroom and treats for today as a date rather than a property',async()=>{
+    const h=harness({rooms:async()=>[{id:'r1',name:'Boardroom'}],
+        interpret:async()=>({ok:true,intent:'details',fields:fields({room:'Boardroom',date:'today',start:'5 pm',end:'6 pm'})})});
+    assert.equal((await h.send('Book boardroom for today from 5 pm to 6 pm')).reply,null);
+    assert.equal(h.calls[0][1].propertyId,'p1');assert.equal(h.calls[0][1].startTime,'17:00');
+});
+test('an explicit team purpose is saved on a direct booking without becoming a property or another owner',async()=>{
+    const h=harness({rooms:async()=>[{id:'r1',name:'Boardroom'}],
+        properties:async()=>[{id:'p1',name:'SS Plaza',organization_id:'o1'},{id:'p2',name:'Tech Team',organization_id:'o1'}],
+        interpret:async()=>({ok:true,intent:'details',fields:fields({property:'SS Plaza',room:'Boardroom',date:'tomorrow',start:'5 pm',end:'6 pm',purpose:'tech team'})})});
+    assert.equal((await h.send('Book Boardroom in SS Plaza tomorrow from 5 pm to 6 pm for tech team')).reply,null);
+    assert.equal(h.calls[0][1].purpose,'tech team');assert.equal(h.calls[0][1].propertyId,'p1');assert.equal(h.calls[0][1].userId,'u1');
+});
+test('optional purpose survives missing-detail replies and appears in a reviewed booking',async()=>{
+    const h=harness({interpret:async()=>({ok:true,intent:'details',fields:fields({room:'conference room 1',start:'3 pm',end:'4 pm',purpose:'tech team'})})});
+    await h.send('Book Meeting Room');
+    assert.match((await h.send('conference room 1 from 3 pm to 4 pm for tech team')).reply.text,/tech team/);
+    assert.equal(h.calls.length,0);
+    h.deps.interpret=async()=>({ok:true,intent:'details',fields:fields({date:'tomorrow'})});
+    assert.match((await h.send('tomorrow')).reply.text,/Purpose.*tech team/);
+    await h.send('Confirm Booking');assert.equal(h.calls[0][1].purpose,'tech team');
+});
+test('booking notes accept an arbitrary supplied description and remain absent when nothing was supplied',async()=>{
+    for(const purpose of [null,'BD','client onboarding discussion']) {
+        const h=harness({interpret:async()=>({ok:true,intent:'details',fields:fields({room:'conference room 1',date:'tomorrow',start:'5 pm',end:'6 pm',purpose})})});
+        const text=`Book conference room 1 tomorrow from 5 pm to 6 pm${purpose?' for '+purpose:''}`;
+        assert.equal((await h.send(text)).reply,null);assert.equal(h.calls[0][1].purpose,purpose);
+    }
+});
+test('task or ticket words inside an explicit meeting purpose remain notes and cannot mutate those services',async()=>{
+    for(const purpose of ['task planning','ticket review']) {
+        const h=harness({interpret:async()=>({ok:true,intent:'details',fields:fields({room:'conference room 1',date:'tomorrow',start:'5 pm',end:'6 pm',purpose})})});
+        assert.equal((await h.send('Book conference room 1 for tomorrow from 5 pm to 6 pm for '+purpose)).reply,null);
+        assert.equal(h.calls.length,1);assert.equal(h.calls[0][0],'book');assert.equal(h.calls[0][1].purpose,purpose);
+    }
+    for (const tail of ['tech team and complete task 1','BD; create a ticket','BD. Complete task 1','create ticket']) {
+        const mixed=harness({interpret:()=>assert.fail('mixed service request must not start automatic booking')});
+        await mixed.send('Book conference room 1 tomorrow from 5 pm to 6 pm for '+tail);
+        assert.equal(mixed.calls.length,0);
+    }
+    const early=harness({interpret:async()=>({ok:true,intent:'details',fields:fields({room:'conference room 1',date:'tomorrow',start:'5 pm',end:'6 pm',purpose:'task planning'})})});
+    assert.equal((await early.send('Book conference room 1 for task planning tomorrow from 5 pm to 6 pm')).reply,null);
+    assert.equal(early.calls[0][1].purpose,'task planning');
+});
+test('a model mislabeled purpose cannot erase an explicit in-property target',async()=>{
+    const h=harness({properties:async()=>[{id:'p1',name:'SS Plaza',organization_id:'o1'},{id:'p2',name:'Other Office',organization_id:'o1'}],
+        interpret:async()=>({ok:true,intent:'details',fields:fields({room:'conference room 1',date:'tomorrow',start:'5 pm',end:'6 pm',purpose:'Other Office'})})});
+    await h.send('Book Meeting Room');await h.send('1');
+    await h.send('Book conference room 1 in Other Office tomorrow from 5 pm to 6 pm');
+    assert.equal(h.calls.length,1);assert.equal(h.calls[0][1].propertyId,'p2');
+    const unknown=harness({interpret:async()=>({ok:true,intent:'details',fields:fields({room:'conference room 1',date:'tomorrow',start:'5 pm',end:'6 pm',purpose:'Private Building'})})});
+    assert.match((await unknown.send('Book conference room 1 in Private Building tomorrow from 5 pm to 6 pm')).reply.text,/Choose a property/);
+    assert.equal(unknown.calls.length,0);
 });

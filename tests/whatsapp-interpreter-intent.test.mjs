@@ -11,6 +11,19 @@ const load = () => import('../backend/lib/whatsapp/interpreter/interpret.mjs');
 const empty = { property: null, room: null, date: null, start: null, end: null, issue: null };
 const reply = fields => Response.json({ choices: [{ message: { content: JSON.stringify({ intent: 'details', fields: { ...empty, ...fields } }) } }] });
 
+test('booking purpose is optional, copied from user text, and never treated as a team permission',async()=>{
+    const {interpretTurn}=await load();
+    const source='Book Boardroom tomorrow from 5 pm to 6 pm for tech team';
+    const options={env:{GROQ_TASK_CHAT_API_KEY:'test'},fetch:async()=>reply({room:'Boardroom',date:'tomorrow',start:'5 pm',end:'6 pm',purpose:'tech team'})};
+    const result=await interpretTurn({workflow:'booking',text:source},options);
+    assert.equal(result.ok,true);assert.equal(result.fields.purpose,'tech team');assert.equal(result.fields.property,null);
+    for(const purpose of ['finance team','x'.repeat(501)]) {
+        const invalid=await interpretTurn({workflow:'booking',text:source},{...options,fetch:async()=>reply({purpose})});
+        assert.equal(invalid.ok,false);
+    }
+    assert.equal((await interpretTurn({workflow:'ticket',text:'tech team'},{...options,fetch:async()=>reply({purpose:'tech team'})})).ok,false);
+});
+
 test('Groq extracts evidence-grounded booking details and uses only the dedicated task chat key', async () => {
     const { interpretTurn } = await load();
     let options;
