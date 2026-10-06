@@ -46,6 +46,20 @@ The route inspects active task state and pilot drafts without clearing or renewi
 
 Offline verification covers the real Task Manager router/command handlers with isolated data. Live Groq accuracy, provider delivery, production schema readiness and requester notifications still require the above account-restricted production test. No production SQL was executed from this workspace.
 
+## Diagnosing a failed interpretation preview
+
+The approved Org Super Admin preview includes safe diagnostics for a rejected Groq request: the selected model, HTTP status, an allowlisted error code and a locally written explanation. It never returns the provider's raw error message, failed generation, API key or prompt. Normal WhatsApp interpretation retains its existing error response and does not request these diagnostics.
+
+- `401`: verify `GROQ_TASK_CHAT_API_KEY` in the Vercel environment serving this deployment.
+- `403`: verify Groq account/project/model access.
+- `404`, `model_not_found` or `model_decommissioned`: verify the selected model is available to this account.
+- `400` with `json_validate_failed`: the provider could not produce the required JSON; no interpretation was accepted.
+- Other `400`/`422` failures: investigate the request format/model parameters.
+- `429`: check Groq's account limits and retry after reset.
+- `5xx`: retry after the temporary provider failure.
+
+Redeploy after changing Vercel environment variables. An absent `GROQ_TASK_CHAT_MODEL` still selects the existing default, `llama-3.3-70b-versatile`; diagnostics do not switch models, change credentials, add fallback attempts or modify Task Manager. `executed: false` always means the preview did not create a booking or ticket, even when interpretation succeeds. Keep the global pilot disabled while diagnosing failed previews.
+
 ## Templates and notifications
 
 | Message | Delivery |

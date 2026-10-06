@@ -10,7 +10,7 @@ const require=createRequire(import.meta.url),next=require('next/server');
 const org='00000000-0000-4000-8000-000000000010',other='00000000-0000-4000-8000-000000000020',uid='00000000-0000-4000-8000-000000000001';
 const source=await readFile(new URL('../app/api/whatsapp-assistant/settings/route.ts',import.meta.url),'utf8');
 function harness({signedIn=true,role='org_super_admin',approved=true}={}) {
-    const writes=[],calls=[];
+    const writes=[],calls=[],options=[];
     const admin={from(table){const filters={};const chain={select(){return chain;},eq(k,v){filters[k]=v;return chain;},async maybeSingle(){
         if(table==='organization_memberships')return {data:filters.organization_id===org&&filters.role===role?{role}:null};
         if(table==='users')return {data:{is_approved:approved,approval_status:approved?'approved':'pending'}};
@@ -18,10 +18,10 @@ function harness({signedIn=true,role='org_super_admin',approved=true}={}) {
     },async upsert(value){writes.push(value);return {error:null};}};return chain;}};
     const imports={'next/server':next,zod:{z},'@/frontend/utils/supabase/server':{createClient:async()=>({auth:{getUser:async()=>({data:{user:signedIn?{id:uid}:null}})}})},
         '@/backend/lib/supabase/admin':{supabaseAdmin:admin},'@/backend/lib/whatsapp/interpreter/config.mjs':config,
-        '@/backend/lib/whatsapp/interpreter/interpret.mjs':{interpretTurn:async input=>{calls.push(input);return {ok:true,intent:'details',fields:{start:'3 pm',end:'4 pm'}};}}};
+        '@/backend/lib/whatsapp/interpreter/interpret.mjs':{interpretTurn:async (input,opts)=>{calls.push(input);options.push(opts);return {ok:true,intent:'details',fields:{start:'3 pm',end:'4 pm'}};}}};
     const exports={};vm.runInNewContext(ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,
         {exports,require:name=>{if(!imports[name])throw new Error(name);return imports[name];},process:{env:{GROQ_TASK_CHAT_API_KEY:'not-exposed'}},Date});
-    return {...exports,writes,calls};
+    return {...exports,writes,calls,options};
 }
 const request=(method='GET',body,organizationId=org)=>new next.NextRequest(`https://example.com/api/whatsapp-assistant/settings?organizationId=${organizationId}`,{method,...(body?{headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{})});
 test('settings require login, approved current org super admin, and deny other organizations',async()=>{
@@ -45,4 +45,14 @@ test('preview calls interpretation only and never creates application resources 
     assert.equal((await response.json()).executed,false);assert.equal(h.calls.length,1);assert.equal(h.writes.length,0);
     assert.equal((await h.POST(request('POST',{organizationId:org,workflow:'task',text:'done all'}))).status,400);
     assert.equal(h.calls.length,1);
+});
+
+test('approved admin preview requests safe provider diagnostics while denied previews never call Groq',async()=>{
+    const h=harness();
+    assert.equal((await h.POST(request('POST',{organizationId:org,workflow:'booking',text:'3 pm to 4 pm'}))).status,200);
+    assert.equal(h.options[0]?.includeDiagnostics,true);
+    assert.equal(h.writes.length,0);
+    const denied=harness({role:'property_admin'});
+    assert.equal((await denied.POST(request('POST',{organizationId:org,workflow:'booking',text:'3 pm to 4 pm'}))).status,403);
+    assert.equal(denied.calls.length,0);
 });

@@ -53,7 +53,7 @@ export async function POST(req: NextRequest) {
         if (!parsed.success) return NextResponse.json({error:'Invalid preview request'},{status:400});
         const auth = await authorize(parsed.data.organizationId);
         if (auth.error) return auth.error;
-        const result = await interpretTurn({workflow:parsed.data.workflow,text:parsed.data.text});
+        const result = await interpretTurn({workflow:parsed.data.workflow,text:parsed.data.text},{includeDiagnostics:true});
         return NextResponse.json({result,executed:false});
     } catch { return NextResponse.json({error:'Preview unavailable'},{status:503}); }
 }
