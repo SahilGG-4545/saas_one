@@ -1,5 +1,7 @@
 'use client';
 
+import { useDashboardContent } from '@/frontend/components/layout/DashboardContentSlot';
+import PettyCashNavLink from '@/frontend/components/pettyCash/PettyCashNavLink';
 import HRTicketsContent from '@/frontend/components/hr/HRTicketsContent';
 import React, { useState, useEffect, useMemo, useCallback, useRef, memo } from 'react';
 import {
@@ -289,6 +291,7 @@ const PropertySelectorDropdown = memo(function PropertySelectorDropdown({
 });
 
 const PropertyAdminDashboard = ({ propertyId: propPropertyId }: PropertyAdminDashboardProps = {}) => {
+    const { dashboardContent, dashboardPropertyId, navigateDashboard } = useDashboardContent();
     const { user, signOut, membership } = useAuth();
     const { theme, toggleTheme } = useTheme();
     const params = useParams();
@@ -299,7 +302,7 @@ const PropertyAdminDashboard = ({ propertyId: propPropertyId }: PropertyAdminDas
 
     // Resolved active property id: prop -> url param -> searchParam
     const [activePropId, setActivePropId] = useState<string | undefined>(
-        propPropertyId || urlPropertyId || searchParams.get('propertyId') || undefined
+        propPropertyId || urlPropertyId || searchParams.get('propertyId') || dashboardPropertyId
     );
 
     useEffect(() => {
@@ -312,7 +315,8 @@ const PropertyAdminDashboard = ({ propertyId: propPropertyId }: PropertyAdminDas
     const propertyId = activePropId || (params?.propertyId as string) || '';
 
     // State
-    const [openTab, setActiveTab] = useState<Tab>('overview');
+    const [dashboardTab, setActiveTab] = useState<Tab>('overview');
+    const openTab = dashboardContent !== undefined ? 'petty-cash' as Tab : dashboardTab;
     const supabase = useMemo(() => createClient(), []);
     const { getCachedData, setCachedData } = useDataCache();
     const cacheKey = `property-${propertyId}`;
@@ -452,6 +456,7 @@ const PropertyAdminDashboard = ({ propertyId: propPropertyId }: PropertyAdminDas
 
     // Helper to change tab with URL persistence
     const handleTabChange = (tab: Tab, filter: string = 'all', dateFrom?: string, dateTo?: string) => {
+        if (dashboardContent !== undefined) { navigateDashboard(tab); setSidebarOpen(false); return; }
         setActiveTab(tab);
         setPendingStatusFilter(filter);
         setSidebarOpen(false);
@@ -698,6 +703,7 @@ const PropertyAdminDashboard = ({ propertyId: propPropertyId }: PropertyAdminDas
                             Management Hub
                         </p>
                         <div className="space-y-1">
+                            <PettyCashNavLink onNavigate={() => setSidebarOpen(false)} />
 
                             <button
                                 onClick={() => handleTabChange('users')}
@@ -978,6 +984,7 @@ const PropertyAdminDashboard = ({ propertyId: propPropertyId }: PropertyAdminDas
 
             {/* Main Content */}
             <main className="flex-1 min-w-0 overflow-x-hidden lg:ml-72 flex flex-col bg-white border-l border-slate-300 shadow-[-4px_0_12px_-4px_rgba(0,0,0,0.05)] relative z-10">
+
                 {openTab !== 'overview' && (
                     <header className="h-14 flex justify-between items-center px-3 md:px-8 lg:px-12 mb-2 md:mb-4 border-b border-border/10">
                         <div className="flex items-center gap-3">
@@ -1037,6 +1044,8 @@ const PropertyAdminDashboard = ({ propertyId: propPropertyId }: PropertyAdminDas
                         </div>
                     </header>
                 )}
+                {dashboardContent ?? (<>
+
 
                 <AnimatePresence mode="wait">
                     <motion.div
@@ -1221,7 +1230,9 @@ const PropertyAdminDashboard = ({ propertyId: propPropertyId }: PropertyAdminDas
                         )}
                     </motion.div>
                 </AnimatePresence>
-            </main>
+
+                </>)}
+</main>
 
             <AddMemberModal
                 isOpen={showAddMemberModal}

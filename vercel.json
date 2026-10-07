@@ -135,6 +135,10 @@
     {
       "path": "/api/cron/task-manager?action=auto",
       "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/cron/process-petty-cash-deliveries",
+      "schedule": "* * * * *"
     }
   ]
 }

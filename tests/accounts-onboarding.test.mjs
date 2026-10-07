@@ -4,6 +4,8 @@ import vm from 'node:vm';
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import ts from 'typescript';
+import {loadTs} from './petty-cash/load-ts.mjs';
+const managementRoles = loadTs('backend/lib/users/managementRoles.ts');
 
 const require = createRequire(import.meta.url);
 const next = require('next/server');
@@ -16,7 +18,7 @@ const siloSource = await readFile(new URL('../frontend/lib/auth/silos.ts', impor
 const siloExports = {};
 vm.runInNewContext(ts.transpileModule(siloSource, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, { exports: siloExports });
 
-function fixture({ actor = 'admin', adminRole = 'org_super_admin', orgRole, propRole, orgError = null, properties = [] } = {}) {
+function fixture({ actor = 'admin', adminRole = 'org_super_admin', orgRole, propRole, orgError = null, properties = [{ id: 'p1', organization_id: 'o1' }] } = {}) {
     const tables = {
         users: [{ id: 'admin', is_master_admin: false, full_name: 'Admin' }, { id: 'member', email: 'member@example.com', is_approved: false, approval_status: 'pending' }],
         organizations: [{ id: 'o1', name: 'Autopilot', code: 'autopilot' }],
@@ -40,7 +42,7 @@ function fixture({ actor = 'admin', adminRole = 'org_super_admin', orgRole, prop
         from(table) {
             tables[table] ||= [];
             let filters = [], operation = 'select', payload;
-            const matches = row => filters.every(([key, value]) => row[key] === value);
+            const matches = row => filters.every(([key, value]) => value?.values ? value.values.includes(row[key]) : row[key] === value);
             const execute = single => {
                 if (table === 'organization_memberships' && ['insert', 'upsert'].includes(operation) && orgError) return { data: null, error: { message: orgError } };
                 const rows = tables[table].filter(matches);
@@ -56,6 +58,7 @@ function fixture({ actor = 'admin', adminRole = 'org_super_admin', orgRole, prop
                 return { data: single ? rows[0] || null : rows, error: null };
             };
             return {
+                in(key, values) { filters.push([key, { values }]); return this; },
                 select() { return this; }, eq(key, value) { filters.push([key, value]); return this; },
                 order() { return this; }, limit() { return this; }, or() { return this; },
                 insert(value) { operation = 'insert'; payload = value; return this; },
@@ -73,6 +76,7 @@ function fixture({ actor = 'admin', adminRole = 'org_super_admin', orgRole, prop
             const exports = {};
             const imports = {
                 'next/server': next,
+                '@/backend/lib/users/managementRoles': managementRoles,
                 '@/frontend/utils/supabase/server': { createClient: async () => db },
                 '@/frontend/utils/supabase/admin': { createAdminClient: () => db },
                 '@/backend/services/NotificationService': {},

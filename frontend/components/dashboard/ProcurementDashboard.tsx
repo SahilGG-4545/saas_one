@@ -1,5 +1,7 @@
 'use client';
 
+import { useDashboardContent } from '@/frontend/components/layout/DashboardContentSlot';
+import PettyCashNavLink from '@/frontend/components/pettyCash/PettyCashNavLink';
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { createClient } from '@utils/supabase/client';
 import { 
@@ -66,6 +68,7 @@ interface MaterialRequest {
 type Tab = 'overview' | 'tasks' | 'urgency-tracker' | 'task-sheet' | 'requests' | 'vendor_tickets' | 'monthly-requisitions' | 'monthly-feedback' | 'site-pricing' | 'history' | 'manage-items' | 'po-generator' | 'settings' | 'profile' | 'grievance';
 
 export default function ProcurementDashboard() {
+    const { dashboardContent, navigateDashboard } = useDashboardContent();
     const supabase = createClient();
     const searchParams = useSearchParams();
     const [showFeedbackModal, setShowFeedbackModal] = useState(false);
@@ -74,7 +77,8 @@ export default function ProcurementDashboard() {
     const [activities, setActivities] = useState<any[]>([]);
     const [procurementUsers, setProcurementUsers] = useState<any[]>([]);
     const [allProperties, setAllProperties] = useState<any[]>([]);
-    const [activeTab, setActiveTab] = useState<Tab>('overview');
+    const [dashboardTab, setActiveTab] = useState<Tab>('overview');
+    const activeTab = dashboardContent !== undefined ? 'petty-cash' as Tab : dashboardTab;
     const [userOrgId, setUserOrgId] = useState<string>('');
 
     useEffect(() => {
@@ -641,7 +645,7 @@ export default function ProcurementDashboard() {
                                 ].map((item: any) => (
                                     <button
                                         key={item.id}
-                                        onClick={() => { setActiveTab(item.id as Tab); setSidebarOpen(false); }}
+                                        onClick={() => { if (dashboardContent !== undefined) navigateDashboard(item.id); else setActiveTab(item.id as Tab); setSidebarOpen(false); }}
                                         className={`w-full flex items-center justify-between px-4 py-3 rounded-xl font-bold text-sm transition-all ${activeTab === item.id 
                                             ? 'bg-primary text-white shadow-md' 
                                             : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'}`}
@@ -682,7 +686,7 @@ export default function ProcurementDashboard() {
                                 ].map((item) => (
                                     <button
                                         key={item.id}
-                                        onClick={() => { setActiveTab(item.id as Tab); setSidebarOpen(false); }}
+                                        onClick={() => { if (dashboardContent !== undefined) navigateDashboard(item.id); else setActiveTab(item.id as Tab); setSidebarOpen(false); }}
                                         className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition-all ${activeTab === item.id 
                                             ? 'bg-primary text-white shadow-md' 
                                             : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'}`}
@@ -693,7 +697,12 @@ export default function ProcurementDashboard() {
                                 ))}
                             </div>
                         </div>
-                    </nav>
+
+                    <div className="mb-6" data-navigation-section="management-hub">
+                        <p className="px-4 mb-3 text-[10px] font-bold uppercase tracking-widest text-text-secondary">Management Hub</p>
+                        <PettyCashNavLink onNavigate={() => setSidebarOpen(false)} />
+                    </div>
+</nav>
 
                     <div className="px-6 py-6 border-t border-slate-100 mt-auto flex-shrink-0 bg-slate-50/50">
                         <div className="flex items-center gap-4 mb-6">
@@ -723,6 +732,7 @@ export default function ProcurementDashboard() {
             </aside>
 
             <main className="flex-1 lg:ml-72 min-h-screen flex flex-col bg-slate-50 overflow-y-auto">
+
                 <header className="h-20 bg-white/80 backdrop-blur-md border-b border-slate-200 sticky top-0 z-40 px-8 flex items-center justify-between">
                     <div className="flex items-center gap-4">
                         <button onClick={() => setSidebarOpen(true)} className="lg:hidden p-2 text-slate-500 hover:bg-slate-100 rounded-xl">
@@ -795,6 +805,8 @@ export default function ProcurementDashboard() {
                         </div>
                     </div>
                 </header>
+                {dashboardContent ?? (<>
+
 
                 <div className="p-8">
                     <AnimatePresence mode="wait">
@@ -904,7 +916,9 @@ export default function ProcurementDashboard() {
                         )}
                     </AnimatePresence>
                 </div>
-            </main>
+
+                </>)}
+</main>
 
             <SignOutModal isOpen={showSignOutModal} onClose={() => setShowSignOutModal(false)} onConfirm={async () => {
                 await supabase.auth.signOut();
