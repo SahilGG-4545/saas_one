@@ -15,7 +15,7 @@
     "test:users:browser": "node --test --test-isolation=none tests/users/directory-loading.test.mjs",
     "test:dashboard": "node --test --test-isolation=none tests/dashboard/org-tab-sync.test.mjs tests/dashboard/scope.test.mjs",
     "test:dashboard:browser": "npm exec --yes --package=esbuild -- node --test --test-isolation=none tests/dashboard/org-tab-browser.test.mjs",
-    "test:petty-cash:notifications": "node --test --test-isolation=none tests/petty-cash/notification-sync.test.mjs tests/petty-cash/notification-delivery.test.mjs tests/petty-cash/notification-rendering.test.mjs",
+    "test:petty-cash:notifications": "node --test --test-isolation=none tests/petty-cash/notification-sync.test.mjs tests/petty-cash/notification-delivery.test.mjs tests/petty-cash/notification-rendering.test.mjs tests/petty-cash/push-adapter.test.mjs tests/petty-cash/push-links.test.mjs",
     "test:notifications:browser": "npm exec --yes --package=esbuild -- node --test tests/notifications/settings-browser.test.mjs",
     "test:accounts": "node --test --test-isolation=none tests/accounts-onboarding.test.mjs tests/accounts-onboarding-ui.test.mjs",
     "test:whatsapp-interpreter": "node --test --test-isolation=none tests/whatsapp-interpreter-*.test.mjs",
