@@ -1,5 +1,6 @@
 // Template names are also the default active AiSensy API campaign names.
 export const ASSISTANT_TEMPLATES = {
+    booking_update: { name: 'fms_whatsapp_booking_update_v1', count: 3 },
     menu: { name: 'fms_whatsapp_menu_v1', count: 0 },
     select: { name: 'fms_whatsapp_select_v1', count: 3 },
     ticket_title: { name: 'fms_whatsapp_ticket_title_v1', count: 1 },

@@ -39,7 +39,7 @@ export async function POST(request: NextRequest) {
         // Resolve arrays: one profile may have memberships in several workspaces.
         const { data: targetPropMembs, error: targetPropError } = await adminClient
             .from('property_memberships')
-            .select('property_id, role, is_active, approval_status, property:properties!inner(id, organization_id)')
+            .select('property_id, organization_id, role, is_active, approval_status, property:properties!inner(id, organization_id)')
             .eq('user_id', userId);
         const { data: targetOrgMembs, error: targetOrgError } = await adminClient
             .from('organization_memberships').select('organization_id, role, is_active, approval_status').eq('user_id', userId);
@@ -47,7 +47,7 @@ export async function POST(request: NextRequest) {
         if (targetOrgError) throw targetOrgError;
 
         const propertyMemberships = (targetPropMembs || []).map(m => ({
-            ...m, organization_id: (Array.isArray(m.property) ? m.property[0] : m.property)?.organization_id
+            ...m, organization_id: (Array.isArray(m.property) ? m.property[0] : m.property)?.organization_id || m.organization_id
         }));
         const targetPropertyMembership = propertyId
             ? propertyMemberships.find(m => m.property_id === propertyId) : null;
@@ -58,10 +58,12 @@ export async function POST(request: NextRequest) {
             ...propertyMemberships.map(m => m.organization_id),
             ...(targetOrgMembs || []).map(m => m.organization_id)
         ].filter(Boolean)));
-        if (!organizationId && !propertyId && targetOrganizationIds.length > 1) {
+        const accountsOrgMemberships = (targetOrgMembs || []).filter(m => m.role === 'accounts');
+        const implicitAccountsOrg = !organizationId && !propertyId && accountsOrgMemberships.length === 1 ? accountsOrgMemberships[0].organization_id : null;
+        if (!organizationId && !propertyId && !implicitAccountsOrg && targetOrganizationIds.length > 1) {
             return NextResponse.json({ error: 'organizationId is required for a user with multiple organizations' }, { status: 400 });
         }
-        const targetOrgId = organizationId || targetPropertyMembership?.organization_id || targetOrganizationIds[0];
+        const targetOrgId = organizationId || implicitAccountsOrg || targetPropertyMembership?.organization_id || targetOrganizationIds[0];
         if (!targetOrgId || !targetOrganizationIds.includes(targetOrgId) ||
             (targetPropertyMembership && targetPropertyMembership.organization_id !== targetOrgId)) {
             return NextResponse.json({ error: 'Target membership does not match the supplied organization' }, { status: 400 });
@@ -70,6 +72,11 @@ export async function POST(request: NextRequest) {
         const scopedPropertyMemberships = propertyMemberships.filter(m =>
             m.organization_id === targetOrgId && (!targetPropId || m.property_id === targetPropId));
         const targetOrgMemb = (targetOrgMembs || []).find(m => m.organization_id === targetOrgId);
+
+        const hasLegacyAccountsRole = scopedPropertyMemberships.some(m => m.role === 'accounts') && (!targetOrgMemb || targetOrgMemb.role === 'staff');
+        const targetRole = role || (hasLegacyAccountsRole ? 'accounts' : targetPropertyMembership?.role) || targetOrgMemb?.role || scopedPropertyMemberships[0]?.role;
+        const isAccountsApproval = targetRole === 'accounts';
+        const isAccountsApplication = targetOrgMemb?.role === 'accounts' || scopedPropertyMemberships.some(m => m.role === 'accounts');
 
         if (!isMasterAdmin) {
             const { data: callerOrgMemb, error: callerOrgError } = await adminClient
@@ -81,7 +88,7 @@ export async function POST(request: NextRequest) {
             const propertyRole = role || targetPropertyMembership?.role || '';
             const grantsOrganizationAuthority = isOrganizationWideUserRole(propertyRole) ||
                 isOrganizationUserApprover(propertyRole) || ['master_admin', 'org_admin', 'bd_admin'].includes(propertyRole);
-            if (targetPropId && !grantsOrganizationAuthority) {
+            if (targetPropId && !grantsOrganizationAuthority && !isAccountsApproval && !isAccountsApplication) {
                 const { data: propMemb, error: callerPropError } = await adminClient
                     .from('property_memberships').select('role')
                     .eq('user_id', actorId).eq('property_id', targetPropId)
@@ -124,6 +131,17 @@ export async function POST(request: NextRequest) {
         const now = new Date().toISOString();
 
         if (action === 'approve') {
+            if (isAccountsApproval) {
+                // Save organization finance access before marking the applicant approved.
+                const { error: orgError } = await adminClient.from('organization_memberships').upsert({
+                    organization_id: targetOrgId, user_id: userId, role: 'accounts',
+                    is_active: true, approval_status: 'approved', updated_by: actorId, updated_at: now
+                }, { onConflict: 'organization_id,user_id' });
+                if (orgError) throw orgError;
+                const { error: legacyError } = await adminClient.from('property_memberships').delete()
+                    .eq('user_id', userId).eq('organization_id', targetOrgId).eq('role', 'accounts');
+                if (legacyError) throw legacyError;
+            }
             // Update users table
             const { error: userUpdateErr } = await adminClient
                 .from('users')
@@ -141,15 +159,14 @@ export async function POST(request: NextRequest) {
                 throw userUpdateErr;
             }
 
-            await updateMemberships(true);
+            if (!isAccountsApproval) await updateMemberships(true);
 
-            const targetRole = role || targetPropertyMembership?.role || targetOrgMemb?.role || scopedPropertyMemberships[0]?.role;
             try {
                 await adminClient.auth.admin.updateUserById(userId, {
                     user_metadata: {
                         organization_id: targetOrgId,
                         role: targetRole,
-                        ...(targetPropId ? { property_id: targetPropId, property_role: targetRole } : {})
+                        ...(isAccountsApproval ? { property_id: null, property_role: null } : targetPropId ? { property_id: targetPropId, property_role: targetRole } : {})
                     }
                 });
             } catch (metaErr) {

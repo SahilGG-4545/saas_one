@@ -1,4 +1,5 @@
 import { parseBookingDate } from './protocol.mjs';
+import { advanceBooking, isBookingRequest } from './booking-request.mjs';
 
 const PAGE_SIZE = 5;
 const normalize = text => text.toLowerCase().replace(/[_\p{P}\p{S}]+/gu, ' ').replace(/\s+/g, ' ').trim();
@@ -56,6 +57,10 @@ export async function advance(input, current, deps) {
     const text = normalize(input.text);
     if (!input.mediaUrl && (text === 'cancel' || text === 'cancel booking')) return notice('Your current request has been cancelled. Reply MENU to start again.');
     if (!input.mediaUrl && (text === 'menu' || isGreeting(input.text))) return result({ step: 'menu' }, 'menu');
+    if (deps.bookRange && !input.mediaUrl && (current?.step === 'booking_request' || isBookingRequest(input.text) ||
+        (current?.step === 'menu' && text === '2'))) {
+        return advanceBooking(input, current, deps);
+    }
     const user = await deps.findUser(input.phone);
     if (!user) return notice('Your WhatsApp number is not registered or approved. Please contact your property manager.');
     const properties = await deps.properties(user.id);
@@ -143,12 +148,12 @@ export async function advance(input, current, deps) {
         if (!slot) return availableSlots(session, deps);
         const credit = await deps.creditSummary(user.id, session.property.id, slot);
         return result({ ...session, step: 'booking_confirm', slot }, 'booking_review',
-            [session.property.name, session.room.name, session.date, slotLabel(slot), credit]);
+            [session.property.name, session.room.name, session.date, slotLabel(slot), credit || 'Not applicable']);
     }
     if (session.step === 'booking_confirm') {
         if (text !== 'confirm booking' && text !== 'confirm' && text !== '1') {
             return result(session, 'booking_review', [session.property.name, session.room.name, session.date, slotLabel(session.slot),
-                await deps.creditSummary(user.id, session.property.id, session.slot)]);
+                await deps.creditSummary(user.id, session.property.id, session.slot) || 'Not applicable']);
         }
         // Database transaction revalidates the room, availability, memberships and credits.
         try {

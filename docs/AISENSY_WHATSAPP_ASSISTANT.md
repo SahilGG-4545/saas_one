@@ -297,3 +297,23 @@ The database tests apply the real migration in an isolated PostgreSQL-compatible
 PGlite database and exercise property scope, booking/credit rollback, overlapping
 bookings, request replay, sender leases, and service-only RPC grants. They do not
 connect to the production database or send actual WhatsApp messages.
+
+
+## Permanent delivery failures
+
+Apply `supabase/migrations/20261002000001_whatsapp_assistant_permanent_failures.sql`
+before deploying the permanent-failure worker change. This adds one service-only,
+lease-protected RPC; it does not alter tickets, bookings, or credits. It can be
+reapplied. We only execute migration tests in an isolated local database.
+
+Missing/inactive campaigns, missing API keys and non-transient HTTP client errors
+are recorded as failed rather than retried. Later inbound messages can continue,
+so sending Hi or MENU can return the menu even after an unavailable action
+campaign. Timeouts, rate limits, conflicts and server errors keep the existing
+ordered retry behavior. A failed confirmation does not undo a created ticket or
+booking, and the durable record remains available for investigation.
+
+The remaining approved templates and active campaigns are required to complete
+ticket and booking conversations. API acceptance time is not WhatsApp delivery
+time: compare webhook receipt, `[AiSensy] API response`, and worker duration logs
+before attributing a delay to backend processing.

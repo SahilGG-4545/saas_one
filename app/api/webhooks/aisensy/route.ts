@@ -4,6 +4,11 @@ import { enqueueAssistantMessage, drainWhatsAppPhone } from '@/backend/lib/whats
 import { processIncomingMessage } from '@/backend/lib/whatsapp/processMessage';
 import { isGreetingMessage } from '@/backend/lib/whatsapp/greeting';
 import { AiSensyService } from '@/backend/services/AiSensyService';
+import { handleFreeformTest } from '@/whatsapp-test/freeformTest';
+import { TaskMessageRouter } from '@/task-manager/TaskMessageRouter';
+import { TaskIdempotencyService } from '@/task-manager/TaskIdempotencyService';
+import { isInterpreterPilot, lookupQuotedContext, getConversationRoutingState } from '@/backend/lib/whatsapp/interpreter/context';
+import { isExplicitTaskCommand, isDirectBookingRequest } from '@/backend/lib/whatsapp/interpreter/coordinator.mjs';
 
 export const runtime = 'nodejs';
 export const maxDuration = 120;
@@ -21,7 +26,9 @@ function payloadShape(value: unknown, depth = 0): unknown {
 
 export async function GET() {
     return NextResponse.json({ status: 'ok', service: 'AiSensy inbound webhook',
-        assistantEnabled: process.env.AISENSY_ASSISTANT_ENABLED === 'true' });
+        assistantEnabled: process.env.AISENSY_ASSISTANT_ENABLED === 'true',
+        interpreterEnabled: process.env.WHATSAPP_LLM_INTERPRETER_ENABLED === 'true',
+        routingVersion: 'ticket-photo-submit-v1' });
 }
 
 export async function POST(req: NextRequest) {
@@ -39,10 +46,108 @@ export async function POST(req: NextRequest) {
         shape: payloadShape(body),
     }));
     if (!input) return NextResponse.json({ ok: true, ignored: true });
+
+    let interpreter = false;
+    try { interpreter = await isInterpreterPilot(input); }
+    catch {
+        // An enabled pilot cannot silently fall through into the old default-ticket handler.
+        return NextResponse.json({ error: 'Assistant configuration unavailable; retry delivery' }, { status: 503 });
+    }
+    if (interpreter && input.mediaUrl) {
+        try { if (new URL(input.mediaUrl).protocol !== 'https:') throw new Error(); }
+        catch { return NextResponse.json({ error: 'Media must use an HTTPS URL' }, { status: 400 }); }
+    }
+    let explicitTask = interpreter && !input.mediaUrl && (isExplicitTaskCommand(input.text) || (!!input.quotedIds?.length && /^cancel$/i.test(input.text.trim())));
+    if (explicitTask && input.quotedIds?.length) {
+        // Task numbering is owned by today's Task Manager list, not an old quoted digest.
+        // Quoted mutations require resource-aware task routing in a future adapter.
+        try { explicitTask = /^(tasks?|task manager|my tasks|view tasks|status|today'?s? tasks|cancel|cancel tasks)$/i.test(input.text.trim()) &&
+            (await lookupQuotedContext(input.phone, input.quotedIds))?.workflow === 'task'; }
+        catch { return NextResponse.json({ error: 'Reply context unavailable; retry delivery' }, { status: 503 }); }
+    }
+    if (interpreter && !explicitTask && !input.mediaUrl && input.quotedIds?.length && /^[12]$/.test(input.text.trim())) {
+        try {
+            const quote = await lookupQuotedContext(input.phone,input.quotedIds);
+            if (quote?.workflow === 'task') {
+                const contexts = await getConversationRoutingState(input.phone);
+                // These only choose a system; they cannot complete or assign a task.
+                explicitTask = contexts.taskChoicePending && !contexts.facilityActive;
+            }
+        } catch { return NextResponse.json({error:'Reply context unavailable; retry delivery'},{status:503}); }
+    }
+    if (interpreter && !explicitTask && !input.mediaUrl && !input.quotedIds?.length && !isDirectBookingRequest(input.text) &&
+        !/^(hi|hello|hey|menu|help|options|create ticket|book meeting room|confirm booking|submit ticket|add photo|no photo|remove photo|without photo)$/i.test(input.text.trim())) {
+        try {
+            const contexts = await getConversationRoutingState(input.phone);
+            if (/^(facility|fms|helpdesk|facility\s*bot)$/i.test(input.text.trim()) || ((contexts.taskActive || contexts.nlGateway) && !contexts.facilityActive)) {
+                const classification = await TaskMessageRouter.classifyMessage(input.phone,input.text);
+                explicitTask = classification.system !== 'FACILITY' || classification.isExplicitSwitch;
+            }
+        } catch { return NextResponse.json({error:'Conversation routing unavailable; retry delivery'},{status:503}); }
+    }
+    if (interpreter && !explicitTask) {
+        if (!input.messageId) return NextResponse.json({ error: 'A stable inbound messageId is required' }, { status: 400 });
+        try {
+            const eventId = await enqueueAssistantMessage({ ...input, interpreter: true, inboundAt: input.inboundAt || new Date().toISOString() });
+            after(async () => {
+                try { await drainWhatsAppPhone(input.phone); }
+                catch { console.error('[WhatsAppInterpreter] Processing deferred; durable event will retry'); }
+            });
+            return NextResponse.json({ success: true, queued: !!eventId, duplicate: !eventId });
+        } catch { return NextResponse.json({ error: 'Message could not be accepted; retry delivery' }, { status: 503 }); }
+    }
+
+    // Idempotency: Ignore duplicate webhook deliveries (Phase 19)
+    if (input.messageId && await TaskIdempotencyService.isDuplicateWebhook(input.messageId)) {
+        console.info('[AiSensyWebhook] Duplicate delivery ignored', { messageId: input.messageId });
+        return NextResponse.json({ success: true, duplicate: true });
+    }
+    if (input.messageId && !interpreter) {
+        TaskIdempotencyService.recordProcessedWebhook(input.messageId);
+    }
+
+    if (await handleFreeformTest(input)) return NextResponse.json({ success: true, test: true });
     if (input.mediaUrl) {
         try { if (new URL(input.mediaUrl).protocol !== 'https:') throw new Error('Invalid protocol'); }
         catch { return NextResponse.json({ error: 'Media must use an HTTPS URL' }, { status: 400 }); }
     }
+
+    // Task Manager WhatsApp Routing (Phase 6)
+    if (input.text) {
+        try {
+            const routeResult = await TaskMessageRouter.routeInboundMessage({
+                phone: input.phone,
+                text: interpreter && /^cancel\s+tasks$/i.test(input.text.trim()) ? 'cancel' : input.text,
+                messageId: input.messageId || undefined
+            });
+
+            if (routeResult.handledByTaskManager) {
+                if (interpreter && input.messageId) TaskIdempotencyService.recordProcessedWebhook(input.messageId);
+                console.info('[AiSensyWebhook] Inbound routed to TASK_MANAGER', {
+                    phoneMasked: input.phone.replace(/(\d{4})\d+(\d{2})/, '$1****$2'),
+                    command: routeResult.taskResult?.command
+                });
+                return NextResponse.json({ success: true, routedTo: 'TASK_MANAGER' });
+            }
+        } catch (routeError) {
+            if (interpreter) {
+                console.error('[WhatsAppInterpreter] Task routing failed; facility execution blocked');
+                return NextResponse.json({error:'Task Manager could not process this message'},{status:503});
+            }
+            console.error('[AiSensyWebhook] Task routing error, falling back to facility:', routeError);
+        }
+    }
+
+    if (interpreter) {
+        // A task command that was declined must never become a default facility ticket.
+        if (!input.messageId) return NextResponse.json({ error: 'A stable inbound messageId is required' }, { status: 400 });
+        try {
+            const eventId = await enqueueAssistantMessage({ ...input, interpreter:true, inboundAt:input.inboundAt || new Date().toISOString() });
+            after(async () => { await drainWhatsAppPhone(input.phone).catch(() => console.error('[WhatsAppInterpreter] Deferred processing failed')); });
+            return NextResponse.json({success:true,queued:!!eventId,duplicate:!eventId});
+        } catch { return NextResponse.json({error:'Message could not be accepted; retry delivery'},{status:503}); }
+    }
+
     if (!enabled) {
         after(async () => {
             try {

@@ -10,6 +10,7 @@ import {
     IndianRupee
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import ModalPortal from '../ui/ModalPortal';
 import SiteRequisitionSheet from './SiteRequisitionSheet';
 import ApproverRequisitionModal from './ApproverRequisitionModal';
 import PropertyBudgetManagerModal from './PropertyBudgetManagerModal';
@@ -454,6 +455,7 @@ export default function MonthlyRequisitionsTab({ user, organizationId, propertyI
         const effectiveOrgId = organizationId || user?.user_metadata?.organization_id || (properties[0] as any)?.organization_id || '';
         return (
             <SiteRequisitionSheet
+                key={`${user?.id}:${effectiveOrgId}`}
                 user={user}
                 organizationId={effectiveOrgId}
                 properties={properties}
@@ -1009,6 +1011,7 @@ export default function MonthlyRequisitionsTab({ user, organizationId, propertyI
             </div>
 
             {/* Modal: Upload Vendor Quotation & Assign Approver */}
+            <ModalPortal>
             <AnimatePresence>
                 {vendorQuoteModalReq && (
                     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
@@ -1101,8 +1104,10 @@ export default function MonthlyRequisitionsTab({ user, organizationId, propertyI
                     </div>
                 )}
             </AnimatePresence>
+            </ModalPortal>
 
             {/* Modal: Issue Purchase Order (PO) */}
+            <ModalPortal>
             <AnimatePresence>
                 {issuePoModalReq && (
                     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
@@ -1249,6 +1254,7 @@ export default function MonthlyRequisitionsTab({ user, organizationId, propertyI
                     </div>
                 )}
             </AnimatePresence>
+            </ModalPortal>
 
             {/* In-App Approver Review Modal */}
             <ApproverRequisitionModal

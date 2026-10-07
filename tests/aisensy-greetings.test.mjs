@@ -45,3 +45,25 @@ test('sends greeting campaign through configured AiSensy API without template va
         if (oldCampaign === undefined) delete process.env.AISENSY_GREETING_CAMPAIGN_NAME; else process.env.AISENSY_GREETING_CAMPAIGN_NAME = oldCampaign;
     }
 });
+
+
+test('AiSensy permanent campaign errors are distinguished from temporary delivery failures', async () => {
+    const oldFetch = globalThis.fetch;
+    const oldKey = process.env.AISENSY_API_KEY;
+    process.env.AISENSY_API_KEY = 'test-key';
+    try {
+        for (const status of [400, 401, 403, 404, 422]) {
+            globalThis.fetch = async () => new Response('Campaign not found', { status });
+            assert.equal((await AiSensyService.sendGreeting('9876543210')).retryable, false, String(status));
+        }
+        for (const status of [408, 409, 429, 500, 503]) {
+            globalThis.fetch = async () => new Response('Temporarily unavailable', { status });
+            assert.notEqual((await AiSensyService.sendGreeting('9876543210')).retryable, false, String(status));
+        }
+        globalThis.fetch = async () => new Response('{"success":false,"message":"Campaign inactive"}');
+        assert.equal((await AiSensyService.sendGreeting('9876543210')).retryable, false);
+    } finally {
+        globalThis.fetch = oldFetch;
+        if (oldKey === undefined) delete process.env.AISENSY_API_KEY; else process.env.AISENSY_API_KEY = oldKey;
+    }
+});

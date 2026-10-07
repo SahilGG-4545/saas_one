@@ -489,6 +489,21 @@ export default function DashboardSidebar({
                                 </Link>
                             )}
 
+                            {isOrgSuperAdmin && (
+                                <Link
+                                    href={`/${orgId}/dashboard?tab=tasks`}
+                                    onClick={handleLinkClick}
+                                    className={`flex items-center gap-3 px-3.5 py-2 rounded-xl transition-all font-semibold text-xs sm:text-sm group ${
+                                        pathname?.includes('tab=tasks')
+                                            ? 'bg-[#587e85] text-white shadow-xs font-bold'
+                                            : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/60 hover:text-slate-900'
+                                    }`}
+                                >
+                                    <ClipboardList className="w-4 h-4 shrink-0 transition-transform group-hover:scale-105" />
+                                    <span className="truncate">Task Manager</span>
+                                </Link>
+                            )}
+
                             {(userRole !== 'hr' && userRole !== 'hr_head' && (isOrgSuperAdmin || userRole === 'property_admin')) && (
                                 <Link
                                     href={`/${orgId}/dashboard?tab=ai_tickets`}

@@ -475,7 +475,7 @@ const UserDirectory = ({ orgId, orgName, propertyId, properties = [], onUserUpda
             }
 
             // For cross-level changes (property ↔ org), refetch all users
-            const ORG_LEVEL_ROLES = ['org_super_admin', 'ops_super_admin', 'procurement', 'hr', 'hr_head'];
+            const ORG_LEVEL_ROLES = ['org_super_admin', 'ops_super_admin', 'procurement', 'accounts', 'hr', 'hr_head'];
             const wasPropertyLevel = !!user?.propertyRole && !user?.orgRole;
             const wasOrgLevel = !!user?.orgRole;
             const isNowOrgLevel = ORG_LEVEL_ROLES.includes(newRole);
@@ -544,7 +544,6 @@ const UserDirectory = ({ orgId, orgName, propertyId, properties = [], onUserUpda
             'soft_service_supervisor',
             'vendor',
             'procurement',
-            'finance',
         ]
         : [
             'org_super_admin',
@@ -560,7 +559,7 @@ const UserDirectory = ({ orgId, orgName, propertyId, properties = [], onUserUpda
             'soft_service_manager',
             'soft_service_supervisor',
             'procurement',
-            'finance',
+            'accounts',
             'sales',
             'bd_rep',
             'vendor',
