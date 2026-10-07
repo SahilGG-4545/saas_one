@@ -217,13 +217,21 @@ export class TaskCommandHandler {
             const allEmployees = await TaskDatabaseService.getAllEmployees();
             const deptEmployees = await PermissionService.visibleAndAssignable(employee, allEmployees);
 
-            // Match by first name, full name, or ID
-            const targetEmployee = deptEmployees.find(e => {
-                const fullName = e.name.toLowerCase();
-                const firstName = e.name.split(' ')[0].toLowerCase();
-                const query = targetNameQuery.toLowerCase();
-                return firstName === query || fullName.includes(query) || e.id === targetNameQuery;
-            });
+            // Match by self ('me' / 'myself'), or search available assignees
+            const isSelf = targetNameQuery.toLowerCase() === 'me' || targetNameQuery.toLowerCase() === 'myself';
+            const targetEmployee = isSelf ? employee : (
+                deptEmployees.find(e => {
+                    const firstName = e.name.split(' ')[0].toLowerCase();
+                    const query = targetNameQuery.toLowerCase();
+                    // Prefer self if the name query matches the sender's own first name
+                    return query === firstName && e.id === employee.id;
+                }) || deptEmployees.find(e => {
+                    const fullName = e.name.toLowerCase();
+                    const firstName = e.name.split(' ')[0].toLowerCase();
+                    const query = targetNameQuery.toLowerCase();
+                    return firstName === query || fullName.includes(query) || e.id === targetNameQuery;
+                })
+            );
 
             if (!targetEmployee) {
                 const availableNames = deptEmployees.map(e => e.name.split(' ')[0]).join(', ');

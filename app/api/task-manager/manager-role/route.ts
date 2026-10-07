@@ -248,9 +248,34 @@ export async function POST(request: NextRequest) {
             const empName = profile.first_name || fullName.split(' ')[0] || fullName;
             const deptName = profile.department || 'Tech';
 
-            // Find reporting manager name for this department
-            let managerName = 'Lohitaksha Ranganathan';
-            if (profile.department_id) {
+            // Resolve reporting manager name for this employee:
+            // 1. Direct reporting manager from profile (reporting_manager_code holds manager's full name)
+            let managerName = (profile.reporting_manager_code || '').trim();
+
+            // 2. Direct reporting manager from reporting_manager_id
+            if (!managerName && profile.reporting_manager_id) {
+                const { data: mgrUser } = await supabaseAdmin
+                    .from('users')
+                    .select('full_name')
+                    .eq('id', profile.reporting_manager_id)
+                    .maybeSingle();
+
+                if (mgrUser?.full_name) {
+                    managerName = mgrUser.full_name.trim();
+                } else {
+                    const { data: mgrProfile } = await supabaseAdmin
+                        .from('employee_profiles')
+                        .select('first_name, last_name')
+                        .or(`id.eq.${profile.reporting_manager_id},user_id.eq.${profile.reporting_manager_id}`)
+                        .maybeSingle();
+                    if (mgrProfile) {
+                        managerName = [mgrProfile.first_name, mgrProfile.last_name].filter(Boolean).join(' ').trim();
+                    }
+                }
+            }
+
+            // 3. Department-assigned reporting manager
+            if (!managerName && profile.department_id) {
                 const { data: managers } = await supabaseAdmin
                     .from('employee_profiles')
                     .select('first_name, last_name, user:users!employee_profiles_user_id_fkey(full_name)')
@@ -260,8 +285,26 @@ export async function POST(request: NextRequest) {
 
                 if (managers && managers.length > 0) {
                     const m = managers[0];
-                    managerName = [m.first_name, m.last_name].filter(Boolean).join(' ').trim() || (m.user as any)?.full_name || managerName;
+                    managerName = [m.first_name, m.last_name].filter(Boolean).join(' ').trim() || (m.user as any)?.full_name || '';
                 }
+            }
+
+            // 4. Fallback to active superuser / management
+            if (!managerName) {
+                const { data: superusers } = await supabaseAdmin
+                    .from('employee_profiles')
+                    .select('first_name, last_name, user:users!employee_profiles_user_id_fkey(full_name)')
+                    .eq('task_role', 'superuser')
+                    .limit(1);
+
+                if (superusers && superusers.length > 0) {
+                    const su = superusers[0];
+                    managerName = [su.first_name, su.last_name].filter(Boolean).join(' ').trim() || (su.user as any)?.full_name || '';
+                }
+            }
+
+            if (!managerName) {
+                managerName = 'Management';
             }
 
             // Phase 2: Check Kill Switch Gatekeeper for employee_kickoff
