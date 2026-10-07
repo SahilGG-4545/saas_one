@@ -1006,16 +1006,18 @@ export default function HREmployeeDirectory({ orgId, organizationId, onRefresh }
                                         const empToOnboard = selectedEmpForInfo;
                                         setSelectedEmpForInfo(null);
                                         setNewEmpData({
+                                            user_id: empToOnboard.user_id || '',
                                             employee_code: empToOnboard.employee_code || '',
                                             first_name: empToOnboard.first_name || '',
                                             last_name: empToOnboard.last_name || '',
                                             email: empToOnboard.email || '',
                                             contact_number: empToOnboard.contact_number || empToOnboard.phone || '',
                                             department: empToOnboard.department || 'Operations',
+                                            department_id: empToOnboard.department_id || '',
                                             designation: empToOnboard.designation || 'Staff',
                                             location: empToOnboard.location || 'Main Site',
                                             reporting_manager_id: empToOnboard.reporting_manager_id || '',
-                                            create_app_account: true,
+                                            create_app_account: !empToOnboard.is_app_linked,
                                             role: 'staff'
                                         });
                                         setShowAddModal(true);
