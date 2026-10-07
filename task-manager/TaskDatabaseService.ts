@@ -246,8 +246,10 @@ export class TaskDatabaseService {
         taskTemplateId?: string;
         assignedDate?: string; // YYYY-MM-DD
         assignedBy?: string;
+        status?: TaskStatus; // optional; omitted = 'pending' (unchanged for every existing caller)
     }): Promise<TaskAssignment> {
         const assignedDate = params.assignedDate || new Date().toISOString().slice(0, 10);
+        const status: TaskStatus = params.status || 'pending';
 
         // Idempotency: Check if an assignment already exists for this template, employee, and date
         if (params.taskTemplateId) {
@@ -272,8 +274,9 @@ export class TaskDatabaseService {
                 description: params.description?.trim() || null,
                 task_template_id: params.taskTemplateId || null,
                 assigned_date: assignedDate,
-                status: 'pending',
-                assigned_by: params.assignedBy || null
+                status,
+                assigned_by: params.assignedBy || null,
+                ...(status === 'completed' ? { completed_at: new Date().toISOString() } : {})
             })
             .select('*')
             .single();
@@ -729,7 +732,6 @@ export class TaskDatabaseService {
             killSwitches,
             whatsappPretendMode: raw.whatsappPretendMode !== false,
             nlGatewayEnabled: raw.nlGatewayEnabled === true,
-            taskImportEnabled: raw.taskImportEnabled === true,
         };
     }
 
@@ -772,15 +774,6 @@ export class TaskDatabaseService {
         await this.logAudit({
             event_type: 'nl_gateway_updated',
             details: { nlGatewayEnabled: enabled, actor: actor || null },
-        });
-        return updated;
-    }
-
-    static async setTaskImport(enabled: boolean, actor?: string): Promise<TestingConfig> {
-        const updated = await this.saveTestingConfig({ taskImportEnabled: enabled });
-        await this.logAudit({
-            event_type: 'task_import_switch_updated',
-            details: { taskImportEnabled: enabled, actor: actor || null },
         });
         return updated;
     }

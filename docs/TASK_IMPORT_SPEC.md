@@ -1,6 +1,6 @@
 ## Agent Spec — Task Import (WhatsApp task-list reader)
 
-Status: Stage 1 (parser) and Stage 2 (preview + confirm) built. Stage 3 (save) not built. Shipped OFF by default.
+Status: Stage 1 (parser), Stage 2 (preview + confirm) and Stage 3 (save) built and tested offline. Shipped OFF by default, controlled by one "Task import: ON/OFF" button per department in the Control Center (column `task_import_enabled`, migration `20261007000004`; fail-closed until the migration is run). A person can use it only if their department has it ON, they are unlocked for the Task Manager, and (while the sandbox is ON) they are a sandbox number. The save writes only after an explicit YES, only to the sender's own list, through the existing `createTaskAssignment`; duplicates (same person + date + title + site) are skipped; every created task gets a `task_assigned` audit row and the import's `task_import_confirmed` row lists the created ids.
 
 **1. Workflow or agent?**  **workflow** — fixed pipeline: parse → structure → confirm → save. No tool-picking, no loop. `[BAA p.104]`
    Justification `[BAA p.115]`: **N/A — this is a workflow, so the agent justification (a)/(b) is not needed.** The pathway is known ahead of time and the edge cases are few (3 input types, 1 output shape), which is the book's case for a workflow. `[BAA p.104]`

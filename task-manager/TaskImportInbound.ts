@@ -67,22 +67,24 @@ export function extractCandidate(body: unknown): InboundCandidate | null {
 
 // ── Who may use it ───────────────────────────────────────────────────────────
 
-export type EligibilityReason = 'ok' | 'switch_off' | 'not_employee' | 'locked' | 'outside_sandbox';
+export type EligibilityReason = 'ok' | 'department_off' | 'not_employee' | 'locked' | 'outside_sandbox';
 
 const last10 = (p: string) => String(p || '').replace(/\D/g, '').slice(-10);
 
 /**
- * Pure decision. Same people as the Task Manager itself: a registered employee whose department is ON and
- * whose kickoff is recorded. No department is named here. While the SANDBOX is ON, only the sandbox numbers pass.
+ * Pure decision. A registered employee whose department has TASK IMPORT switched ON (Control Center, one button
+ * per department) AND who is unlocked for the Task Manager itself (department ON + kickoff recorded).
+ * No department is named in code. While the SANDBOX is ON, only the sandbox numbers pass.
  */
 export function decideImportEligibility(
-    config: Pick<TestingConfig, 'enabled' | 'taskImportEnabled' | 'manager' | 'employees'>,
+    config: Pick<TestingConfig, 'enabled' | 'manager' | 'employees'>,
     phone: string,
-    employee: Pick<Employee, 'id'> | null,
-    access: Pick<AccessDecision, 'allowed'> | null
+    employee: Pick<Employee, 'id' | 'department_id'> | null,
+    access: Pick<AccessDecision, 'allowed'> | null,
+    importDepartments: ReadonlySet<string>
 ): { ok: boolean; reason: EligibilityReason } {
-    if (config.taskImportEnabled !== true) return { ok: false, reason: 'switch_off' };
     if (!employee) return { ok: false, reason: 'not_employee' };
+    if (!employee.department_id || !importDepartments.has(employee.department_id)) return { ok: false, reason: 'department_off' };
     if (!access?.allowed) return { ok: false, reason: 'locked' };
     if (config.enabled) {
         const me = last10(phone);
@@ -182,7 +184,10 @@ async function loadMedia(url: string, io: InboundIO): Promise<ParseInput | { err
 
 export interface InboundIO {
     importDeps: ImportDeps;
+    /** Sandbox settings (who may test while the sandbox is ON). */
     getConfig(): Promise<TestingConfig>;
+    /** Departments with Task Import switched ON. Empty when none, or when it cannot be read (fail closed). */
+    getImportDepartments(): Promise<ReadonlySet<string>>;
     getEmployee(phone: string): Promise<Employee | null>;
     checkAccess(employee: Employee): Promise<AccessDecision>;
     fetchMedia(url: string): Promise<MediaFetchResult>;
@@ -206,11 +211,14 @@ export async function claimTaskImport(body: unknown, io?: InboundIO): Promise<Im
         // Cheap checks first: ordinary chat never costs a database read.
         if (cand.mediaClass === 'text' && !looksLikeImportText(cand.text, deps.today())) return NOT_HANDLED;
 
-        const config = await real.getConfig();
-        if (config.taskImportEnabled !== true) return NOT_HANDLED;
+        // One small read first: while no department has Task Import ON (the default), nothing else is read.
+        const importDepartments = await real.getImportDepartments();
+        if (importDepartments.size === 0) return NOT_HANDLED;
         const employee = await real.getEmployee(cand.phone);
-        const access = employee ? await real.checkAccess(employee) : null;
-        if (!decideImportEligibility(config, cand.phone, employee, access).ok) return NOT_HANDLED;
+        if (!employee?.department_id || !importDepartments.has(employee.department_id)) return NOT_HANDLED;
+        const access = await real.checkAccess(employee);
+        const config = await real.getConfig();
+        if (!decideImportEligibility(config, cand.phone, employee, access, importDepartments).ok) return NOT_HANDLED;
 
         if (cand.messageId && real.seenBefore(cand.messageId)) return HANDLED; // a repeat delivery of something we already took
 
@@ -259,6 +267,7 @@ export async function defaultInboundIO(): Promise<InboundIO> {
     const { TaskMessagingService } = await import('./TaskMessagingService');
     const { TaskAuditService } = await import('./TaskAuditService');
     const { parseTaskImport, todayInIndia } = await import('./TaskImportParser');
+    const { saveImportedTasks, buildSaveIO } = await import('./TaskImportSave');
 
     const importDeps: ImportDeps = {
         async getContext(phone) {
@@ -282,11 +291,18 @@ export async function defaultInboundIO(): Promise<InboundIO> {
             await TaskDatabaseService.logAudit({ eventType: event, details: { phoneMasked: TaskAuditService.maskPhone(phone), ...details } });
         },
         today: () => todayInIndia(),
+        // Stage 3: runs only after the person replied YES. Saves to the sender's OWN list (resolved again from their phone).
+        async save(phone, draft) {
+            const employee = await TaskDatabaseService.getEmployeeByPhone(phone);
+            if (!employee) throw new Error('employee not found');
+            return saveImportedTasks({ employeeId: employee.id, draft }, buildSaveIO(TaskDatabaseService));
+        },
     };
 
     return {
         importDeps,
         getConfig: () => TaskDatabaseService.getTestingConfig(),
+        getImportDepartments: async () => (await TaskAccessService.getTaskImportDepartments()).departments,
         getEmployee: phone => TaskDatabaseService.getEmployeeByPhone(phone),
         checkAccess: employee => TaskAccessService.check({ userId: employee.id, departmentId: employee.department_id }),
         fetchMedia: url => fetchMediaSafely(url),

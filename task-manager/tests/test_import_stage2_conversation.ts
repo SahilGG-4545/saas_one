@@ -28,7 +28,8 @@ async function run() {
         const w: any = {
             replies: [] as string[], audits: [] as string[], ctx: null as null | { type: string; data: any },
             reads: { config: 0, employee: 0 }, downloads: [] as string[], saved: 0,
-            config: { enabled: false, taskImportEnabled: true, employees: [{ name: 'Sahil', phone: '8433649199' }] } as any,
+            importDepts: new Set(['d1']) as Set<string>,
+            config: { enabled: false, employees: [{ name: 'Sahil', phone: '8433649199' }] } as any,
             employee: { id: 'u1', department_id: 'd1' } as any, access: { allowed: true } as any,
             files: {} as Record<string, Buffer>,
             llmImage: 'NO_TASKS', llmStructure: [] as unknown,
@@ -46,6 +47,7 @@ async function run() {
         w.io = {
             importDeps: w.deps,
             getConfig: async () => { w.reads.config++; return w.config; },
+            getImportDepartments: async () => w.importDepts,
             getEmployee: async () => { w.reads.employee++; return w.employee; },
             checkAccess: async () => w.access,
             fetchMedia: async (url: string) => { w.downloads.push(url); return w.files[url] ? { ok: true, buffer: w.files[url], contentType: '' } : { ok: false, error: '404' }; },
@@ -152,20 +154,26 @@ async function run() {
 
     console.log('\n4. Who may use it');
     const E = I.decideImportEligibility;
-    const cfg = { enabled: false, taskImportEnabled: true, employees: [{ name: 's', phone: '8433649199' }] } as any;
-    check('switch OFF → no (even for a fully eligible person)', E({ ...cfg, taskImportEnabled: false }, PHONE, { id: 'u' }, { allowed: true }).reason === 'switch_off');
-    check('switch undefined (never set) → no', E({ ...cfg, taskImportEnabled: undefined }, PHONE, { id: 'u' }, { allowed: true }).ok === false);
-    check('not a registered employee → no', E(cfg, PHONE, null, null).reason === 'not_employee');
-    check('Task Manager locked for them → no', E(cfg, PHONE, { id: 'u' }, { allowed: false }).reason === 'locked');
-    check('sandbox OFF + unlocked employee (any department) → yes', E(cfg, '919999999999', { id: 'u' }, { allowed: true }).ok === true);
-    check('sandbox ON + a stranger → no', E({ ...cfg, enabled: true }, '919999999999', { id: 'u' }, { allowed: true }).reason === 'outside_sandbox');
-    check('sandbox ON + the sandbox number (12-digit vs 10-digit) → yes', E({ ...cfg, enabled: true }, PHONE, { id: 'u' }, { allowed: true }).ok === true);
-    check('sandbox ON + the sandbox manager → yes', E({ ...cfg, enabled: true, employees: [], manager: { name: 'm', phone: '+91 84336 49199' } }, PHONE, { id: 'u' }, { allowed: true }).ok === true);
+    const cfg = { enabled: false, employees: [{ name: 's', phone: '8433649199' }] } as any;
+    const ON = new Set(['d1']);
+    const emp = { id: 'u', department_id: 'd1' };
+    check('no department has Task import ON → no, even for a fully eligible person', E(cfg, PHONE, emp, { allowed: true }, new Set()).reason === 'department_off');
+    check('a DIFFERENT department has it ON → no', E(cfg, PHONE, emp, { allowed: true }, new Set(['d2'])).reason === 'department_off');
+    check('person with no department on their profile → no', E(cfg, PHONE, { id: 'u', department_id: null }, { allowed: true }, ON).ok === false);
+    check('not a registered employee → no', E(cfg, PHONE, null, null, ON).reason === 'not_employee');
+    check('department ON but Task Manager locked for them → no', E(cfg, PHONE, emp, { allowed: false }, ON).reason === 'locked');
+    check('department ON + sandbox OFF + unlocked → yes (any phone)', E(cfg, '919999999999', emp, { allowed: true }, ON).ok === true);
+    check('sandbox ON + a stranger → no', E({ ...cfg, enabled: true }, '919999999999', emp, { allowed: true }, ON).reason === 'outside_sandbox');
+    check('sandbox ON + the sandbox number (12-digit vs 10-digit) → yes', E({ ...cfg, enabled: true }, PHONE, emp, { allowed: true }, ON).ok === true);
+    check('sandbox ON + the sandbox manager → yes', E({ ...cfg, enabled: true, employees: [], manager: { name: 'm', phone: '+91 84336 49199' } }, PHONE, emp, { allowed: true }, ON).ok === true);
 
     console.log('\n5. The webhook: what is claimed, and what is left alone');
-    w = world(); w.config.taskImportEnabled = false;
+    w = world(); w.importDepts = new Set();
     let cl = await I.claimTaskImport(doc('https://cdn.example.com/t.xlsx', 't.xlsx'), w.io);
-    check('switch OFF → Excel file not claimed, nothing sent, never downloaded', !cl.handled && w.replies.length === 0 && w.downloads.length === 0);
+    check('no department has Task import ON → Excel not claimed, nothing sent, never downloaded, and NO employee/settings lookups at all', !cl.handled && w.replies.length === 0 && w.downloads.length === 0 && w.reads.employee === 0 && w.reads.config === 0);
+    w = world(); w.importDepts = new Set(['some-other-department']);
+    cl = await I.claimTaskImport(doc('https://cdn.example.com/t.xlsx', 't.xlsx'), w.io);
+    check('Task import is ON only for ANOTHER department → this person is not claimed, silent', !cl.handled && w.replies.length === 0 && w.downloads.length === 0);
     w = world();
     cl = await I.claimTaskImport(text('hello team, lunch plans?'), w.io);
     check('ordinary chat → not claimed and costs NO database read at all', !cl.handled && w.reads.config === 0 && w.reads.employee === 0);

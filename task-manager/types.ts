@@ -193,7 +193,6 @@ export interface TestingConfig {
     rules?: NotificationRule[]; // Multi-rule notification engine
     killSwitches?: WhatsAppKillSwitches; // Phase 2: Multi-level WhatsApp kill switches
     nlGatewayEnabled?: boolean; // Step 4: natural-language front door (OFF unless explicitly switched on)
-    taskImportEnabled?: boolean; // Task Import: read tasks from a sent image / Excel / text (OFF unless explicitly switched on)
     whatsappPretendMode?: boolean; // Step 1: when not explicitly false, NO Task Manager WhatsApp message is sent (saved to history only)
 }
 

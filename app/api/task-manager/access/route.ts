@@ -22,7 +22,7 @@ export async function GET(request: NextRequest) {
 
         const overview = await TaskAccessService.getOverview();
         const config = await TaskDatabaseService.getTestingConfig();
-        return NextResponse.json({ success: true, ...overview, nlGatewayEnabled: config.nlGatewayEnabled === true, taskImportEnabled: config.taskImportEnabled === true });
+        return NextResponse.json({ success: true, ...overview, nlGatewayEnabled: config.nlGatewayEnabled === true });
     } catch (err) {
         console.error('[TaskAccessAPI] GET error:', err);
         return NextResponse.json({ success: false, error: err instanceof Error ? err.message : 'Failed to load access settings' }, { status: 500 });
@@ -106,17 +106,17 @@ export async function POST(request: NextRequest) {
             });
         }
 
-        // Task Import: read tasks from a sent image / Excel / text (OFF until switched on here)
+        // Task Import: let a department's people send a task list (Excel / image / text) on WhatsApp
         if (body.action === 'set_task_import') {
-            if (typeof body.enabled !== 'boolean') {
-                return NextResponse.json({ success: false, error: 'Missing enabled (true/false)' }, { status: 400 });
+            if (!body.departmentId || typeof body.enabled !== 'boolean') {
+                return NextResponse.json({ success: false, error: 'Missing departmentId or enabled (true/false)' }, { status: 400 });
             }
-            await TaskDatabaseService.setTaskImport(body.enabled, guard.label);
+            await TaskAccessService.setTaskImportEnabled(body.departmentId, body.enabled, guard.label);
             return NextResponse.json({
                 success: true,
                 message: body.enabled
-                    ? 'Task import is ON for everyone who is unlocked for the Task Manager (and inside the sandbox while it is ON).'
-                    : 'Task import is OFF. Files and images are handled exactly as before.'
+                    ? 'People in this team can now send a task list on WhatsApp (preview first, saved only after YES).'
+                    : 'Task import is OFF for this team. Files and images are handled exactly as before.'
             });
         }
 

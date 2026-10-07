@@ -31,7 +31,13 @@ export interface ImportDraft {
     structuredBy: 'rules' | 'llm';
 }
 
-export interface SaveOutcome { saved: number; skipped: number }
+export interface SaveOutcome {
+    saved: number;
+    skipped: number;                 // already in the person's list (same title + site + date)
+    failed?: number;                 // could not be written
+    failedIndexes?: number[];        // positions in draft.tasks of the ones that failed (to retry only those)
+    taskIds?: string[];              // ids created, for the audit trail
+}
 
 export interface ImportDeps {
     getContext(phone: string): Promise<{ type: string; data: any } | null>;
@@ -139,11 +145,14 @@ function taskBlock(t: ParsedTask, i: number): string {
 }
 
 /** The numbered preview, split so no single WhatsApp message passes the length limit. */
-export function formatPreview(draft: ImportDraft): string[] {
+export function formatPreview(draft: ImportDraft, today?: string): string[] {
     const n = draft.tasks.length;
     const intro = `📋 I found ${n} task${n === 1 ? '' : 's'} in ${SOURCE_LABEL[draft.source]} for ${dateLabel(draft.date)}` +
         `${draft.dateFromSource ? '' : ' (today — I could not find a date in it)'}:`;
-    const footer = 'Reply YES to save these.\nReply NO to cancel.\nTo drop one: "remove 3".  To change the date: "date 21 Aug".';
+    // Saved tasks appear in the Tasks tab on THEIR date, so say so when it is not today.
+    const notToday = today && draft.date !== today
+        ? `\n⚠️ That is not today's date, so these will not show on today's list. Reply "date today" to move them to today.` : '';
+    const footer = `Reply YES to save these.\nReply NO to cancel.\nTo drop one: "remove 3".  To change the date: "date 21 Aug".${notToday}`;
 
     const blocks = draft.tasks.map(taskBlock);
     const chunks: string[] = [];
@@ -178,7 +187,9 @@ export class TaskImportService {
         }
 
         if (ctx?.type === IMPORT_CONTEXT.PROCESSING) {
-            await deps.reply(phone, '⏳ I\'m still reading your last list. I\'ll send it as soon as it\'s ready.');
+            await deps.reply(phone, ctx.data?.saving
+                ? '⏳ I\'m still saving your tasks. One moment.'
+                : '⏳ I\'m still reading your last list. I\'ll send it as soon as it\'s ready.');
             return { handled: true };
         }
 
@@ -262,7 +273,7 @@ export class TaskImportService {
                 source: result.kind, structuredBy: result.structuredBy,
             };
             await deps.setContext(phone, IMPORT_CONTEXT.PREVIEW, draft as unknown as Record<string, unknown>, PREVIEW_TTL_MIN);
-            for (const chunk of formatPreview(draft)) await deps.reply(phone, chunk);
+            for (const chunk of formatPreview(draft, deps.today())) await deps.reply(phone, chunk);
             await deps.audit('task_import_previewed', phone, { source: draft.source, count: draft.tasks.length, structuredBy: draft.structuredBy, dateFromSource: draft.dateFromSource });
         } catch (err) {
             console.warn('[TaskImportService] import failed:', err instanceof Error ? err.message : err);
@@ -292,7 +303,7 @@ export class TaskImportService {
                 const next = { ...draft, date: cmd.date, dateFromSource: true };
                 await deps.setContext(phone, IMPORT_CONTEXT.PREVIEW, next as unknown as Record<string, unknown>, PREVIEW_TTL_MIN);
                 await deps.reply(phone, `Date changed to ${dateLabel(cmd.date)}.`);
-                for (const chunk of formatPreview(next)) await deps.reply(phone, chunk);
+                for (const chunk of formatPreview(next, deps.today())) await deps.reply(phone, chunk);
                 return;
             }
 
@@ -311,7 +322,7 @@ export class TaskImportService {
                 const next = { ...draft, tasks: draft.tasks.filter((_, i) => !drop.has(i + 1)) };
                 await deps.setContext(phone, IMPORT_CONTEXT.PREVIEW, next as unknown as Record<string, unknown>, PREVIEW_TTL_MIN);
                 await deps.reply(phone, `Removed ${cmd.numbers.length === 1 ? `task ${cmd.numbers[0]}` : `${cmd.numbers.length} tasks`}. ${next.tasks.length} left.`);
-                for (const chunk of formatPreview(next)) await deps.reply(phone, chunk);
+                for (const chunk of formatPreview(next, deps.today())) await deps.reply(phone, chunk);
                 await deps.audit('task_import_edited', phone, { removed: cmd.numbers.length, left: next.tasks.length });
                 return;
             }
@@ -324,11 +335,40 @@ export class TaskImportService {
                     await deps.audit('task_import_confirmed', phone, { count: draft.tasks.length, savedCount: 0 });
                     return;
                 }
-                const outcome = await deps.save(phone, draft);
-                await deps.clearContext(phone);
-                await deps.reply(phone, `✅ Saved ${outcome.saved} task${outcome.saved === 1 ? '' : 's'} for ${dateLabel(draft.date)}.` +
-                    `${outcome.skipped ? ` I skipped ${outcome.skipped} you already have.` : ''}`);
-                await deps.audit('task_import_confirmed', phone, { count: draft.tasks.length, savedCount: outcome.saved, skipped: outcome.skipped });
+                // Lock first: a second YES (double tap, repeat delivery on another server) must not save the list twice.
+                await deps.setContext(phone, IMPORT_CONTEXT.PROCESSING, { saving: true }, PROCESSING_TTL_MIN);
+                let outcome: SaveOutcome;
+                try {
+                    outcome = await deps.save(phone, draft);
+                } catch (err) {
+                    console.warn('[TaskImportService] save failed:', err instanceof Error ? err.message : err);
+                    // Nothing is lost: put the list back so YES can be tried again.
+                    await deps.setContext(phone, IMPORT_CONTEXT.PREVIEW, draft as unknown as Record<string, unknown>, PREVIEW_TTL_MIN);
+                    await deps.reply(phone, 'Sorry, I couldn\'t save your tasks just now. Your list is still here. Reply YES to try again, or NO to cancel.');
+                    await deps.audit('task_import_save_failed', phone, { count: draft.tasks.length });
+                    return;
+                }
+
+                const failed = outcome.failed || 0;
+                const when = dateLabel(draft.date);
+                const skippedNote = outcome.skipped ? ` I skipped ${outcome.skipped} you already have.` : '';
+                if (failed > 0) {
+                    // Keep ONLY the ones that did not save, so YES retries just those (never the ones already saved).
+                    const idx = new Set(outcome.failedIndexes || []);
+                    const rest: ImportDraft = { ...draft, tasks: draft.tasks.filter((_, i) => idx.has(i)) };
+                    await deps.setContext(phone, IMPORT_CONTEXT.PREVIEW, rest as unknown as Record<string, unknown>, PREVIEW_TTL_MIN);
+                    await deps.reply(phone, `⚠️ Saved ${outcome.saved} of ${draft.tasks.length} for ${when}.${skippedNote} ` +
+                        `${failed} could not be saved. Reply YES to try those again, or NO to leave them.`);
+                } else {
+                    await deps.clearContext(phone);
+                    await deps.reply(phone, outcome.saved === 0
+                        ? `Those ${outcome.skipped} task${outcome.skipped === 1 ? ' is' : 's are'} already in your list for ${when}, so I didn't add anything new.`
+                        : `✅ Saved ${outcome.saved} task${outcome.saved === 1 ? '' : 's'} for ${when}.${skippedNote} You'll find them in your Tasks tab.` +
+                          `${draft.date !== deps.today() ? ' (They are on that date, not today.)' : ''}`);
+                }
+                await deps.audit('task_import_confirmed', phone, {
+                    count: draft.tasks.length, savedCount: outcome.saved, skipped: outcome.skipped, failed, date: draft.date, taskIds: outcome.taskIds || [],
+                });
                 return;
             }
         }
