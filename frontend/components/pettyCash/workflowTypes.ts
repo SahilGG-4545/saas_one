@@ -5,6 +5,7 @@ export interface Property { id: string; name: string; code?: string }
 export interface Upload { upload_id: string; file_name: string; file_type: string }
 export interface Route { property_id: string; kind: 'allocator' | 'approver'; user_id: string; user: { id: string; full_name: string; email: string } }
 export interface Context {
+    counts?: Partial<Record<'mine'|'expenses'|'allocations'|'approvals'|'assigned'|'disbursements'|'reconciliation'|'all',number>> | null; counts_error?: string | null;
     organization_id: string; user_id: string; properties: Property[]; configuration_properties: Property[]; routes: Route[];
     caps: { isAdmin: boolean; canManageRouting: boolean; canAllocate: boolean; canApprove: boolean; canDisburse: boolean };
     wallet: { balance: number; received: number; spent: number; returned: number; can_request: boolean; blocker: string | null };

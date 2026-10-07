@@ -7,7 +7,7 @@ const require = createRequire(new URL('../../package.json', import.meta.url));
 const root = resolve(new URL('../..', import.meta.url).pathname);
 export function loadTs(file, mocks = {}) {
     const filename = resolve(root, file); const module = { exports: {} };
-    const output = ts.transpileModule(readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true, target: ts.ScriptTarget.ES2022 } }).outputText;
+    const output = ts.transpileModule(readFileSync(filename, 'utf8'), { fileName: filename, compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true, target: ts.ScriptTarget.ES2022 } }).outputText;
     const localRequire = name => {
         if (name in mocks) return mocks[name];
         if (name.startsWith('@/') || name.startsWith('.')) {

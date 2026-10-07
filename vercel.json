@@ -131,6 +131,10 @@
     {
       "path": "/api/cron/whatsapp-assistant",
       "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/cron/process-petty-cash-deliveries",
+      "schedule": "* * * * *"
     }
   ]
 }

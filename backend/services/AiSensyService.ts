@@ -14,6 +14,8 @@ export interface AiSensyTemplateOptions {
 export interface AiSensySendResult {
     success: boolean;
     error?: string;
+    ambiguous?: boolean;
+    providerReference?: string;
 }
 
 export class AiSensyService {
@@ -95,7 +97,7 @@ export class AiSensyService {
 
             if (!res.ok) {
                 console.error(`[AiSensy] ❌ Campaign "${options.campaignName}" failed — Status: ${res.status}`, responseText);
-                return { success: false, error: `AiSensy HTTP ${res.status}: ${responseText}` };
+                return { success: false, ambiguous: res.status >= 500, error: `AiSensy HTTP ${res.status}: ${responseText}` };
             }
 
             try {
@@ -111,7 +113,7 @@ export class AiSensyService {
             return { success: true };
         } catch (err: unknown) {
             console.error('[AiSensy] ❌ Network error:', err);
-            return { success: false, error: err instanceof Error ? err.message : 'Network error' };
+            return { success: false, ambiguous: true, error: err instanceof Error ? err.message : 'Network error' };
         }
     }
 }

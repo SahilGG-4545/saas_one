@@ -14,7 +14,9 @@
     "test:users": "node --test --test-isolation=none tests/users/list.test.mjs tests/users/action-roles.test.mjs tests/users/membership-state.test.mjs",
     "test:users:browser": "node --test --test-isolation=none tests/users/directory-loading.test.mjs",
     "test:dashboard": "node --test --test-isolation=none tests/dashboard/org-tab-sync.test.mjs tests/dashboard/scope.test.mjs",
-    "test:dashboard:browser": "npm exec --yes --package=esbuild -- node --test --test-isolation=none tests/dashboard/org-tab-browser.test.mjs"
+    "test:dashboard:browser": "npm exec --yes --package=esbuild -- node --test --test-isolation=none tests/dashboard/org-tab-browser.test.mjs",
+    "test:petty-cash:notifications": "node --test --test-isolation=none tests/petty-cash/notification-sync.test.mjs tests/petty-cash/notification-delivery.test.mjs tests/petty-cash/notification-rendering.test.mjs",
+    "test:notifications:browser": "npm exec --yes --package=esbuild -- node --test tests/notifications/settings-browser.test.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.82.0",
