@@ -9,6 +9,7 @@ export const EventProcessor = {
 
         if(event_type?.startsWith('PETTY_CASH_')) {
             await PettyCashNotificationService.dispatch(event,'email');
+            await PettyCashNotificationService.dispatch(event,'push');
             return;
         }
 

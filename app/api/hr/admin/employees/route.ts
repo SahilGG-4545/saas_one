@@ -174,7 +174,28 @@ export async function GET(request: Request) {
             combined = combined.filter(emp => emp.department === department);
         }
 
-        return NextResponse.json({ success: true, data: combined });
+        const unlinkedUsers = appUsers
+            .filter(u => !existingUserIdsInProfiles.has(u.id) && (!u.email || !existingEmailsInProfiles.has((u.email || '').toLowerCase().trim())))
+            .map(u => ({
+                id: u.id,
+                email: u.email,
+                full_name: u.full_name,
+                phone: u.phone,
+                app_role: userRoleMap.get(u.id) || null
+            }));
+
+        const { data: dbDepts } = await supabaseAdmin
+            .from('departments')
+            .select('id, name, code')
+            .eq('is_active', true)
+            .order('name');
+
+        return NextResponse.json({
+            success: true,
+            data: combined,
+            unlinked_users: unlinkedUsers,
+            departments: dbDepts || []
+        });
     } catch (err: any) {
         return NextResponse.json({ success: false, error: err.message }, { status: 500 });
     }
@@ -319,12 +340,15 @@ export async function POST(request: Request) {
     try {
         const body = await request.json();
         const {
+            user_id,
             employee_code,
             first_name,
             last_name,
             email,
             contact_number,
+            phone,
             department,
+            department_id: explicitDeptId,
             designation,
             location,
             reporting_manager_id,
@@ -334,99 +358,259 @@ export async function POST(request: Request) {
             role = 'staff'
         } = body;
 
-        if (!first_name || !last_name || !email) {
+        const cleanEmail = (email || '').trim().toLowerCase();
+        const cleanFirstName = (first_name || '').trim();
+        const cleanLastName = (last_name || '').trim();
+        const cleanPhone = (contact_number || phone || '').trim();
+
+        if (!cleanFirstName || !cleanLastName || !cleanEmail) {
             return NextResponse.json({ success: false, error: 'First name, last name, and email are required' }, { status: 400 });
         }
 
-        let createdUserId: string | null = null;
+        // 1. Resolve target app user ID
+        let targetUserId: string | null = user_id || null;
 
+        // If user_id wasn't passed directly, look for existing user in users table by email
+        if (!targetUserId && cleanEmail) {
+            const { data: existingUser } = await supabaseAdmin
+                .from('users')
+                .select('id, full_name, email, phone')
+                .ilike('email', cleanEmail)
+                .is('deleted_at', null)
+                .maybeSingle();
+
+            if (existingUser) {
+                targetUserId = existingUser.id;
+            }
+        }
+
+        // If still not matched and phone is provided, check by phone
+        if (!targetUserId && cleanPhone) {
+            const phoneDigits = cleanPhone.replace(/\D/g, '').slice(-10);
+            if (phoneDigits.length >= 10) {
+                const { data: existingUserByPhone } = await supabaseAdmin
+                    .from('users')
+                    .select('id, full_name, email, phone')
+                    .ilike('phone', `%${phoneDigits}%`)
+                    .is('deleted_at', null)
+                    .maybeSingle();
+
+                if (existingUserByPhone) {
+                    targetUserId = existingUserByPhone.id;
+                }
+            }
+        }
+
+        // 2. Resolve target organization
+        let targetOrgId = organization_id || null;
+        if (!targetOrgId && targetUserId) {
+            const { data: userOrgMemb } = await supabaseAdmin
+                .from('organization_memberships')
+                .select('organization_id')
+                .eq('user_id', targetUserId)
+                .maybeSingle();
+            if (userOrgMemb?.organization_id) {
+                targetOrgId = userOrgMemb.organization_id;
+            }
+        }
+        if (!targetOrgId) {
+            targetOrgId = '211e1330-ad83-446d-941f-dcea48396798';
+        }
+
+        // 3. Handle App Account creation if requested or update existing user
         if (create_app_account) {
-            const full_name = `${first_name} ${last_name}`;
+            const full_name = `${cleanFirstName} ${cleanLastName}`.trim();
             const tempPassword = 'Pass' + Math.random().toString(36).slice(-8) + '!';
 
-            const { data: userData, error: createErr } = await supabaseAdmin.auth.admin.createUser({
-                email,
-                password: tempPassword,
-                email_confirm: true,
-                user_metadata: {
-                    full_name,
-                    username: email.split('@')[0],
-                    organization_id
-                }
-            });
+            if (!targetUserId) {
+                const { data: userData, error: createErr } = await supabaseAdmin.auth.admin.createUser({
+                    email: cleanEmail,
+                    password: tempPassword,
+                    email_confirm: true,
+                    user_metadata: {
+                        full_name,
+                        username: cleanEmail.split('@')[0],
+                        organization_id: targetOrgId
+                    }
+                });
 
-            if (createErr && !createErr.message.includes('already registered')) {
-                return NextResponse.json({ success: false, error: `Failed to create auth user: ${createErr.message}` }, { status: 500 });
+                if (createErr) {
+                    if (createErr.message.includes('already registered')) {
+                        const { data: u } = await supabaseAdmin.from('users').select('id').ilike('email', cleanEmail).maybeSingle();
+                        if (u) targetUserId = u.id;
+                    } else {
+                        return NextResponse.json({ success: false, error: `Failed to create auth user: ${createErr.message}` }, { status: 500 });
+                    }
+                } else if (userData?.user) {
+                    targetUserId = userData.user.id;
+                }
             }
 
-            if (userData?.user) {
-                createdUserId = userData.user.id;
-
+            if (targetUserId) {
                 await supabaseAdmin
                     .from('users')
                     .update({
                         full_name,
-                        phone: contact_number || null,
+                        phone: cleanPhone || null,
                         onboarding_completed: true,
                         is_approved: true,
                         approval_status: 'approved'
                     })
-                    .eq('id', createdUserId);
+                    .eq('id', targetUserId);
 
-                if (organization_id) {
+                if (targetOrgId) {
                     if (['org_super_admin', 'hr', 'hr_head'].includes(role)) {
                         await supabaseAdmin
                             .from('organization_memberships')
-                            .upsert({ organization_id, user_id: createdUserId, role }, { onConflict: 'organization_id,user_id' });
+                            .upsert({ organization_id: targetOrgId, user_id: targetUserId, role }, { onConflict: 'organization_id,user_id' });
                     }
                     if (property_id) {
                         await supabaseAdmin
                             .from('property_memberships')
-                            .upsert({ organization_id, property_id, user_id: createdUserId, role, is_active: true }, { onConflict: 'user_id,property_id' });
+                            .upsert({ organization_id: targetOrgId, property_id, user_id: targetUserId, role, is_active: true }, { onConflict: 'user_id,property_id' });
                     }
                 }
             }
+        } else if (targetUserId) {
+            // Even if create_app_account is false, sync user full_name/phone if user only had first name
+            const { data: uInfo } = await supabaseAdmin.from('users').select('full_name, phone').eq('id', targetUserId).maybeSingle();
+            const updates: any = {};
+            if (uInfo && (!uInfo.full_name || uInfo.full_name.trim() === cleanFirstName)) {
+                updates.full_name = `${cleanFirstName} ${cleanLastName}`.trim();
+            }
+            if (uInfo && !uInfo.phone && cleanPhone) {
+                updates.phone = cleanPhone;
+            }
+            if (Object.keys(updates).length > 0) {
+                await supabaseAdmin.from('users').update(updates).eq('id', targetUserId);
+            }
         }
 
+        // 4. Resolve reporting manager code and valid user_id reference
         let reporting_manager_code = null;
+        let final_reporting_manager_id: string | null = null;
         if (reporting_manager_id) {
             const { data: mgr } = await supabaseAdmin
                 .from('employee_profiles')
-                .select('first_name, last_name, employee_code')
+                .select('first_name, last_name, employee_code, user_id, id')
                 .or(`user_id.eq.${reporting_manager_id},id.eq.${reporting_manager_id}`)
                 .maybeSingle();
 
             if (mgr) {
-                reporting_manager_code = `${mgr.first_name} ${mgr.last_name}`;
+                reporting_manager_code = `${mgr.first_name || ''} ${mgr.last_name || ''}`.trim() || mgr.employee_code;
+                final_reporting_manager_id = mgr.user_id || null;
+            }
+
+            if (!final_reporting_manager_id) {
+                const { data: mgrUser } = await supabaseAdmin
+                    .from('users')
+                    .select('id, full_name, email')
+                    .eq('id', reporting_manager_id)
+                    .maybeSingle();
+
+                if (mgrUser) {
+                    reporting_manager_code = mgrUser.full_name || mgrUser.email;
+                    final_reporting_manager_id = mgrUser.id;
+                }
             }
         }
 
-        const finalECode = employee_code || `E${Math.floor(100 + Math.random() * 900)}`;
+        // 5. Resolve department_id from departments table if available
+        let department_id: string | null = explicitDeptId || null;
+        if (!department_id && department) {
+            const cleanDept = department.trim();
+            const { data: deptRow } = await supabaseAdmin
+                .from('departments')
+                .select('id')
+                .ilike('name', cleanDept)
+                .maybeSingle();
+            if (deptRow) {
+                department_id = deptRow.id;
+            }
+        }
 
-        const { data: newProfile, error: profileErr } = await supabaseAdmin
-            .from('employee_profiles')
-            .insert({
-                organization_id: organization_id || null,
-                property_id: property_id || null,
-                user_id: createdUserId,
-                employee_code: finalECode,
-                first_name,
-                last_name,
-                department: department || 'Operations',
-                designation: designation || 'Executive',
-                email: email,
-                phone: contact_number || null,
-                location: location || 'Lower Parel',
-                reporting_manager_id: reporting_manager_id || null,
-                reporting_manager_code,
-                is_active: true
-            })
-            .select()
-            .single();
+        // 6. Generate employee code if empty
+        const finalECode = (employee_code || '').trim() || `E${Math.floor(100 + Math.random() * 900)}`;
 
-        if (profileErr) throw profileErr;
+        // 7. Check if employee profile already exists for this user_id or email
+        let existingProfile: any = null;
+        if (targetUserId) {
+            const { data: pByUserId } = await supabaseAdmin
+                .from('employee_profiles')
+                .select('id')
+                .eq('user_id', targetUserId)
+                .maybeSingle();
+            if (pByUserId) existingProfile = pByUserId;
+        }
+        if (!existingProfile && cleanEmail) {
+            const { data: pByEmail } = await supabaseAdmin
+                .from('employee_profiles')
+                .select('id')
+                .ilike('email', cleanEmail)
+                .maybeSingle();
+            if (pByEmail) existingProfile = pByEmail;
+        }
+        if (!existingProfile && finalECode && targetOrgId) {
+            const { data: pByCode } = await supabaseAdmin
+                .from('employee_profiles')
+                .select('id')
+                .eq('organization_id', targetOrgId)
+                .eq('employee_code', finalECode)
+                .maybeSingle();
+            if (pByCode) existingProfile = pByCode;
+        }
 
-        return NextResponse.json({ success: true, data: newProfile });
+        const profileFields: any = {
+            organization_id: targetOrgId,
+            user_id: targetUserId || null,
+            employee_code: finalECode,
+            first_name: cleanFirstName,
+            last_name: cleanLastName,
+            department: department || 'Operations',
+            designation: designation || 'Executive',
+            email: cleanEmail,
+            phone: cleanPhone || null,
+            location: location || 'Lower Parel',
+            reporting_manager_id: final_reporting_manager_id || null,
+            reporting_manager_code,
+            reconciliation_status: targetUserId ? 'linked' : 'unlinked',
+            is_active: true,
+            updated_at: new Date().toISOString()
+        };
+
+        if (department_id) {
+            profileFields.department_id = department_id;
+        }
+
+        let savedProfile: any = null;
+
+        if (existingProfile) {
+            const { data: updated, error: updateErr } = await supabaseAdmin
+                .from('employee_profiles')
+                .update(profileFields)
+                .eq('id', existingProfile.id)
+                .select()
+                .single();
+
+            if (updateErr) throw updateErr;
+            savedProfile = updated;
+        } else {
+            const { data: created, error: insertErr } = await supabaseAdmin
+                .from('employee_profiles')
+                .insert(profileFields)
+                .select()
+                .single();
+
+            if (insertErr) throw insertErr;
+            savedProfile = created;
+        }
+
+        return NextResponse.json({
+            success: true,
+            data: savedProfile,
+            is_linked: Boolean(targetUserId),
+            user_id: targetUserId
+        });
     } catch (err: any) {
         return NextResponse.json({ success: false, error: err.message }, { status: 500 });
     }
