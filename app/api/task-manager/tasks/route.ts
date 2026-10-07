@@ -3,6 +3,8 @@ import { supabaseAdmin } from '@/backend/lib/supabase/admin';
 import { PermissionService, PermissionDeniedError } from '@/task-manager/PermissionService';
 import { TaskDatabaseService } from '@/task-manager/TaskDatabaseService';
 import { TaskMessagingService } from '@/task-manager/TaskMessagingService';
+import { TaskAccessService } from '@/task-manager/TaskAccessService';
+import { requireActor } from '../_shared/adminGuard';
 import { TaskAssignment } from '@/task-manager/types';
 
 export const dynamic = 'force-dynamic';
@@ -10,7 +12,9 @@ export const dynamic = 'force-dynamic';
 export async function GET(request: NextRequest) {
     try {
         const { searchParams } = new URL(request.url);
-        const actorId = searchParams.get('actorId');
+        const auth = await requireActor(searchParams.get('actorId'));
+        if (!auth.ok) return auth.response;
+        const actorId = auth.userId; // always the logged-in person
         const departmentId = searchParams.get('departmentId') || '';
         const employeeId = searchParams.get('employeeId') || '';
         const status = searchParams.get('status') || '';
@@ -118,7 +122,10 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
     try {
         const body = await request.json();
-        const { action, actorId } = body;
+        const auth = await requireActor(body.actorId);
+        if (!auth.ok) return auth.response;
+        const { action } = body;
+        const actorId = auth.userId; // always the logged-in person
 
         if (!actorId) {
             return NextResponse.json({ success: false, error: 'Missing actorId in request body' }, { status: 400 });
@@ -137,6 +144,17 @@ export async function POST(request: NextRequest) {
 
             // Enforce RBAC: Manager can only assign in own department, Superuser anywhere, Employee blocked
             const { actor, target } = await PermissionService.assertCanAssignTask(actorId, targetEmployeeId);
+
+            // Access gate (Step 3): the person being assigned must be unlocked (department ON + kickoff sent).
+            const targetAccess = await TaskAccessService.check({ userId: target.id, departmentId: target.department_id });
+            if (!targetAccess.allowed) {
+                return NextResponse.json({
+                    success: false,
+                    code: 'TASK_MANAGER_LOCKED',
+                    reason: targetAccess.reason,
+                    error: `Cannot assign a task to ${target.name}: ${targetAccess.message}`
+                }, { status: 409 });
+            }
 
             const newTask = await TaskDatabaseService.createTaskAssignment({
                 employeeId: target.id,

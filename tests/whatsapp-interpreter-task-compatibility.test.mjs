@@ -7,7 +7,7 @@ import { createRequire } from 'node:module';
 import * as protocol from '../backend/lib/whatsapp/assistant/protocol.mjs';
 import { isExplicitTaskCommand, isDirectBookingRequest } from '../backend/lib/whatsapp/interpreter/coordinator.mjs';
 const next=createRequire(import.meta.url)('next/server');
-const sources=Object.fromEntries(await Promise.all(['task-manager/TaskErrorHandler.ts','task-manager/TaskCommandHandler.ts','task-manager/TaskMessageRouter.ts','app/api/webhooks/aisensy/route.ts'].map(async path=>[path,await readFile(new URL('../'+path,import.meta.url),'utf8')])));
+const sources=Object.fromEntries(await Promise.all(['task-manager/TaskGateway.ts','task-manager/TaskErrorHandler.ts','task-manager/TaskCommandHandler.ts','task-manager/TaskMessageRouter.ts','app/api/webhooks/aisensy/route.ts'].map(async path=>[path,await readFile(new URL('../'+path,import.meta.url),'utf8')])));
 function load(path,imports){const exports={};vm.runInNewContext(ts.transpileModule(sources[path],{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,
     {exports,require:name=>{assert.ok(name in imports,`unexpected import ${name}`);return imports[name];},Date,URL,Buffer,process:{env:{AISENSY_ASSISTANT_ENABLED:'true'}},console:{info(){},error(){}}});return exports;}
 function setup({facilityActive=false,choice=false,testingConfig=null}={}){
@@ -18,6 +18,10 @@ function setup({facilityActive=false,choice=false,testingConfig=null}={}){
         clearConversationContext:async(_phone,system)=>contexts.delete(system),getTestingConfig:async()=>testingConfig,
         updateAssignmentStatus:async params=>{const task=tasks.find(t=>t.id===params.assignmentId);task.status=params.status;return task;},logAudit:async entry=>audits.push(entry)};
     const imports={'./TaskDatabaseService':{TaskDatabaseService:db},'./TaskMessagingService':{TaskMessagingService:{sendMessage:async(_phone,text)=>messages.push(text)}}};
+    // Step 3 access gate: this suite checks the EXISTING behaviour for unlocked people, so everyone is unlocked here.
+    imports['./TaskAccessService']={TaskAccessService:{check:async()=>({allowed:true,reason:'ok',message:''})}};
+    imports['./PermissionService']={PermissionService:{visibleAndAssignable:async(_actor,list)=>list}};
+    imports['./TaskGateway']=load('task-manager/TaskGateway.ts',{});imports['./TaskGatewayExecutor']={TaskGatewayExecutor:{}};imports['./SuperuserAIInterpreter']={SuperuserAIInterpreter:{}}; // Step 4 gateway is OFF in this suite
     imports['./TaskErrorHandler']=load('task-manager/TaskErrorHandler.ts',{});
     imports['./TaskCommandHandler']=load('task-manager/TaskCommandHandler.ts',imports);
     const router=load('task-manager/TaskMessageRouter.ts',imports);

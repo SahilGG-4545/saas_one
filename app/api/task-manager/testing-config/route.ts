@@ -1,11 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/backend/lib/supabase/admin';
 import { TaskDatabaseService } from '@/task-manager/TaskDatabaseService';
+import { requireTaskManagerAdmin } from '../_shared/adminGuard';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
     try {
+        const guard = await requireTaskManagerAdmin();
+        if (!guard.ok) return guard.response;
+
         const { searchParams } = new URL(request.url);
         const eventType = searchParams.get('eventType');
         const limitParam = searchParams.get('limit');
@@ -25,6 +29,9 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
     try {
+        const guard = await requireTaskManagerAdmin();
+        if (!guard.ok) return guard.response;
+
         const body = await request.json().catch(() => ({}));
 
         if (body.action === 'get_logs') {
@@ -48,7 +55,7 @@ export async function POST(request: NextRequest) {
         if (body.action === 'toggle_global_kill_switch') {
             const halt = Boolean(body.halt);
             const reason = body.reason || (halt ? 'Emergency stop engaged by administrator' : null);
-            const actor = body.actor || 'Admin';
+            const actor = guard.label; // from the login, never from the request
             const updatedSwitches = await TaskDatabaseService.toggleGlobalKillSwitch(halt, reason, actor);
             const updatedConfig = await TaskDatabaseService.getTestingConfig();
             return NextResponse.json({
@@ -57,6 +64,26 @@ export async function POST(request: NextRequest) {
                     ? '🛑 Global WhatsApp Kill Switch ENGAGED. All automated messages halted company-wide.'
                     : '🟢 Global WhatsApp Kill Switch DISENGAGED. Automated messaging resumed.',
                 killSwitches: updatedSwitches,
+                config: updatedConfig,
+            });
+        }
+
+        // ── Step 1: Pretend Mode (no Task Manager WhatsApp message is delivered while ON) ──
+        if (body.action === 'toggle_pretend_mode') {
+            const enabled = Boolean(body.enabled);
+            // Turning Pretend Mode OFF allows real messages again, so it must be explicitly confirmed.
+            if (!enabled && body.confirm !== true) {
+                return NextResponse.json(
+                    { success: false, error: 'Turning Pretend Mode OFF requires explicit confirmation (confirm: true).' },
+                    { status: 400 }
+                );
+            }
+            const updatedConfig = await TaskDatabaseService.setPretendMode(enabled, guard.label);
+            return NextResponse.json({
+                success: true,
+                message: enabled
+                    ? '🛡️ Pretend Mode ON. No Task Manager WhatsApp message will be delivered; they are saved to history only.'
+                    : '⚠️ Pretend Mode OFF. Task Manager WhatsApp messages can be delivered again (kill switches still apply).',
                 config: updatedConfig,
             });
         }
@@ -145,9 +172,15 @@ export async function POST(request: NextRequest) {
             });
 
             const ruleLabel = targetRule ? `[${targetRule.name}] ` : '';
-            const summary = `${dryRun ? '[Dry-Run] ' : ''}${ruleLabel}Generated ${genResult.tasksGenerated} tasks (${genResult.tasksAlreadyExisting} existing). Notified ${notifResult.notificationsSent} employees (${notifResult.skippedNoTasks} skipped).`;
+            const modeLabel = notifResult.blockedReason
+                ? '[Blocked by Kill Switch - nothing sent] '
+                : notifResult.pretend
+                    ? '[Pretend Mode - nothing sent] '
+                    : dryRun ? '[Dry-Run] ' : '';
+            const summary = `${modeLabel}${ruleLabel}Generated ${genResult.tasksGenerated} tasks (${genResult.tasksAlreadyExisting} existing). Notified ${notifResult.notificationsSent} employees (${notifResult.skippedNoTasks} skipped${notifResult.skippedLocked ? `, ${notifResult.skippedLocked} locked` : ''}).`;
 
-            if (!dryRun) {
+            // Only a real, delivered run counts as "ran today". Blocked or pretend runs must not consume the day's slot.
+            if (!dryRun && !notifResult.pretend && !notifResult.blockedReason) {
                 const nowIST = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
                 const todayIST = `${nowIST.getFullYear()}-${String(nowIST.getMonth() + 1).padStart(2, '0')}-${String(nowIST.getDate()).padStart(2, '0')}`;
                 

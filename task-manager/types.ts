@@ -136,7 +136,7 @@ export interface NotificationConditions {
 }
 
 export interface NotificationRecipients {
-    target: 'whitelist' | 'tech_all' | 'specific_employees';
+    target: 'whitelist' | 'tech_all' | 'specific_employees' | 'department';
     employeeIds?: string[];
     notifyReportingManager?: boolean;
 }
@@ -192,6 +192,8 @@ export interface TestingConfig {
     cronLastRunSummary?: string | null; // Last run stats (legacy fallback)
     rules?: NotificationRule[]; // Multi-rule notification engine
     killSwitches?: WhatsAppKillSwitches; // Phase 2: Multi-level WhatsApp kill switches
+    nlGatewayEnabled?: boolean; // Step 4: natural-language front door (OFF unless explicitly switched on)
+    whatsappPretendMode?: boolean; // Step 1: when not explicitly false, NO Task Manager WhatsApp message is sent (saved to history only)
 }
 
 

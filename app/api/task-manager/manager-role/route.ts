@@ -2,12 +2,16 @@ import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/backend/lib/supabase/admin';
 import { TaskDatabaseService } from '@/task-manager/TaskDatabaseService';
 import { TaskMessagingService } from '@/task-manager/TaskMessagingService';
-import { AiSensyService } from '@/backend/services/AiSensyService';
+import { TaskAccessService } from '@/task-manager/TaskAccessService';
+import { requireTaskManagerAdmin } from '../_shared/adminGuard';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
     try {
+        const guard = await requireTaskManagerAdmin();
+        if (!guard.ok) return guard.response;
+
         // Fetch all active employees
         const { data: employees, error: empErr } = await supabaseAdmin
             .from('employee_profiles')
@@ -93,6 +97,9 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
     try {
+        const guard = await requireTaskManagerAdmin();
+        if (!guard.ok) return guard.response;
+
         const body = await request.json().catch(() => ({}));
         const { employeeId, action, sendKickoff = true } = body;
 
@@ -166,15 +173,30 @@ export async function POST(request: NextRequest) {
                 } else {
                     // 1. Send Meta-approved Manager Kickoff campaign template (Opens 24h window when buttons tapped)
                     const campaignName = process.env.AISENSY_MANAGER_CAMPAIGN_NAME || 'tm_manager_kickoff_v1';
-                    const templateRes = await AiSensyService.sendTemplate({
+                    const templateRes = await TaskMessagingService.sendKickoffTemplate({
                         phone: targetPhone,
                         campaignName,
-                        templateParams: [managerName, deptName, teamMembersList]
+                        templateParams: [managerName, deptName, teamMembersList],
+                        departmentId: profile.department_id,
+                        messageType: 'manager_kickoff'
                     });
 
-                    if (templateRes.success) {
+                    if (templateRes.pretend) {
+                        whatsappSent = false;
+                        whatsappDetails = 'Pretend Mode is ON: kickoff was NOT sent (saved to history only).';
+                    } else if (templateRes.success) {
                         whatsappSent = true;
                         whatsappDetails = `Meta template (${campaignName}) dispatched successfully with params [${managerName}, ${deptName}, ${teamMembersList}].`;
+                        // Step 3: a REAL kickoff was delivered, so record the person as onboarded.
+                        if (profile.user_id) {
+                            await TaskAccessService.recordKickoffSafe({
+                                userId: profile.user_id,
+                                departmentId: profile.department_id,
+                                kickoffType: 'manager',
+                                source: 'whatsapp',
+                                actor: 'Admin'
+                            });
+                        }
                     } else {
                         whatsappDetails = `WhatsApp send error: ${templateRes.error || 'Failed to dispatch'}`;
                     }
@@ -257,11 +279,23 @@ export async function POST(request: NextRequest) {
             }
 
             const campaignName = process.env.AISENSY_EMPLOYEE_CAMPAIGN_NAME || 'tm_employee_kickoff_v1';
-            const templateRes = await AiSensyService.sendTemplate({
+            const templateRes = await TaskMessagingService.sendKickoffTemplate({
                 phone: targetPhone,
                 campaignName,
-                templateParams: [empName, deptName, managerName]
+                templateParams: [empName, deptName, managerName],
+                departmentId: profile.department_id,
+                messageType: 'employee_kickoff'
             });
+
+            // Pretend Mode: nothing was delivered, so do NOT record the kickoff as sent.
+            if (templateRes.pretend) {
+                return NextResponse.json({
+                    success: true,
+                    pretend: true,
+                    message: `Pretend Mode is ON: employee kickoff for ${fullName} was NOT sent. It was saved to history only.`,
+                    details: { empName, deptName, managerName, campaignName }
+                });
+            }
 
             if (!templateRes.success) {
                 return NextResponse.json({
@@ -276,6 +310,17 @@ export async function POST(request: NextRequest) {
                 targetEmployeeId: profile.user_id || null,
                 details: { campaignName, empName, deptName, managerName, targetPhone, profileId: profile.id }
             });
+
+            // Step 3: a REAL kickoff was delivered, so record the person as onboarded.
+            if (profile.user_id) {
+                await TaskAccessService.recordKickoffSafe({
+                    userId: profile.user_id,
+                    departmentId: profile.department_id,
+                    kickoffType: 'employee',
+                    source: 'whatsapp',
+                    actor: 'Admin'
+                });
+            }
 
             return NextResponse.json({
                 success: true,
@@ -319,12 +364,26 @@ export async function POST(request: NextRequest) {
                 }, { status: 403 });
             }
 
-            const campaignName = process.env.AISENSY_MANAGER_CAMPAIGN_NAME || 'tm_manager_kickoff_v1';
-            const templateRes = await AiSensyService.sendTemplate({
+            // A superuser gets the superuser template once its campaign name is configured; until then the manager one (as before).
+            const superuserCampaign = profile.task_role === 'superuser' ? process.env.AISENSY_SUPERUSER_CAMPAIGN_NAME : undefined;
+            const campaignName = superuserCampaign || process.env.AISENSY_MANAGER_CAMPAIGN_NAME || 'tm_manager_kickoff_v1';
+            const templateRes = await TaskMessagingService.sendKickoffTemplate({
                 phone: targetPhone,
                 campaignName,
-                templateParams: [managerName, deptName, teamMembersList]
+                templateParams: superuserCampaign ? [managerName] : [managerName, deptName, teamMembersList],
+                departmentId: profile.department_id,
+                messageType: 'manager_kickoff'
             });
+
+            // Pretend Mode: nothing was delivered, so do NOT record the kickoff as sent.
+            if (templateRes.pretend) {
+                return NextResponse.json({
+                    success: true,
+                    pretend: true,
+                    message: `Pretend Mode is ON: manager kickoff for ${fullName} was NOT sent. It was saved to history only.`,
+                    details: { managerName, deptName, teamMembersList, campaignName }
+                });
+            }
 
             if (!templateRes.success) {
                 return NextResponse.json({
@@ -339,6 +398,17 @@ export async function POST(request: NextRequest) {
                 targetEmployeeId: profile.user_id || null,
                 details: { campaignName, managerName, deptName, teamMembersList, targetPhone, profileId: profile.id }
             });
+
+            // Step 3: a REAL kickoff was delivered, so record the person as onboarded.
+            if (profile.user_id) {
+                await TaskAccessService.recordKickoffSafe({
+                    userId: profile.user_id,
+                    departmentId: profile.department_id,
+                    kickoffType: 'manager',
+                    source: 'whatsapp',
+                    actor: 'Admin'
+                });
+            }
 
             return NextResponse.json({
                 success: true,

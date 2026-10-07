@@ -46,6 +46,8 @@ import {
     ShieldAlert,
     ArrowLeftRight
 } from 'lucide-react';
+import OrgHierarchyPanel from '@/frontend/components/task-manager/OrgHierarchyPanel';
+import TaskAccessPanel from '@/frontend/components/task-manager/TaskAccessPanel';
 import type {
     NotificationRule,
     NotificationRuleType,
@@ -419,6 +421,9 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
     });
     const [killSwitchLoading, setKillSwitchLoading] = useState<boolean>(false);
 
+    // Step 1: Pretend Mode (safe default ON: no Task Manager WhatsApp message is delivered)
+    const [whatsappPretendMode, setWhatsappPretendMode] = useState<boolean>(true);
+
     // Phase 4: Department Roster & Transfer State
     const [rosterSearchQuery, setRosterSearchQuery] = useState('');
     const [transferModal, setTransferModal] = useState<{
@@ -536,6 +541,7 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
                     if (configData.config.killSwitches) {
                         setKillSwitches(configData.config.killSwitches);
                     }
+                    setWhatsappPretendMode(configData.config.whatsappPretendMode !== false);
 
                     const fetchedRules = configData.config.rules || [];
                     setRules(fetchedRules);
@@ -675,6 +681,56 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
         }
     };
 
+    // ── Step 1: Pretend Mode toggle ────────────────────────────────────────
+    const executePretendMode = async (enabled: boolean) => {
+        setKillSwitchLoading(true);
+        setStatusMessage(null);
+        try {
+            const res = await fetch('/api/task-manager/testing-config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    action: 'toggle_pretend_mode',
+                    enabled,
+                    confirm: true,
+                    actor: 'Admin'
+                })
+            });
+            const data = await res.json();
+            if (!res.ok || !data.success) throw new Error(data.error || 'Failed to change Pretend Mode');
+
+            setWhatsappPretendMode(enabled);
+            setStatusMessage({
+                type: enabled ? 'success' : 'error',
+                title: enabled ? '🛡️ Pretend Mode ON' : '⚠️ Pretend Mode OFF',
+                details: data.message
+            });
+            await fetchData();
+        } catch (err: any) {
+            setStatusMessage({ type: 'error', title: 'Pretend Mode Change Failed', details: err.message });
+        } finally {
+            setKillSwitchLoading(false);
+        }
+    };
+
+    const handleTogglePretendMode = (enabled: boolean) => {
+        if (!enabled) {
+            setConfirmModal({
+                isOpen: true,
+                title: '⚠️ Turn OFF Pretend Mode?',
+                message: 'With Pretend Mode OFF, Task Manager WhatsApp messages can be delivered to real phones again (the kill switches and the sandbox whitelist still apply). Only continue if you are sure the system is ready to send.',
+                confirmLabel: 'Turn OFF Pretend Mode',
+                confirmColor: 'rose',
+                onConfirm: async () => {
+                    setConfirmModal(prev => ({ ...prev, isOpen: false }));
+                    await executePretendMode(false);
+                }
+            });
+            return;
+        }
+        executePretendMode(true);
+    };
+
     // ── Phase 3: Reporting Manager Direct Actions ─────────────────────────
     const handleSendManagerKickoffDirect = (managerId: string) => {
         const mgr = employees.find(e => e.id === managerId);
@@ -702,7 +758,7 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
                     if (!res.ok || !data.success) throw new Error(data.error || 'Failed to dispatch kickoff');
                     setStatusMessage({
                         type: 'success',
-                        title: 'Manager Kickoff Dispatched 👑',
+                        title: data.pretend ? '🛡️ Pretend Mode: Manager Kickoff NOT sent' : 'Manager Kickoff Dispatched 👑',
                         details: data.message
                     });
                     await fetchData();
@@ -871,7 +927,7 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
                     if (!res.ok || !data.success) throw new Error(data.error || 'Failed to dispatch kickoff');
                     setStatusMessage({
                         type: 'success',
-                        title: 'Employee Kickoff Dispatched 📨',
+                        title: data.pretend ? '🛡️ Pretend Mode: Employee Kickoff NOT sent' : 'Employee Kickoff Dispatched 📨',
                         details: data.message
                     });
                     await fetchData();
@@ -1628,6 +1684,48 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
                 </div>
             )}
 
+            {/* Step 1: Pretend Mode Banner */}
+            {whatsappPretendMode && (
+                <div className="bg-gradient-to-r from-indigo-600 via-indigo-700 to-indigo-800 text-white p-4 sm:p-5 rounded-3xl shadow-lg flex flex-col md:flex-row md:items-center justify-between gap-4 border border-indigo-400/50">
+                    <div className="flex items-center gap-3.5">
+                        <div className="w-12 h-12 rounded-2xl bg-white/20 flex items-center justify-center font-black text-2xl flex-shrink-0 shadow-inner">
+                            🛡️
+                        </div>
+                        <div>
+                            <h3 className="font-black text-base uppercase tracking-wider text-white">
+                                Pretend Mode ON: no WhatsApp messages are being sent
+                            </h3>
+                            <p className="text-xs text-indigo-100 mt-0.5 leading-relaxed">
+                                Every Task Manager message (digests, replies, kickoffs) is saved to the history below as "Pretend (Not Sent)" and is NOT delivered to anyone.
+                            </p>
+                        </div>
+                    </div>
+                    <button
+                        type="button"
+                        disabled={killSwitchLoading}
+                        onClick={() => handleTogglePretendMode(false)}
+                        className="flex items-center justify-center gap-2 px-5 py-2.5 bg-white/10 hover:bg-white/20 text-white border border-white/30 font-bold text-xs uppercase tracking-wider rounded-2xl transition-all cursor-pointer whitespace-nowrap active:scale-95 flex-shrink-0"
+                    >
+                        Turn off Pretend Mode…
+                    </button>
+                </div>
+            )}
+            {!whatsappPretendMode && (
+                <div className="bg-amber-50 border border-amber-300 text-amber-950 p-3 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <p className="text-xs font-bold">
+                        ⚠️ Pretend Mode is OFF: Task Manager WhatsApp messages can be delivered to real phones (kill switches and sandbox still apply).
+                    </p>
+                    <button
+                        type="button"
+                        disabled={killSwitchLoading}
+                        onClick={() => handleTogglePretendMode(true)}
+                        className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black uppercase tracking-wider cursor-pointer whitespace-nowrap"
+                    >
+                        Turn Pretend Mode ON
+                    </button>
+                </div>
+            )}
+
             {/* Header Banner */}
             <div className={`bg-gradient-to-r from-amber-500/10 via-amber-500/5 to-transparent border border-amber-500/20 rounded-3xl p-6 flex flex-col md:flex-row md:items-center justify-between gap-4 ${animationStep >= 1 ? 'tm-slide-down-visible' : 'tm-slide-down-hidden'}`}>
                 <div className="flex items-center gap-4">
@@ -2283,7 +2381,7 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
                     return (
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                             {deptMembers.map(m => {
-                                const isMgr = m.task_role === 'reporting_manager';
+                                const isMgr = m.task_role === 'reporting_manager' || m.task_role === 'superuser';
                                 const hasValidPhone = Boolean(m.phone && m.phone.replace(/\D/g, '').length >= 10);
 
                                 return (
@@ -3499,6 +3597,33 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
                                     );
                                 }
 
+                                // ── 1b. Pretend Mode Changed Event ──
+                                if (log.event_type === 'pretend_mode_updated') {
+                                    const isOn = Boolean(details.pretendMode);
+                                    return (
+                                        <div
+                                            key={log.id}
+                                            className={`border rounded-2xl overflow-hidden border-l-4 ${
+                                                isOn ? 'border-l-indigo-500 bg-indigo-50/20' : 'border-l-amber-500 bg-amber-50/30'
+                                            } border-slate-200 p-4`}
+                                        >
+                                            <div className="flex items-center gap-2 flex-wrap">
+                                                <span className="text-[11px] font-mono text-slate-500 flex items-center gap-1 bg-slate-100 px-2 py-0.5 rounded-md">
+                                                    <Clock className="w-3 h-3 text-slate-400" />
+                                                    {formatISTTime(log.created_at)}
+                                                </span>
+                                                <span className="px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider bg-slate-100 text-slate-700 border border-slate-200">
+                                                    🛡️ Safety Control
+                                                </span>
+                                                <span className="text-xs font-bold text-slate-800">
+                                                    {isOn ? 'Pretend Mode turned ON' : 'Pretend Mode turned OFF'}
+                                                    {details.actor ? ` by ${details.actor}` : ''}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    );
+                                }
+
                                 // ── 2. Staff Transfer Event ──
                                 if (log.event_type === 'employee_transferred') {
                                     return (
@@ -3610,8 +3735,32 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
                                     );
                                 }
 
+                                // ── 4b. Any other recorded event (access changes, messages received, task updates, ...) ──
+                                // Shown as a plain row so it is never mistaken for a sent WhatsApp message.
+                                if (log.event_type && log.event_type !== 'whatsapp_sent' && log.event_type !== 'whatsapp_blocked_by_kill_switch') {
+                                    const summary = JSON.stringify(details);
+                                    return (
+                                        <div key={log.id} className="border rounded-2xl overflow-hidden border-l-4 border-l-slate-300 border-slate-200 bg-white p-3">
+                                            <div className="flex items-center gap-2 flex-wrap">
+                                                <span className="text-[11px] font-mono text-slate-500 flex items-center gap-1 bg-slate-100 px-2 py-0.5 rounded-md">
+                                                    <Clock className="w-3 h-3 text-slate-400" />
+                                                    {formatISTTime(log.created_at)}
+                                                </span>
+                                                <span className="px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider bg-slate-100 text-slate-700 border border-slate-200">
+                                                    {String(log.event_type).replace(/_/g, ' ')}
+                                                </span>
+                                                <span className="text-[11px] text-slate-500 truncate max-w-full">
+                                                    {summary.length > 160 ? summary.slice(0, 160) + '…' : summary}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    );
+                                }
+
                                 // ── 5. Standard WhatsApp Notification Dispatch (whatsapp_sent) ──
-                                const isDryRun = details.dryRun || details.status === 'simulated';
+                                const isBlocked = log.event_type === 'whatsapp_blocked_by_kill_switch';
+                                const isPretend = Boolean(details.pretend);
+                                const isDryRun = !isBlocked && (details.dryRun || details.status === 'simulated');
                                 const isFailed = details.status === 'failed';
 
                                 const ruleType = details.type || details.ruleType || 'morning_digest';
@@ -3624,7 +3773,7 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
                                     <div
                                         key={log.id}
                                         className={`border rounded-2xl transition-all duration-150 overflow-hidden border-l-4 ${
-                                            isFailed
+                                            isFailed || isBlocked
                                                 ? 'border-l-rose-500'
                                                 : isDryRun
                                                 ? 'border-l-amber-500'
@@ -3643,10 +3792,15 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
                                                     <span className={`px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider border ${ruleBadgeColor}`}>
                                                         {details.ruleName || details.type || 'WhatsApp Notification'}
                                                     </span>
-                                                    {isDryRun ? (
+                                                    {isBlocked ? (
+                                                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-rose-100 text-rose-900 border border-rose-300">
+                                                            <Ban className="w-3 h-3 text-rose-600" />
+                                                            Blocked (Not Sent)
+                                                        </span>
+                                                    ) : isDryRun ? (
                                                         <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-100 text-amber-900 border border-amber-300">
                                                             <Shield className="w-3 h-3 text-amber-600" />
-                                                            Simulated (Dry-Run)
+                                                            {isPretend ? 'Pretend (Not Sent)' : 'Simulated (Dry-Run)'}
                                                         </span>
                                                     ) : isFailed ? (
                                                         <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-rose-100 text-rose-900 border border-rose-300">
@@ -3671,11 +3825,11 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
                                                     )}
                                                     <span className="text-slate-300">•</span>
                                                     <span className="font-medium text-slate-700">
-                                                        📋 {details.taskCount !== undefined ? `${details.taskCount} task${details.taskCount === 1 ? '' : 's'}` : 'Digest sent'}
+                                                        📋 {details.taskCount !== undefined ? `${details.taskCount} task${details.taskCount === 1 ? '' : 's'}` : isBlocked ? 'Message stopped' : isPretend ? 'Message saved' : 'Digest sent'}
                                                     </span>
-                                                    {details.error && (
+                                                    {(details.error || (isBlocked && details.reason)) && (
                                                         <span className="text-rose-600 font-medium">
-                                                            ⚠️ {details.error}
+                                                            ⚠️ {details.error || details.reason}
                                                         </span>
                                                     )}
                                                 </div>
@@ -3725,6 +3879,12 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
                     );
                 })()}
             </div>
+
+            {/* Step 3: Who is unlocked for the Task Manager (department switch + kickoff status) */}
+            <TaskAccessPanel orgId={orgId} />
+
+            {/* Step 2: Read-only reporting chain preview (from reporting_manager_id) */}
+            <OrgHierarchyPanel orgId={orgId} />
 
             {/* Main Interactive Control Card */}
             <div className={`bg-white border border-slate-200 rounded-3xl p-6 md:p-8 shadow-sm space-y-6 ${animationStep >= 4 ? 'tm-slide-up-visible' : 'tm-slide-up-hidden'}`}>

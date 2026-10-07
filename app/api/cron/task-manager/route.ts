@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { TaskDailyGeneratorService } from '@/task-manager/TaskDailyGeneratorService';
 import { TaskNotificationService } from '@/task-manager/TaskNotificationService';
 import { TaskDatabaseService } from '@/task-manager/TaskDatabaseService';
+import { TaskMessagingService } from '@/task-manager/TaskMessagingService';
+import { evaluateRuleSchedule } from '@/task-manager/NotificationSchedule';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -105,7 +107,7 @@ async function handleRequest(request: NextRequest) {
         const ruleResults: Array<{
             ruleId: string;
             ruleName: string;
-            status: 'dispatched' | 'waiting' | 'already_executed_today' | 'disabled' | 'not_scheduled_today' | 'outside_operational_window';
+            status: 'dispatched' | 'waiting' | 'already_executed_today' | 'disabled' | 'not_scheduled_today' | 'outside_operational_window' | 'blocked_by_kill_switch';
             message?: string;
             summary?: string;
         }> = [];
@@ -113,79 +115,67 @@ async function handleRequest(request: NextRequest) {
         let executedCount = 0;
 
         for (const rule of candidates) {
-            // Check individual rule toggle
-            if (rule.enabled === false) {
-                ruleResults.push({
-                    ruleId: rule.id,
-                    ruleName: rule.name,
-                    status: 'disabled',
-                    message: `Rule '${rule.name}' is currently paused.`
-                });
+            // Step 6: every rule runs for ITS OWN department. Rules without one (the original Tech rules) keep using the default.
+            const ruleDept = rule.departmentId && rule.departmentId !== 'all' ? rule.departmentId : deptId;
+
+            const status = evaluateRuleSchedule(rule, { dayOfWeek: currentDayOfWeek, minutes: currentMinutes, todayIST }, force);
+            if (status !== 'due') {
+                const messages: Record<string, string> = {
+                    disabled: `Rule '${rule.name}' is currently paused.`,
+                    not_scheduled_today: `Rule '${rule.name}' is not scheduled for today (Day ${currentDayOfWeek}).`,
+                    already_executed_today: `Rule '${rule.name}' already dispatched for today (${todayIST}).`,
+                    waiting: `Scheduled time (${rule.targetTimeIST} IST) has not arrived yet. Current IST: ${currentISTTime}`,
+                    outside_operational_window: `Current time (${currentISTTime} IST) is too long after this rule's scheduled time (${rule.targetTimeIST} IST).`,
+                };
+                ruleResults.push({ ruleId: rule.id, ruleName: rule.name, status, message: messages[status] });
                 continue;
             }
 
-            // Check active day of week (e.g. skip Sunday unless forced)
-            if (!force && rule.daysOfWeek && !rule.daysOfWeek.includes(currentDayOfWeek)) {
-                ruleResults.push({
-                    ruleId: rule.id,
-                    ruleName: rule.name,
-                    status: 'not_scheduled_today',
-                    message: `Rule '${rule.name}' is not scheduled for today (Day ${currentDayOfWeek}).`
+            // Safety pre-check (fails closed). A blocked rule is NOT stamped as run, so it can still fire after messaging resumes.
+            if (!dryRun) {
+                const gate = await TaskMessagingService.resolveSendMode({
+                    departmentId: ruleDept,
+                    ruleType: rule.ruleType
                 });
-                continue;
-            }
-
-            // Deduplication check per rule
-            if (!force && rule.lastRunDate === todayIST) {
-                ruleResults.push({
-                    ruleId: rule.id,
-                    ruleName: rule.name,
-                    status: 'already_executed_today',
-                    message: `Rule '${rule.name}' already dispatched for today (${todayIST}).`
-                });
-                continue;
-            }
-
-            // Check if scheduled time has arrived
-            const [targetHour, targetMin] = (rule.targetTimeIST || '09:00').split(':').map(Number);
-            const targetMinutes = (targetHour || 9) * 60 + (targetMin || 0);
-
-            if (!force && currentMinutes < targetMinutes) {
-                ruleResults.push({
-                    ruleId: rule.id,
-                    ruleName: rule.name,
-                    status: 'waiting',
-                    message: `Scheduled time (${rule.targetTimeIST} IST) has not arrived yet. Current IST: ${currentISTTime}`
-                });
-                continue;
-            }
-
-            // Evening cutoff safety (after 20:30 IST)
-            if (!force && currentMinutes > 20 * 60 + 30) {
-                ruleResults.push({
-                    ruleId: rule.id,
-                    ruleName: rule.name,
-                    status: 'outside_operational_window',
-                    message: `Current time (${currentISTTime} IST) is past evening operational cutoff (20:30 IST).`
-                });
-                continue;
+                if (gate.mode === 'blocked') {
+                    ruleResults.push({
+                        ruleId: rule.id,
+                        ruleName: rule.name,
+                        status: 'blocked_by_kill_switch',
+                        message: gate.reason
+                    });
+                    continue;
+                }
             }
 
             // Execute tasks & notification for this rule
             const genResult = await TaskDailyGeneratorService.generateDailyFixedTasks({
                 date: todayIST,
-                departmentId: deptId
+                departmentId: ruleDept
             });
 
             const notifResult = await TaskNotificationService.sendMorningNotifications({
                 date: todayIST,
-                departmentId: deptId,
+                departmentId: ruleDept,
                 dryRun,
                 rule
             });
 
 
-            const summary = `Generated ${genResult.tasksGenerated} tasks (${genResult.tasksAlreadyExisting} existing). Sent ${notifResult.notificationsSent} digests (${notifResult.skippedNoTasks} skipped).`;
+            // Safety gate tripped between the pre-check and the send: do not stamp the rule as run.
+            if (notifResult.blockedReason) {
+                ruleResults.push({
+                    ruleId: rule.id,
+                    ruleName: rule.name,
+                    status: 'blocked_by_kill_switch',
+                    message: notifResult.blockedReason
+                });
+                continue;
+            }
+
+            const summary = notifResult.pretend
+                ? `[Pretend Mode - nothing sent] Generated ${genResult.tasksGenerated} tasks (${genResult.tasksAlreadyExisting} existing). Simulated ${notifResult.notificationsSent} digests (${notifResult.skippedNoTasks} skipped${notifResult.skippedLocked ? `, ${notifResult.skippedLocked} locked` : ''}).`
+                : `Generated ${genResult.tasksGenerated} tasks (${genResult.tasksAlreadyExisting} existing). Sent ${notifResult.notificationsSent} digests (${notifResult.skippedNoTasks} skipped${notifResult.skippedLocked ? `, ${notifResult.skippedLocked} locked` : ''}).`;
 
             // Stamp rule execution in DB
             await TaskDatabaseService.updateNotificationRule(rule.id, {
@@ -194,7 +184,7 @@ async function handleRequest(request: NextRequest) {
             });
 
             // If it's the primary morning digest, maintain legacy fields too
-            if (rule.id === 'rule_morning_digest' || rule.ruleType === 'morning_digest') {
+            if (rule.id === 'rule_morning_digest' || (rule.ruleType === 'morning_digest' && !rule.departmentId)) {
                 await TaskDatabaseService.saveTestingConfig({
                     cronLastRunDate: todayIST,
                     cronLastRunSummary: summary
@@ -216,6 +206,9 @@ async function handleRequest(request: NextRequest) {
         if (executedCount > 0) {
             overallAction = 'dispatched';
             overallMessage = ruleResults.find(r => r.status === 'dispatched')?.summary;
+        } else if (ruleResults.some(r => r.status === 'blocked_by_kill_switch')) {
+            overallAction = 'blocked';
+            overallMessage = ruleResults.find(r => r.status === 'blocked_by_kill_switch')?.message;
         } else if (ruleResults.some(r => r.status === 'waiting')) {
             overallAction = 'waiting';
             overallMessage = ruleResults.find(r => r.status === 'waiting')?.message;

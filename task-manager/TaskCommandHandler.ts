@@ -1,11 +1,13 @@
 import { TaskDatabaseService } from './TaskDatabaseService';
 import { TaskMessagingService } from './TaskMessagingService';
 import { TaskErrorHandler } from './TaskErrorHandler';
+import { TaskAccessService } from './TaskAccessService';
+import { PermissionService } from './PermissionService';
 import { Employee, TaskAssignment } from './types';
 
 export interface CommandExecutionResult {
     success: boolean;
-    command: 'tasks' | 'status' | 'done_single' | 'done_all' | 'cancel' | 'unknown' | 'unregistered' | 'team_status' | 'assign_task';
+    command: 'tasks' | 'status' | 'done_single' | 'done_all' | 'cancel' | 'unknown' | 'unregistered' | 'team_status' | 'assign_task' | 'locked' | 'confirm_pending' | 'confirm_cancelled' | 'insight' | 'pick_pending';
     taskNumber?: number;
     affectedTaskId?: string;
     employee?: Employee;
@@ -40,6 +42,25 @@ export class TaskCommandHandler {
             return {
                 success: false,
                 command: 'unregistered',
+                replyText: reply
+            };
+        }
+
+        // 1b. Access gate (Step 3): the department must be switched ON and the person's kickoff recorded.
+        const access = await TaskAccessService.check({ userId: employee.id, departmentId: employee.department_id });
+        if (!access.allowed) {
+            const reply = TaskErrorHandler.taskManagerLocked(access.message);
+            await TaskDatabaseService.logAudit({
+                eventType: 'task_access_blocked',
+                actorId: employee.id,
+                targetEmployeeId: employee.id,
+                details: { reason: access.reason, channel: 'whatsapp' }
+            });
+            if (shouldSend) await TaskMessagingService.sendMessage(params.phone, reply);
+            return {
+                success: false,
+                command: 'locked',
+                employee,
                 replyText: reply
             };
         }
@@ -87,9 +108,11 @@ export class TaskCommandHandler {
                 };
             }
 
-            const deptEmployees = employee.department_id
+            const teamPool = employee.department_id
                 ? await TaskDatabaseService.getEmployeesByDepartment(employee.department_id)
                 : await TaskDatabaseService.getAllEmployees();
+            // Step 5: same rule as the web Tasks tab: yourself, your reports, and colleagues when team sharing is ON
+            const deptEmployees = await PermissionService.visibleAndAssignable(employee, teamPool);
 
             const deptName = employee.department_name || 'Department';
 
@@ -188,32 +211,11 @@ export class TaskCommandHandler {
             const targetNameQuery = assignMatch[1].trim();
             const taskTitle = assignMatch[2].trim();
 
-            if (employee.role !== 'reporting_manager' && employee.role !== 'superuser') {
-                const reply = `❌ *Permission Denied*\n\nOnly Reporting Managers and Superusers can assign tasks.`;
-                if (shouldSend) await TaskMessagingService.sendMessage(params.phone, reply);
-                return {
-                    success: false,
-                    command: 'assign_task',
-                    employee,
-                    replyText: reply
-                };
-            }
-
-            if (!employee.department_id && employee.role !== 'superuser') {
-                const reply = `⚠️ You are marked as a Reporting Manager, but have no department assigned.`;
-                if (shouldSend) await TaskMessagingService.sendMessage(params.phone, reply);
-                return {
-                    success: false,
-                    command: 'assign_task',
-                    employee,
-                    replyText: reply
-                };
-            }
-
-            // Fetch team members in manager's department
-            const deptEmployees = employee.department_id
-                ? await TaskDatabaseService.getEmployeesByDepartment(employee.department_id)
-                : await TaskDatabaseService.getAllEmployees();
+            // People this person may assign to (the shared rule, same as the web Tasks tab):
+            // themselves, everyone below them in the reporting chain, colleagues when team sharing is ON;
+            // superusers may assign to anyone.
+            const allEmployees = await TaskDatabaseService.getAllEmployees();
+            const deptEmployees = await PermissionService.visibleAndAssignable(employee, allEmployees);
 
             // Match by first name, full name, or ID
             const targetEmployee = deptEmployees.find(e => {
@@ -225,7 +227,20 @@ export class TaskCommandHandler {
 
             if (!targetEmployee) {
                 const availableNames = deptEmployees.map(e => e.name.split(' ')[0]).join(', ');
-                const reply = `❌ *Employee Not Found*\n\nCould not find "${targetNameQuery}" in your department.\n\nAvailable team members: *${availableNames}*\n\n_Example: assign ${deptEmployees[0]?.name.split(' ')[0] || 'Name'} ${taskTitle}_`;
+                const reply = `❌ *Employee Not Found*\n\nCould not find "${targetNameQuery}" among the people who report to you.\n\nAvailable team members: *${availableNames}*\n\n_Example: assign ${deptEmployees[0]?.name.split(' ')[0] || 'Name'} ${taskTitle}_`;
+                if (shouldSend) await TaskMessagingService.sendMessage(params.phone, reply);
+                return {
+                    success: false,
+                    command: 'assign_task',
+                    employee,
+                    replyText: reply
+                };
+            }
+
+            // Access gate (Step 3): the person being assigned must be unlocked too.
+            const targetAccess = await TaskAccessService.check({ userId: targetEmployee.id, departmentId: targetEmployee.department_id });
+            if (!targetAccess.allowed) {
+                const reply = TaskErrorHandler.assigneeLocked(targetEmployee.name, targetAccess.message);
                 if (shouldSend) await TaskMessagingService.sendMessage(params.phone, reply);
                 return {
                     success: false,

@@ -1,13 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { PermissionService, PermissionDeniedError } from '@/task-manager/PermissionService';
 import { TaskProgressService } from '@/task-manager/TaskProgressService';
+import { requireActor } from '../_shared/adminGuard';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
     try {
         const { searchParams } = new URL(request.url);
-        const actorId = searchParams.get('actorId');
+        const auth = await requireActor(searchParams.get('actorId'));
+        if (!auth.ok) return auth.response;
+        const actorId = auth.userId; // always the logged-in person
         const level = parseInt(searchParams.get('level') || '0', 10);
         const date = searchParams.get('date') || new Date().toISOString().slice(0, 10);
         const departmentId = searchParams.get('departmentId');
