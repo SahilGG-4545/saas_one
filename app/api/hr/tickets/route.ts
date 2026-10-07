@@ -150,20 +150,22 @@ export async function GET(request: Request) {
         let myProfile: any = null;
 
         if (userId) {
-            // Fetch caller profile early for identity matching and HR authority checks
-            const { data: profile } = await supabaseAdmin
-                .from('employee_profiles')
-                .select('id, user_id, employee_code, first_name, last_name, email, reporting_manager_id, reporting_manager_code, is_hr_authority, is_hr_manager_authority, designation, department, location')
-                .eq('user_id', userId)
-                .maybeSingle();
-            myProfile = profile;
+            // Fetch caller profile and org memberships concurrently for maximum speed
+            const [profileRes, memsRes] = await Promise.all([
+                supabaseAdmin
+                    .from('employee_profiles')
+                    .select('id, user_id, employee_code, first_name, last_name, email, reporting_manager_id, reporting_manager_code, is_hr_authority, is_hr_manager_authority, designation, department, location')
+                    .eq('user_id', userId)
+                    .maybeSingle(),
+                supabaseAdmin
+                    .from('organization_memberships')
+                    .select('role')
+                    .eq('user_id', userId)
+                    .eq('organization_id', orgId)
+            ]);
 
-            // Check organization_memberships for authoritative org role
-            const { data: mems } = await supabaseAdmin
-                .from('organization_memberships')
-                .select('role')
-                .eq('user_id', userId)
-                .eq('organization_id', orgId);
+            myProfile = profileRes.data;
+            const mems = memsRes.data;
 
             if (mems && mems.some(m => orgSuperAdminRoles.includes((m.role || '').toLowerCase()))) {
                 isOrgSuperAdmin = true;
@@ -201,22 +203,25 @@ export async function GET(request: Request) {
             query = query.or(hrConditions.join(','));
         } else if (userId) {
             // TIER 3: Property Admin, Ops Super Admin, Procurement, BD, MST, Soft Service, Staff, and all other internal roles.
-            // Fetch all employee profiles in the organization to recursively compute direct & indirect sub-reportees
             let empQuery = supabaseAdmin
                 .from('employee_profiles')
                 .select('id, user_id, employee_code, first_name, last_name, email, reporting_manager_id, reporting_manager_code');
             if (orgId) {
                 empQuery = empQuery.or(`organization_id.eq.${orgId},organization_id.is.null`);
             }
-            const { data: allEmps, error: empErr } = await empQuery;
-            if (empErr) console.error('[HR Tickets API] employee_profiles lookup failed; team scope will be empty:', empErr.message);
 
-            const { data: uProfile } = await supabaseAdmin
-                .from('users')
-                .select('full_name, email')
-                .eq('id', userId)
-                .maybeSingle();
+            // Run team scope resolution queries in parallel
+            const [allEmpsRes, uProfileRes, propMemsRes, auditLogsRes] = await Promise.all([
+                empQuery,
+                supabaseAdmin.from('users').select('full_name, email').eq('id', userId).maybeSingle(),
+                supabaseAdmin.from('property_memberships').select('property_id, property:properties(name)').eq('user_id', userId),
+                supabaseAdmin.from('hr_ticket_audit_logs').select('ticket_id').or(`actor_user_id.eq.${userId},old_values->>assigned_to.eq.${userId},new_values->>assigned_to.eq.${userId}`)
+            ]);
 
+            const allEmps = allEmpsRes.data;
+            if (allEmpsRes.error) console.error('[HR Tickets API] employee_profiles lookup failed; team scope will be empty:', allEmpsRes.error.message);
+
+            const uProfile = uProfileRes.data;
             myProfile = (allEmps || []).find(e => e.user_id === userId || (uProfile?.email && e.email && e.email.toLowerCase() === uProfile.email.toLowerCase()));
 
             const profileName = `${myProfile?.first_name || ''} ${myProfile?.last_name || ''}`.trim();
@@ -224,12 +229,7 @@ export async function GET(request: Request) {
             const myName = userFullName || profileName;
             const myEmail = uProfile?.email || myProfile?.email;
 
-            // Fetch property memberships for this user (if any) to also include property-level tickets
-            const { data: propMems } = await supabaseAdmin
-                .from('property_memberships')
-                .select('property_id, property:properties(name)')
-                .eq('user_id', userId);
-
+            const propMems = propMemsRes.data;
             const propIds = (propMems || []).map(p => p.property_id).filter(Boolean);
             const propNames = (propMems || []).map(p => (p.property as any)?.name).filter(Boolean);
 
@@ -247,12 +247,7 @@ export async function GET(request: Request) {
             const teamCodes = Array.from(new Set(recursiveReportees.map(r => r.employee_code).filter(Boolean)));
             const allTeamIds = Array.from(new Set([...teamUserIds, ...teamProfileIds]));
 
-            // Fetch any tickets where this user was involved via audit logs
-            const { data: auditLogs } = await supabaseAdmin
-                .from('hr_ticket_audit_logs')
-                .select('ticket_id')
-                .or(`actor_user_id.eq.${userId},old_values->>assigned_to.eq.${userId},new_values->>assigned_to.eq.${userId}`);
-
+            const auditLogs = auditLogsRes.data;
             const auditTicketIds = (auditLogs || []).map(a => a.ticket_id).filter(Boolean);
 
             const filterConditions: string[] = [
@@ -434,7 +429,7 @@ export async function GET(request: Request) {
             const stepAssignees = flowAssigneesConfig[tType]?.[String(curLvl)] || flowAssigneesConfig[tType]?.[curLvl];
             let currentLevelOwner = '';
             if (Array.isArray(stepAssignees) && stepAssignees.length > 0) {
-                const names = stepAssignees.map(id => profileNameMap.get(id)).filter(Boolean);
+                const names = Array.from(new Set(stepAssignees.map(id => profileNameMap.get(id)).filter(Boolean)));
                 if (names.length > 0) {
                     currentLevelOwner = names.join(' & ');
                 }
@@ -461,7 +456,7 @@ export async function GET(request: Request) {
                     photo_url: t.assigned_to.user_photo_url || null,
                     location: assignedEmp?.location || 'Head Office',
                     department: assignedEmp?.department || 'Operations',
-                    designation: assignedEmp?.designation || assignedEmp?.job_title || 'Level Owner',
+                    designation: assignedEmp?.designation || (assignedEmp as any)?.job_title || 'Level Owner',
                     employee_role: assignedEmp?.designation || 'Level Owner',
                     app_role: assignedEmp?.designation || 'Level Owner',
                     employee_code: assignedEmp?.employee_code || 'N/A'

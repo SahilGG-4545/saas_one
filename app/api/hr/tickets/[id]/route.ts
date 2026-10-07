@@ -270,11 +270,11 @@ export async function GET(
                     .or(filterOr);
                 
                 if (targetProfs && targetProfs.length > 0) {
-                    const names = targetProfs.map(tp => {
+                    const uniqueNames = Array.from(new Set(targetProfs.map(tp => {
                         return (tp.user as any)?.full_name || (tp.user as any)?.email || `${tp.first_name || ''} ${tp.last_name || ''}`.trim();
-                    }).filter(Boolean);
-                    if (names.length > 0) {
-                        assigneeName = names.join(' & ');
+                    }).filter(Boolean)));
+                    if (uniqueNames.length > 0) {
+                        assigneeName = uniqueNames.join(' & ');
                     }
                 }
             }
@@ -291,21 +291,21 @@ export async function GET(
                         .from('employee_profiles')
                         .select('user:users!employee_profiles_user_id_fkey(full_name, email), first_name, last_name')
                         .or('designation.eq.Designated HR Manager,is_hr_manager_authority.eq.true');
-                    const names = (hrMgrs || []).map(p => (p.user as any)?.full_name || (p.user as any)?.email || `${p.first_name || ''} ${p.last_name || ''}`.trim()).filter(Boolean);
+                    const names = Array.from(new Set((hrMgrs || []).map(p => (p.user as any)?.full_name || (p.user as any)?.email || `${p.first_name || ''} ${p.last_name || ''}`.trim()).filter(Boolean)));
                     assigneeName = names.length > 0 ? names.join(' & ') : l2Name;
                 } else if (ownerType === 'hr_head' || (!ownerType && i === 3)) {
                     const { data: hrHeads } = await supabaseAdmin
                         .from('employee_profiles')
                         .select('user:users!employee_profiles_user_id_fkey(full_name, email), first_name, last_name')
                         .eq('is_hr_authority', true);
-                    const names = (hrHeads || []).map(p => (p.user as any)?.full_name || (p.user as any)?.email || `${p.first_name || ''} ${p.last_name || ''}`.trim()).filter(Boolean);
+                    const names = Array.from(new Set((hrHeads || []).map(p => (p.user as any)?.full_name || (p.user as any)?.email || `${p.first_name || ''} ${p.last_name || ''}`.trim()).filter(Boolean)));
                     assigneeName = names.length > 0 ? names.join(' & ') : l3Name;
                 } else if (ownerType === 'director' || ownerType === 'super_admin' || (!ownerType && i === 4)) {
                     const { data: dirs } = await supabaseAdmin
                         .from('employee_profiles')
                         .select('user:users!employee_profiles_user_id_fkey(full_name, email), first_name, last_name')
                         .eq('is_director_authority', true);
-                    const names = (dirs || []).map(p => (p.user as any)?.full_name || (p.user as any)?.email || `${p.first_name || ''} ${p.last_name || ''}`.trim()).filter(Boolean);
+                    const names = Array.from(new Set((dirs || []).map(p => (p.user as any)?.full_name || (p.user as any)?.email || `${p.first_name || ''} ${p.last_name || ''}`.trim()).filter(Boolean)));
                     assigneeName = names.length > 0 ? names.join(' & ') : l4Name;
                 } else {
                     assigneeName = `Level ${i} Authority`;
@@ -394,7 +394,7 @@ export async function GET(
                     avatar_url: photoUrl,
                     location: handlerLocation,
                     department: assignedProfile?.department || 'Operations',
-                    designation: assignedProfile?.designation || assignedProfile?.job_title || 'Level Owner',
+                    designation: assignedProfile?.designation || (assignedProfile as any)?.job_title || 'Level Owner',
                     employee_role: assignedProfile?.designation || 'Level Owner',
                     app_role: appRole,
                     employee_code: handlerEmpCode

@@ -55,6 +55,13 @@ export class TaskMessagingService {
     }
 
     /**
+     * Alias for sendFreeformReply for backwards and caller compatibility.
+     */
+    static async sendFreeformMessage(phone: string, text: string): Promise<boolean> {
+        return this.sendMessage(phone, text);
+    }
+
+    /**
      * Sends an outbound notification via pre-approved template.
      * Required for proactive outbound alerts (e.g. morning task digest) outside the 24h window.
      */

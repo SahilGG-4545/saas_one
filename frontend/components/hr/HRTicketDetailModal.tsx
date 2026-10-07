@@ -902,12 +902,12 @@ export default function HRTicketDetailModal({ isOpen, ticketId, initialTicket, o
                                 </div>
 
                                 {activeTab === 'discussion' ? (
-                                    <div className="flex-1 flex flex-col justify-between gap-3 min-h-[250px]">
+                                    <div className="flex-1 flex flex-col justify-between gap-3 min-h-[220px]">
                                         {/* WhatsApp Chat Area */}
-                                        <div className="space-y-3 max-h-[340px] overflow-y-auto pr-1.5 p-3 rounded-2xl bg-[#efeae2]/60 dark:bg-[#0b141a] border border-slate-200/80 dark:border-slate-800/90 shadow-inner">
+                                        <div className={`space-y-3 p-3 rounded-2xl bg-[#efeae2]/60 dark:bg-[#0b141a] border border-slate-200/80 dark:border-slate-800/90 shadow-inner ${(ticket.comments?.length || 0) > 0 ? 'max-h-[340px] overflow-y-auto pr-1.5' : ''}`}>
                                             {ticket.comments?.length === 0 ? (
-                                                <div className="text-center py-8 space-y-1">
-                                                    <MessageSquare className="w-8 h-8 text-slate-300 dark:text-slate-600 mx-auto" />
+                                                <div className="text-center py-7 space-y-1.5">
+                                                    <MessageSquare className="w-7 h-7 text-slate-300 dark:text-slate-600 mx-auto" />
                                                     <p className="text-xs text-slate-400 font-medium">No messages yet in this conversation.</p>
                                                 </div>
                                             ) : (
@@ -1227,8 +1227,8 @@ export default function HRTicketDetailModal({ isOpen, ticketId, initialTicket, o
                         </div>
 
                         {/* Right Sidebar Section: SLA Timer, Assigned Handler Circle Profile, Employee Snapshot & Lifecycle Actions */}
-                        <div className="w-full md:w-[350px] p-3.5 sm:p-5 bg-slate-50/50 dark:bg-slate-800/30 flex flex-col justify-between gap-5 md:overflow-y-auto shrink-0">
-                            <div className="space-y-5">
+                        <div className="w-full md:w-[350px] p-3.5 sm:p-5 bg-slate-50/50 dark:bg-slate-800/30 flex flex-col gap-4 md:overflow-y-auto shrink-0">
+                            <div className="space-y-4">
                                 {/* SLA / TAT Timer */}
                                 <div className="p-3.5 bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-2 shadow-xs">
                                     <div className="flex items-center justify-between">
@@ -1392,9 +1392,6 @@ export default function HRTicketDetailModal({ isOpen, ticketId, initialTicket, o
                                                 </div>
                                                 <div className="text-[10px] font-bold text-[#587e85] dark:text-[#6c9a9e] leading-tight break-words">
                                                     {ticket.is_anonymous ? 'Confidential Identity' : (ticket.submitter_details?.designation || ticket.employee_snapshot?.designation || 'Staff')}
-                                                </div>
-                                                <div className="text-[10px] text-slate-500 dark:text-slate-400 font-medium leading-tight break-words">
-                                                    {ticket.is_anonymous ? 'Identity Masked' : `Manager: ${ticket.submitter_details?.manager_name || ticket.employee_snapshot?.manager_name || ticket.employee_snapshot?.reporting_manager_name || 'N/A'}`}
                                                 </div>
                                             </div>
                                         </div>
