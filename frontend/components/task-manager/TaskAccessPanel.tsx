@@ -51,6 +51,7 @@ export default function TaskAccessPanel({ orgId }: { orgId?: string }) {
     const [notice, setNotice] = useState<string | null>(null);
     const [provisioned, setProvisioned] = useState(true);
     const [nlGateway, setNlGateway] = useState(false);
+    const [taskImport, setTaskImport] = useState(false);
     const [sharingColumnMissing, setSharingColumnMissing] = useState(false);
     const [notificationsColumnMissing, setNotificationsColumnMissing] = useState(false);
     const [departments, setDepartments] = useState<AccessDepartment[]>([]);
@@ -67,6 +68,7 @@ export default function TaskAccessPanel({ orgId }: { orgId?: string }) {
             if (!res.ok || !data.success) throw new Error(data.error || 'Failed to load access settings');
             setProvisioned(Boolean(data.provisioned));
             setNlGateway(Boolean(data.nlGatewayEnabled));
+            setTaskImport(Boolean(data.taskImportEnabled));
             setSharingColumnMissing(Boolean(data.teamSharingColumnMissing));
             setNotificationsColumnMissing(Boolean(data.notificationsColumnMissing));
             if (data.readable === false) setError('Access settings could not be read. Everyone is treated as locked until this works again.');
@@ -162,6 +164,15 @@ export default function TaskAccessPanel({ orgId }: { orgId?: string }) {
         post('nl-gateway', { action: 'set_nl_gateway', enabled: next });
     };
 
+    const toggleTaskImport = () => {
+        const next = !taskImport;
+        const text = next
+            ? 'Switch task import ON?\n\nEveryone who is unlocked for the Task Manager can then send a task list (an Excel file, or an image / text that says "add tasks"). The bot shows a preview and asks YES before anything is kept. While Pretend Mode is ON no reply is actually sent. While the sandbox is ON only the sandbox numbers can use it.'
+            : 'Switch task import OFF? Files and images go back to being handled exactly as before.';
+        if (!window.confirm(text)) return;
+        post('task-import', { action: 'set_task_import', enabled: next });
+    };
+
     const toggleExpanded = (id: string) => {
         setExpanded(prev => {
             const next = new Set(prev);
@@ -236,6 +247,21 @@ export default function TaskAccessPanel({ orgId }: { orgId?: string }) {
                     className={`px-3.5 py-1.5 rounded-xl font-black text-xs uppercase tracking-wider cursor-pointer disabled:opacity-50 whitespace-nowrap ${nlGateway ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'bg-slate-200 hover:bg-slate-300 text-slate-700'}`}
                 >
                     {nlGateway ? 'ON' : 'OFF'}
+                </button>
+            </div>
+
+            <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                    <p className="font-black text-slate-900">Task import <span className="text-[10px] font-black uppercase tracking-wider text-indigo-700">New</span></p>
+                    <p className="text-slate-600">Unlocked people can send a task list (Excel file, or an image / text that says &ldquo;add tasks&rdquo;). The bot shows a preview and asks YES before anything is kept.</p>
+                </div>
+                <button
+                    type="button"
+                    disabled={busyKey === 'task-import'}
+                    onClick={toggleTaskImport}
+                    className={`px-3.5 py-1.5 rounded-xl font-black text-xs uppercase tracking-wider cursor-pointer disabled:opacity-50 whitespace-nowrap ${taskImport ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'bg-slate-200 hover:bg-slate-300 text-slate-700'}`}
+                >
+                    {taskImport ? 'ON' : 'OFF'}
                 </button>
             </div>
 

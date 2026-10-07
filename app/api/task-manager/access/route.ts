@@ -22,7 +22,7 @@ export async function GET(request: NextRequest) {
 
         const overview = await TaskAccessService.getOverview();
         const config = await TaskDatabaseService.getTestingConfig();
-        return NextResponse.json({ success: true, ...overview, nlGatewayEnabled: config.nlGatewayEnabled === true });
+        return NextResponse.json({ success: true, ...overview, nlGatewayEnabled: config.nlGatewayEnabled === true, taskImportEnabled: config.taskImportEnabled === true });
     } catch (err) {
         console.error('[TaskAccessAPI] GET error:', err);
         return NextResponse.json({ success: false, error: err instanceof Error ? err.message : 'Failed to load access settings' }, { status: 500 });
@@ -103,6 +103,20 @@ export async function POST(request: NextRequest) {
                 message: body.enabled
                     ? 'Natural-language chat is ON for everyone who is unlocked for the Task Manager.'
                     : 'Natural-language chat is OFF. The bot behaves as before.'
+            });
+        }
+
+        // Task Import: read tasks from a sent image / Excel / text (OFF until switched on here)
+        if (body.action === 'set_task_import') {
+            if (typeof body.enabled !== 'boolean') {
+                return NextResponse.json({ success: false, error: 'Missing enabled (true/false)' }, { status: 400 });
+            }
+            await TaskDatabaseService.setTaskImport(body.enabled, guard.label);
+            return NextResponse.json({
+                success: true,
+                message: body.enabled
+                    ? 'Task import is ON for everyone who is unlocked for the Task Manager (and inside the sandbox while it is ON).'
+                    : 'Task import is OFF. Files and images are handled exactly as before.'
             });
         }
 

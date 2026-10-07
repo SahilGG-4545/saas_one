@@ -7,6 +7,7 @@ import { AiSensyService } from '@/backend/services/AiSensyService';
 import { handleFreeformTest } from '@/whatsapp-test/freeformTest';
 import { TaskMessageRouter } from '@/task-manager/TaskMessageRouter';
 import { TaskIdempotencyService } from '@/task-manager/TaskIdempotencyService';
+import { claimTaskImport } from '@/task-manager/TaskImportInbound';
 import { isInterpreterPilot, lookupQuotedContext, getConversationRoutingState } from '@/backend/lib/whatsapp/interpreter/context';
 import { isExplicitTaskCommand, isDirectBookingRequest } from '@/backend/lib/whatsapp/interpreter/coordinator.mjs';
 
@@ -45,6 +46,14 @@ export async function POST(req: NextRequest) {
         hasMedia: !!input?.mediaUrl,
         shape: payloadShape(body),
     }));
+    // Task Import: a task list sent as an Excel file / image / text. Anything that is not an import (or while the
+    // switch is OFF) comes back handled:false and the code below runs exactly as before.
+    const taskImport = await claimTaskImport(body);
+    if (taskImport.handled) {
+        if (taskImport.background) after(async () => { await taskImport.background!(); });
+        return NextResponse.json({ success: true, routedTo: 'TASK_IMPORT' });
+    }
+
     if (!input) return NextResponse.json({ ok: true, ignored: true });
 
     let interpreter = false;

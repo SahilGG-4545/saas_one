@@ -729,6 +729,7 @@ export class TaskDatabaseService {
             killSwitches,
             whatsappPretendMode: raw.whatsappPretendMode !== false,
             nlGatewayEnabled: raw.nlGatewayEnabled === true,
+            taskImportEnabled: raw.taskImportEnabled === true,
         };
     }
 
@@ -771,6 +772,15 @@ export class TaskDatabaseService {
         await this.logAudit({
             event_type: 'nl_gateway_updated',
             details: { nlGatewayEnabled: enabled, actor: actor || null },
+        });
+        return updated;
+    }
+
+    static async setTaskImport(enabled: boolean, actor?: string): Promise<TestingConfig> {
+        const updated = await this.saveTestingConfig({ taskImportEnabled: enabled });
+        await this.logAudit({
+            event_type: 'task_import_switch_updated',
+            details: { taskImportEnabled: enabled, actor: actor || null },
         });
         return updated;
     }
