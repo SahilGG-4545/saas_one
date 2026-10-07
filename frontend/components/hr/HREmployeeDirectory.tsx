@@ -223,6 +223,8 @@ interface HREmployeeDirectoryProps {
 export default function HREmployeeDirectory({ orgId, organizationId, onRefresh }: HREmployeeDirectoryProps) {
     const [employees, setEmployees] = useState<any[]>([]);
     const [allManagers, setAllManagers] = useState<any[]>([]);
+    const [unlinkedUsers, setUnlinkedUsers] = useState<any[]>([]);
+    const [departmentsList, setDepartmentsList] = useState<{ id: string; name: string; code: string }[]>([]);
     const [loading, setLoading] = useState(true);
     const [searchQuery, setSearchQuery] = useState('');
     const [deptFilter, setDeptFilter] = useState('');
@@ -315,6 +317,12 @@ export default function HREmployeeDirectory({ orgId, organizationId, onRefresh }
                 const data = text ? JSON.parse(text) : {};
                 if (data.success) {
                     setAllManagers(data.data || []);
+                    if (data.unlinked_users) {
+                        setUnlinkedUsers(data.unlinked_users);
+                    }
+                    if (data.departments) {
+                        setDepartmentsList(data.departments);
+                    }
                 }
             }
         } catch (err) {
@@ -343,6 +351,12 @@ export default function HREmployeeDirectory({ orgId, organizationId, onRefresh }
                 if (data.success) {
                     const list = data.data || [];
                     setEmployees(list);
+                    if (data.unlinked_users) {
+                        setUnlinkedUsers(data.unlinked_users);
+                    }
+                    if (data.departments) {
+                        setDepartmentsList(data.departments);
+                    }
                     if (!deptFilter && !searchQuery) {
                         setAllManagers(list);
                     }
@@ -423,12 +437,14 @@ export default function HREmployeeDirectory({ orgId, organizationId, onRefresh }
 
     const [showAddModal, setShowAddModal] = useState(false);
     const [newEmpData, setNewEmpData] = useState({
+        user_id: '',
         employee_code: '',
         first_name: '',
         last_name: '',
         email: '',
         contact_number: '',
         department: 'Operations',
+        department_id: '',
         designation: 'Senior Executive',
         location: 'Lower Parel',
         reporting_manager_id: '',
@@ -437,29 +453,71 @@ export default function HREmployeeDirectory({ orgId, organizationId, onRefresh }
     });
     const [adding, setAdding] = useState(false);
 
+    const selectedDeptObj = departmentsList.find(d => 
+        (newEmpData.department_id && d.id === newEmpData.department_id) ||
+        (newEmpData.department && d.name.toLowerCase() === newEmpData.department.toLowerCase())
+    );
+
+    const matchedAppUser = unlinkedUsers.find(u => 
+        (newEmpData.user_id && u.id === newEmpData.user_id) ||
+        (newEmpData.email && u.email && u.email.toLowerCase().trim() === newEmpData.email.toLowerCase().trim())
+    );
+
+    const handleSelectExistingUser = (userId: string) => {
+        if (!userId) {
+            setNewEmpData(prev => ({ ...prev, user_id: '', create_app_account: true }));
+            return;
+        }
+        const selected = unlinkedUsers.find(u => u.id === userId);
+        if (selected) {
+            const nameParts = (selected.full_name || '').trim().split(' ');
+            const fName = nameParts[0] || '';
+            const lName = nameParts.slice(1).join(' ') || '';
+            setNewEmpData(prev => ({
+                ...prev,
+                user_id: selected.id,
+                email: selected.email || prev.email,
+                first_name: fName || prev.first_name,
+                last_name: lName || prev.last_name,
+                contact_number: selected.phone || prev.contact_number,
+                create_app_account: false
+            }));
+        }
+    };
+
     const handleCreateEmployee = async (e: React.FormEvent) => {
         e.preventDefault();
         setAdding(true);
         setSuccessMsg('');
         try {
+            const payload = {
+                ...newEmpData,
+                user_id: newEmpData.user_id || matchedAppUser?.id || undefined,
+                organization_id: orgId || organizationId || '211e1330-ad83-446d-941f-dcea48396798'
+            };
+
             const res = await fetch('/api/hr/admin/employees', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(newEmpData)
+                body: JSON.stringify(payload)
             });
             const text = await res.text();
             let data: any = {};
             try { data = text ? JSON.parse(text) : {}; } catch {}
             if (data.success) {
-                setSuccessMsg(`Employee ${data.data.full_name} (${data.data.employee_code}) onboarded successfully!`);
+                const empName = data.data.full_name || `${data.data.first_name || ''} ${data.data.last_name || ''}`.trim();
+                const linkNotice = data.is_linked || data.data.user_id ? ' (Linked to App Account)' : '';
+                setSuccessMsg(`Employee ${empName} (${data.data.employee_code}) onboarded successfully!${linkNotice}`);
                 setShowAddModal(false);
                 setNewEmpData({
+                    user_id: '',
                     employee_code: '',
                     first_name: '',
                     last_name: '',
                     email: '',
                     contact_number: '',
                     department: 'Operations',
+                    department_id: '',
                     designation: 'Senior Executive',
                     location: 'Lower Parel',
                     reporting_manager_id: '',
@@ -1004,6 +1062,47 @@ export default function HREmployeeDirectory({ orgId, organizationId, onRefresh }
 
                         <form onSubmit={handleCreateEmployee} className="flex flex-col flex-1 min-h-0 text-xs">
                             <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-3.5">
+                                {unlinkedUsers.length > 0 && (
+                                    <div className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-2xl border border-slate-200 dark:border-slate-700/80 space-y-1.5">
+                                        <label className="block text-slate-700 dark:text-slate-300 font-semibold text-xs">
+                                            Link Existing App User (Optional)
+                                        </label>
+                                        <select
+                                            value={newEmpData.user_id}
+                                            onChange={(e) => handleSelectExistingUser(e.target.value)}
+                                            className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-emerald-500 text-xs"
+                                        >
+                                            <option value="">-- Manual Entry or Select App User --</option>
+                                            {unlinkedUsers.map(u => (
+                                                <option key={u.id} value={u.id}>
+                                                    {u.full_name || 'Unnamed'} ({u.email || 'No email'}) {u.phone ? `• ${u.phone}` : ''}
+                                                </option>
+                                            ))}
+                                        </select>
+                                        <div className="text-[11px] text-slate-400">
+                                            Select an existing user from the database to link their ID directly to this HR profile.
+                                        </div>
+                                    </div>
+                                )}
+
+                                {matchedAppUser && (
+                                    <div className="p-2.5 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/80 rounded-xl flex items-center justify-between text-xs text-emerald-800 dark:text-emerald-300 animate-in fade-in duration-150">
+                                        <div className="flex items-center gap-2">
+                                            <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+                                            <div>
+                                                <span className="font-bold">App User Found: </span>
+                                                <span>{matchedAppUser.full_name || matchedAppUser.email}</span>
+                                                <span className="text-[10px] text-emerald-600 dark:text-emerald-400 block font-mono">
+                                                    User ID: {matchedAppUser.id}
+                                                </span>
+                                            </div>
+                                        </div>
+                                        <span className="text-[10px] bg-emerald-100 dark:bg-emerald-900/60 font-bold px-2 py-0.5 rounded-full text-emerald-700 dark:text-emerald-300 shrink-0">
+                                            Will Link ID
+                                        </span>
+                                    </div>
+                                )}
+
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                     <div>
                                         <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">First Name *</label>
@@ -1066,14 +1165,52 @@ export default function HREmployeeDirectory({ orgId, organizationId, onRefresh }
 
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                     <div>
-                                        <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">Department</label>
-                                        <input
-                                            type="text"
-                                            value={newEmpData.department}
-                                            onChange={e => setNewEmpData({ ...newEmpData, department: e.target.value })}
-                                            placeholder="e.g. Operations"
-                                            className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-emerald-500"
-                                        />
+                                        <div className="flex items-center justify-between mb-1">
+                                            <label className="block font-semibold text-slate-700 dark:text-slate-300">Department</label>
+                                            {selectedDeptObj && (
+                                                <span className="text-[10px] font-mono font-semibold px-1.5 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                                                    ID Linked ({selectedDeptObj.code || 'VALID'})
+                                                </span>
+                                            )}
+                                        </div>
+                                        {departmentsList.length > 0 ? (
+                                            <select
+                                                value={newEmpData.department_id || (departmentsList.find(d => d.name.toLowerCase() === (newEmpData.department || '').toLowerCase())?.id || '')}
+                                                onChange={e => {
+                                                    const chosenId = e.target.value;
+                                                    const chosen = departmentsList.find(d => d.id === chosenId);
+                                                    if (chosen) {
+                                                        setNewEmpData({
+                                                            ...newEmpData,
+                                                            department: chosen.name,
+                                                            department_id: chosen.id
+                                                        });
+                                                    } else {
+                                                        setNewEmpData({
+                                                            ...newEmpData,
+                                                            department: chosenId,
+                                                            department_id: ''
+                                                        });
+                                                    }
+                                                }}
+                                                className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-emerald-500 text-xs"
+                                            >
+                                                <option value="">Select Department...</option>
+                                                {departmentsList.map(d => (
+                                                    <option key={d.id} value={d.id}>
+                                                        {d.name} {d.code ? `(${d.code})` : ''}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        ) : (
+                                            <input
+                                                type="text"
+                                                value={newEmpData.department}
+                                                onChange={e => setNewEmpData({ ...newEmpData, department: e.target.value })}
+                                                placeholder="e.g. Operations, Tech..."
+                                                className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-emerald-500"
+                                            />
+                                        )}
                                     </div>
                                     <div>
                                         <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">Designation</label>
@@ -1109,34 +1246,41 @@ export default function HREmployeeDirectory({ orgId, organizationId, onRefresh }
                                     </div>
                                 </div>
 
-                                <div className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl space-y-2 border border-slate-200 dark:border-slate-700">
-                                    <label className="flex items-center gap-2 cursor-pointer">
-                                        <input
-                                            type="checkbox"
-                                            checked={newEmpData.create_app_account}
-                                            onChange={e => setNewEmpData({ ...newEmpData, create_app_account: e.target.checked })}
-                                            className="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500"
-                                        />
-                                        <span className="font-bold text-slate-900 dark:text-white">Create Active App Account Now</span>
-                                    </label>
+                                {matchedAppUser ? (
+                                    <div className="p-3 bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-200/60 dark:border-emerald-800/40 rounded-xl text-xs flex items-center gap-2.5 text-emerald-800 dark:text-emerald-300">
+                                        <UserCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+                                        <span>User account is already active. This HR profile will be linked directly to user ID: <span className="font-mono font-bold">{matchedAppUser.id}</span></span>
+                                    </div>
+                                ) : (
+                                    <div className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl space-y-2 border border-slate-200 dark:border-slate-700">
+                                        <label className="flex items-center gap-2 cursor-pointer">
+                                            <input
+                                                type="checkbox"
+                                                checked={newEmpData.create_app_account}
+                                                onChange={e => setNewEmpData({ ...newEmpData, create_app_account: e.target.checked })}
+                                                className="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500"
+                                            />
+                                            <span className="font-bold text-slate-900 dark:text-white">Create Active App Account Now</span>
+                                        </label>
 
-                                    {newEmpData.create_app_account && (
-                                        <div>
-                                            <label className="block font-semibold text-slate-600 dark:text-slate-400 mb-1">Assign App Role</label>
-                                            <select
-                                                value={newEmpData.role}
-                                                onChange={e => setNewEmpData({ ...newEmpData, role: e.target.value })}
-                                                className="w-full px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
-                                            >
-                                                <option value="staff">Staff / Employee</option>
-                                                <option value="hr">HR Executive</option>
-                                                <option value="hr_head">HR Head</option>
-                                                <option value="property_admin">Property Admin</option>
-                                                <option value="org_super_admin">Org Super Admin</option>
-                                            </select>
-                                        </div>
-                                    )}
-                                </div>
+                                        {newEmpData.create_app_account && (
+                                            <div>
+                                                <label className="block font-semibold text-slate-600 dark:text-slate-400 mb-1">Assign App Role</label>
+                                                <select
+                                                    value={newEmpData.role}
+                                                    onChange={e => setNewEmpData({ ...newEmpData, role: e.target.value })}
+                                                    className="w-full px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                                                >
+                                                    <option value="staff">Staff / Employee</option>
+                                                    <option value="hr">HR Executive</option>
+                                                    <option value="hr_head">HR Head</option>
+                                                    <option value="property_admin">Property Admin</option>
+                                                    <option value="org_super_admin">Org Super Admin</option>
+                                                </select>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
                             </div>
 
                             {/* Footer */}
