@@ -47,17 +47,20 @@ export async function lookupQuotedContext(phone: string, aliases: string[]) {
 // Read both systems without renewing or clearing either conversation.
 export async function getConversationRoutingState(phone: string) {
     const now = new Date();
-    const [task, facility, pending] = await Promise.all([
+    const [task, facility, pending, taskConfig] = await Promise.all([
         supabaseAdmin.from('conversation_context').select('context_data').eq('phone_number',phone).eq('system','TASK_MANAGER')
             .gt('expires_at',now.toISOString()).maybeSingle(),
         supabaseAdmin.from('whatsapp_assistant_sessions').select('state').eq('phone',phone).maybeSingle(),
         supabaseAdmin.from('whatsapp_assistant_events').select('id').eq('phone',phone).contains('payload',{interpreter:true})
             .in('status',['pending','processing','ready']).limit(1),
+        // Step 4: is the Task Manager natural-language front door switched on?
+        supabaseAdmin.from('conversation_context').select('context_data').eq('phone_number','TEST_CONFIG').eq('system','TASK_MANAGER').maybeSingle(),
     ]);
     if (task.error || facility.error || pending.error) throw new Error('Conversation routing unavailable');
     const state = facility.data?.state;
     const active = state?.llmVersion === 1 && state.drafts?.[state.active];
-    return {taskActive:!!task.data, taskChoicePending:task.data?.context_data?.state === 'AWAITING_SYSTEM_CHOICE',
+    const nlGateway = !taskConfig.error && taskConfig.data?.context_data?.nlGatewayEnabled === true;
+    return {nlGateway, taskActive:!!task.data, taskChoicePending:task.data?.context_data?.state === 'AWAITING_SYSTEM_CHOICE',
         facilityActive:!!(active && active.expiresAt > now.getTime()) || !!pending.data?.length};
 }
 

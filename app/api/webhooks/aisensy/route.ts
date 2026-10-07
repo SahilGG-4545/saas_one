@@ -79,7 +79,7 @@ export async function POST(req: NextRequest) {
         !/^(hi|hello|hey|menu|help|options|create ticket|book meeting room|confirm booking|submit ticket|add photo|no photo|remove photo|without photo)$/i.test(input.text.trim())) {
         try {
             const contexts = await getConversationRoutingState(input.phone);
-            if (/^(facility|fms|helpdesk|facility\s*bot)$/i.test(input.text.trim()) || (contexts.taskActive && !contexts.facilityActive)) {
+            if (/^(facility|fms|helpdesk|facility\s*bot)$/i.test(input.text.trim()) || ((contexts.taskActive || contexts.nlGateway) && !contexts.facilityActive)) {
                 const classification = await TaskMessageRouter.classifyMessage(input.phone,input.text);
                 explicitTask = classification.system !== 'FACILITY' || classification.isExplicitSwitch;
             }

@@ -1,6 +1,7 @@
 import { TaskDatabaseService } from './TaskDatabaseService';
 import { TaskMessagingService } from './TaskMessagingService';
 import { TaskDailyGeneratorService } from './TaskDailyGeneratorService';
+import { TaskAccessService } from './TaskAccessService';
 import { Employee, TaskAssignment, NotificationRule } from './types';
 
 export interface MorningNotificationOptions {
@@ -8,6 +9,7 @@ export interface MorningNotificationOptions {
     departmentId?: string;
     employeeId?: string;
     dryRun?: boolean; // If true, builds digests without sending network requests
+    skipAudit?: boolean; // Step 6: previews write no history rows
     rule?: NotificationRule; // Phase 2: rule containing task selection filters & conditions
 }
 
@@ -18,13 +20,16 @@ export interface MorningNotificationResult {
     notificationsSent: number;
     skippedNoTasks: number;
     skippedNoPhone: number;
+    skippedLocked?: number;  // Step 3: people whose department is OFF or whose kickoff is not recorded
     failed: number;
+    pretend?: boolean;       // true when Pretend Mode simulated the run (nothing was sent)
+    blockedReason?: string;  // set when a kill switch / safety failure stopped the run
     details: Array<{
         employeeId: string;
         employeeName: string;
         phone: string;
         taskCount: number;
-        status: 'sent' | 'skipped_no_tasks' | 'skipped_no_phone' | 'failed';
+        status: 'sent' | 'skipped_no_tasks' | 'skipped_no_phone' | 'skipped_locked' | 'failed';
         error?: string;
         digestPreview?: string;
     }>;
@@ -319,15 +324,33 @@ export class TaskNotificationService {
             }
         }
 
-        // Phase 2: Kill Switch Pre-Check (Halt dispatch if global or department kill switch is engaged)
+        // Step 3 access gate: only people whose department is ON and whose kickoff is recorded may be notified.
+        // Applies to real runs AND simulations, so a dry-run shows the true audience.
+        const accessSplit = await TaskAccessService.partition(employees);
+        employees = accessSplit.allowed;
+        const lockedCount = accessSplit.locked.length;
+        for (const { employee: lockedEmp, decision } of accessSplit.locked) {
+            details.push({
+                employeeId: lockedEmp.id,
+                employeeName: lockedEmp.name,
+                phone: lockedEmp.phone_number || '',
+                taskCount: 0,
+                status: 'skipped_locked',
+                error: decision.message
+            });
+        }
+
+        // Safety gate (fails closed): kill switches first, then Pretend Mode.
+        // Pretend Mode behaves exactly like a dry-run: previews are built and logged, nothing is sent.
+        let pretend = false;
         if (!options.dryRun) {
-            const gatekeeper = await TaskMessagingService.isMessagingAllowed({
+            const gate = await TaskMessagingService.resolveSendMode({
                 departmentId: options.departmentId,
                 ruleType: options.rule?.ruleType,
             });
 
-            if (!gatekeeper.allowed) {
-                console.warn(`[TaskNotificationService] 🛑 Dispatch halted by Kill Switch: ${gatekeeper.reason}`);
+            if (gate.mode === 'blocked') {
+                console.warn(`[TaskNotificationService] 🛑 Dispatch halted by Kill Switch: ${gate.reason}`);
                 return {
                     success: false,
                     date: targetDate,
@@ -335,18 +358,22 @@ export class TaskNotificationService {
                     notificationsSent: 0,
                     skippedNoTasks: 0,
                     skippedNoPhone: 0,
+                    skippedLocked: lockedCount,
                     failed: 0,
+                    blockedReason: gate.reason,
                     details: [{
                         employeeId: 'all',
                         employeeName: 'System Gatekeeper',
                         phone: '',
                         taskCount: 0,
                         status: 'failed',
-                        digestPreview: `[BLOCKED BY KILL SWITCH] ${gatekeeper.reason}`
+                        digestPreview: `[BLOCKED BY KILL SWITCH] ${gate.reason}`
                     }]
                 };
             }
+            pretend = gate.mode === 'pretend';
         }
+        const simulate = Boolean(options.dryRun) || pretend;
 
         let sentCount = 0;
         let skippedNoTasksCount = 0;
@@ -411,7 +438,7 @@ export class TaskNotificationService {
             // Format message based on rule and customTemplate
             const digest = this.buildFormattedDigest(options.rule, emp.name, tasks, targetDate);
 
-            if (options.dryRun) {
+            if (simulate) {
                 sentCount++;
                 details.push({
                     employeeId: emp.id,
@@ -422,8 +449,8 @@ export class TaskNotificationService {
                     digestPreview: digest
                 });
 
-                // Log audit event for simulated dispatch
-                await TaskDatabaseService.logAudit({
+                // Log audit event for simulated dispatch (previews write nothing)
+                if (!options.skipAudit) await TaskDatabaseService.logAudit({
                     eventType: 'whatsapp_sent',
                     actorId: emp.id,
                     targetEmployeeId: emp.id,
@@ -437,6 +464,7 @@ export class TaskNotificationService {
                         date: targetDate,
                         dryRun: true,
                         status: 'simulated',
+                        pretend,
                         preview: digest
                     }
                 });
@@ -532,7 +560,9 @@ export class TaskNotificationService {
             notificationsSent: sentCount,
             skippedNoTasks: skippedNoTasksCount,
             skippedNoPhone: skippedNoPhoneCount,
+            skippedLocked: lockedCount,
             failed: failedCount,
+            pretend,
             details
         };
     }

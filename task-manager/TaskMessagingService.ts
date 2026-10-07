@@ -1,10 +1,26 @@
 import { AiSensyService } from '@/backend/services/AiSensyService';
 import { TaskDatabaseService } from './TaskDatabaseService';
+import type { WhatsAppKillSwitches } from './types';
 import { providerIds } from '@/backend/lib/whatsapp/interpreter/delivery.mjs';
 import { recordOutgoingContext } from '@/backend/lib/whatsapp/interpreter/context';
 import { randomUUID } from 'node:crypto';
 
 const PROJECT_API_BASE = 'https://apis.aisensy.com/project-apis/v1/project';
+
+/** 'send' = deliver to WhatsApp, 'pretend' = save to history only, 'blocked' = stopped by a kill switch / safety failure */
+export type SendMode = 'send' | 'pretend' | 'blocked';
+
+export interface SendControls {
+    killSwitches: WhatsAppKillSwitches;
+    pretendMode: boolean;
+}
+
+export interface GateOptions {
+    departmentId?: string;
+    ruleType?: string;
+    messageType?: string;
+    bypassKillSwitch?: boolean; // Bypasses kill switches only. NEVER bypasses Pretend Mode.
+}
 
 export class TaskMessagingService {
     private static formatPhone(phone: string): string {
@@ -13,38 +29,31 @@ export class TaskMessagingService {
         return digits;
     }
 
+    private static maskPhone(phone: string): string {
+        const digits = phone.replace(/\D/g, '');
+        return digits.length > 4 ? `${'•'.repeat(digits.length - 4)}${digits.slice(-4)}` : '••••';
+    }
+
     /**
-     * Phase 2: Central WhatsApp Gatekeeper
-     * Enforces the multi-level kill switch hierarchy:
-     * 1. Global Kill Switch: Blocks ALL automated messaging company-wide
-     * 2. Department Kill Switch: Blocks messaging for a specific department
-     * 3. Message-Type Kill Switch: Blocks specific message categories (morning_digest, pending_reminder, eod_summary, kickoffs)
+     * Pure decision function (no I/O) so the safety rules can be unit-tested offline.
+     * Order: kill switches first (global → department → message type), then Pretend Mode.
      */
-    static async isMessagingAllowed(options?: {
-        departmentId?: string;
-        ruleType?: string;
-        messageType?: string;
-        bypassKillSwitch?: boolean;
-    }): Promise<{ allowed: boolean; reason?: string }> {
-        if (options?.bypassKillSwitch) {
-            return { allowed: true };
-        }
+    static decideSendMode(controls: SendControls, options?: GateOptions): { mode: SendMode; reason?: string } {
+        const killSwitches = controls.killSwitches;
 
-        try {
-            const killSwitches = await TaskDatabaseService.getKillSwitches();
-
+        if (!options?.bypassKillSwitch) {
             // 1. Global Emergency Kill Switch
             if (killSwitches.globalHalt) {
                 const reason = killSwitches.haltReason
                     ? `Global Kill Switch ACTIVE: ${killSwitches.haltReason}`
                     : 'Global Kill Switch ACTIVE: All automated WhatsApp messaging is halted company-wide.';
-                return { allowed: false, reason };
+                return { mode: 'blocked', reason };
             }
 
             // 2. Department-Level Kill Switch
             if (options?.departmentId && killSwitches.departmentHalt?.[options.departmentId]) {
                 return {
-                    allowed: false,
+                    mode: 'blocked',
                     reason: `Department Kill Switch ACTIVE: WhatsApp messaging is currently paused for this department.`
                 };
             }
@@ -55,26 +64,91 @@ export class TaskMessagingService {
                 const isHalted = (killSwitches.messageTypeHalt as Record<string, boolean | undefined>)[rawType];
                 if (isHalted) {
                     return {
-                        allowed: false,
+                        mode: 'blocked',
                         reason: `Message Category Kill Switch ACTIVE: Notifications of type '${rawType}' are currently paused.`
                     };
                 }
             }
-
-            return { allowed: true };
-        } catch (err: any) {
-            console.error('[TaskMessagingService] Error checking kill switch gatekeeper:', err?.message);
-            // Default to safe behavior if gatekeeper check fails unexpectedly
-            return { allowed: true };
         }
+
+        // 4. Pretend Mode: nothing is delivered, the message is only saved to history
+        if (controls.pretendMode) {
+            return { mode: 'pretend', reason: 'Pretend Mode is ON: message was saved to history and NOT sent.' };
+        }
+
+        return { mode: 'send' };
     }
 
     /**
-     * Sends a direct free-form WhatsApp message inside the 24-hour service window.
-     * Uses the AiSensy Project (Direct) API proven in whatsapp-test/freeformTest.ts.
-     * Enables rich, dynamic WhatsApp responses without needing pre-approved templates.
+     * Central WhatsApp gate. FAILS CLOSED: if the safety settings cannot be read, nothing is sent.
      */
-    static async sendFreeformReply(phone: string, text: string): Promise<boolean> {
+    static async resolveSendMode(options?: GateOptions): Promise<{ mode: SendMode; reason?: string }> {
+        let controls: SendControls;
+        try {
+            controls = await TaskDatabaseService.getSendControls();
+        } catch (err: any) {
+            console.error('[TaskMessagingService] Could not read WhatsApp safety settings; withholding message:', err?.message);
+            return { mode: 'blocked', reason: 'Safety settings could not be read; sending is withheld as a precaution.' };
+        }
+        return this.decideSendMode(controls, options);
+    }
+
+    /**
+     * Back-compat wrapper. `allowed` is true for both 'send' and 'pretend' (nothing reaches WhatsApp in pretend);
+     * use resolveSendMode() when you need to know which one it is.
+     */
+    static async isMessagingAllowed(options?: GateOptions): Promise<{ allowed: boolean; reason?: string }> {
+        const gate = await this.resolveSendMode(options);
+        return gate.mode === 'blocked' ? { allowed: false, reason: gate.reason } : { allowed: true };
+    }
+
+    /** Saves a "would have been sent" record so the admin can read exactly what the user would have received. */
+    private static async logPretend(params: {
+        phone: string;
+        preview: string;
+        options?: GateOptions;
+    }): Promise<void> {
+        const type = params.options?.ruleType || params.options?.messageType || 'bot_reply';
+        await TaskDatabaseService.logAudit({
+            eventType: 'whatsapp_sent',
+            details: {
+                type,
+                ruleName: type === 'bot_reply' ? 'Bot reply' : type,
+                employeeName: 'WhatsApp recipient',
+                phone: this.maskPhone(params.phone),
+                departmentId: params.options?.departmentId || null,
+                dryRun: true,
+                status: 'simulated',
+                pretend: true,
+                preview: params.preview,
+            },
+        });
+    }
+
+    private static async logBlocked(phone: string, reason: string | undefined, options?: GateOptions): Promise<void> {
+        await TaskDatabaseService.logAudit({
+            event_type: 'whatsapp_blocked_by_kill_switch',
+            actor_id: null,
+            target_employee_id: null,
+            task_id: null,
+            details: {
+                phone: this.maskPhone(phone),
+                reason,
+                departmentId: options?.departmentId,
+                ruleType: options?.ruleType,
+                messageType: options?.messageType || options?.ruleType,
+                blockedAt: new Date().toISOString(),
+            },
+        }).catch(err => {
+            console.warn('[TaskMessagingService] Failed to record blocked-message audit log:', err?.message);
+        });
+    }
+
+    /**
+     * Raw network call to the AiSensy Project (Direct) API. Private on purpose:
+     * every caller must pass through the gate in sendMessage / sendFreeformReply.
+     */
+    private static async postFreeform(phone: string, text: string): Promise<boolean> {
         const destination = this.formatPhone(phone);
         const projectId = process.env.AISENSY_PROJECT_ID;
         const password = process.env.AISENSY_PROJECT_API_KEY;
@@ -119,6 +193,40 @@ export class TaskMessagingService {
         }
     }
 
+    /** Raw template call. Private on purpose: callers must pass through the gate. */
+    private static async postTemplate(params: {
+        phone: string;
+        campaignName?: string;
+        templateParams: string[];
+    }): Promise<boolean> {
+        const campaignName = params.campaignName || this.getCampaignForRuleType();
+        const res = await AiSensyService.sendTemplate({
+            phone: params.phone,
+            campaignName,
+            templateParams: params.templateParams,
+        });
+        if (res.success && res.messageIds?.length) await recordOutgoingContext(this.formatPhone(params.phone),res.messageIds,{workflow:'task',conversationId:randomUUID()})
+            .catch(() => console.warn('[TaskMessagingService] Template reply context could not be saved'));
+        return res.success;
+    }
+
+    /**
+     * Sends a direct free-form WhatsApp message inside the 24-hour service window.
+     * Gated: honours kill switches and Pretend Mode.
+     */
+    static async sendFreeformReply(phone: string, text: string): Promise<boolean> {
+        const gate = await this.resolveSendMode();
+        if (gate.mode === 'blocked') {
+            await this.logBlocked(phone, gate.reason);
+            return false;
+        }
+        if (gate.mode === 'pretend') {
+            await this.logPretend({ phone, preview: text });
+            return true;
+        }
+        return this.postFreeform(phone, text);
+    }
+
     /**
      * Resolves the Meta-approved campaign name corresponding to the notification rule type.
      * Supports environment variable overrides and falls back to the newly approved dedicated templates.
@@ -140,27 +248,70 @@ export class TaskMessagingService {
 
     /**
      * Sends an outbound notification via pre-approved template.
-     * Required for proactive outbound alerts (e.g. morning task digest) outside the 24h window.
+     * Gated: honours kill switches and Pretend Mode.
      */
     static async sendTemplateNotification(params: {
         phone: string;
         campaignName?: string;
         templateParams: string[];
     }): Promise<boolean> {
-        const campaignName = params.campaignName || this.getCampaignForRuleType();
+        const gate = await this.resolveSendMode();
+        if (gate.mode === 'blocked') {
+            await this.logBlocked(params.phone, gate.reason);
+            return false;
+        }
+        if (gate.mode === 'pretend') {
+            await this.logPretend({
+                phone: params.phone,
+                preview: `[Template ${params.campaignName || this.getCampaignForRuleType()}] ${params.templateParams.join(' | ')}`,
+            });
+            return true;
+        }
+        return this.postTemplate(params);
+    }
+
+    /**
+     * Onboarding kickoff templates (manager / employee). Same gate as every other message.
+     * Returns `pretend: true` when nothing was delivered, so callers must NOT record the kickoff as sent.
+     */
+    static async sendKickoffTemplate(params: {
+        phone: string;
+        campaignName: string;
+        templateParams: string[];
+        departmentId?: string | null;
+        messageType: 'manager_kickoff' | 'employee_kickoff';
+    }): Promise<{ success: boolean; pretend?: boolean; blocked?: boolean; error?: string }> {
+        const gateOptions: GateOptions = {
+            departmentId: params.departmentId || undefined,
+            messageType: params.messageType,
+        };
+        const gate = await this.resolveSendMode(gateOptions);
+
+        if (gate.mode === 'blocked') {
+            await this.logBlocked(params.phone, gate.reason, gateOptions);
+            return { success: false, blocked: true, error: gate.reason };
+        }
+
+        if (gate.mode === 'pretend') {
+            await this.logPretend({
+                phone: params.phone,
+                preview: `[Template ${params.campaignName}] ${params.templateParams.join(' | ')}`,
+                options: gateOptions,
+            });
+            return { success: true, pretend: true };
+        }
+
         const res = await AiSensyService.sendTemplate({
             phone: params.phone,
-            campaignName,
+            campaignName: params.campaignName,
             templateParams: params.templateParams,
         });
-        if (res.success && res.messageIds?.length) await recordOutgoingContext(this.formatPhone(params.phone),res.messageIds,{workflow:'task',conversationId:randomUUID()})
-            .catch(() => console.warn('[TaskMessagingService] Template reply context could not be saved'));
-        return res.success;
+        return { success: res.success, error: res.success ? undefined : (res.error || 'Failed to dispatch template') };
     }
 
     /**
      * Unified message dispatcher:
-     * 1. Evaluates Phase 2 Kill Switch gatekeeper.
+     * 1. Evaluates the gate once (kill switches, then Pretend Mode; fails closed).
      * 2. Attempts freeform reply first (within 24h session window).
      * 3. Falls back to Meta-approved template campaign if freeform fails.
      */
@@ -176,33 +327,20 @@ export class TaskMessagingService {
             bypassKillSwitch?: boolean;
         }
     ): Promise<boolean> {
-        // Phase 2 Gatekeeper Check
-        const gatekeeper = await this.isMessagingAllowed(options);
-        if (!gatekeeper.allowed) {
-            console.warn(`[TaskMessagingService] 🛑 Message to ${phone} blocked: ${gatekeeper.reason}`);
-            
-            // Record safety audit log
-            await TaskDatabaseService.logAudit({
-                event_type: 'whatsapp_blocked_by_kill_switch',
-                actor_id: null,
-                target_employee_id: null,
-                task_id: null,
-                details: {
-                    phone,
-                    reason: gatekeeper.reason,
-                    departmentId: options?.departmentId,
-                    ruleType: options?.ruleType,
-                    messageType: options?.messageType || options?.ruleType,
-                    blockedAt: new Date().toISOString(),
-                },
-            }).catch(err => {
-                console.warn('[TaskMessagingService] Failed to record kill switch audit log:', err?.message);
-            });
+        const gate = await this.resolveSendMode(options);
 
+        if (gate.mode === 'blocked') {
+            console.warn(`[TaskMessagingService] 🛑 Message to ${this.maskPhone(phone)} blocked: ${gate.reason}`);
+            await this.logBlocked(phone, gate.reason, options);
             return false;
         }
 
-        const sent = await this.sendFreeformReply(phone, text);
+        if (gate.mode === 'pretend') {
+            await this.logPretend({ phone, preview: text, options });
+            return true;
+        }
+
+        const sent = await this.postFreeform(phone, text);
         if (sent) return true;
 
         // Fallback to Meta-approved template if outside 24h window or freeform fails
@@ -211,7 +349,7 @@ export class TaskMessagingService {
             ? options.templateParams
             : [text];
 
-        return this.sendTemplateNotification({
+        return this.postTemplate({
             phone,
             campaignName,
             templateParams: params,
@@ -222,4 +360,3 @@ export class TaskMessagingService {
         return this.sendMessage(phone, text);
     }
 }
-

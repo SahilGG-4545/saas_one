@@ -16,7 +16,8 @@ function context({task=null,state=null,pending=[],error=null}={}){
 test('routing reads recipient-scoped state without modifying Task Manager or facility contexts',async()=>{
     const app=context({task:{context_data:{state:'AWAITING_SYSTEM_CHOICE'}},state:{llmVersion:1,active:'booking',drafts:{booking:{expiresAt:Date.now()+60000}}}});
     const result=await app.read('919000000000');assert.equal(result.taskActive,true);assert.equal(result.taskChoicePending,true);assert.equal(result.facilityActive,true);
-    assert.deepEqual(app.reads.filter(([_table,field])=>field==='phone'||field==='phone_number').map(([_table,_field,phone])=>phone),['919000000000','919000000000','919000000000']);
+    // The one global read is the Task Manager settings row (Step 4 gateway switch); every recipient-scoped read must still use the recipient's phone.
+    assert.deepEqual(app.reads.filter(([_table,field,phone])=>(field==='phone'||field==='phone_number')&&phone!=='TEST_CONFIG').map(([_table,_field,phone])=>phone),['919000000000','919000000000','919000000000']);
 });
 test('expired facility drafts release task routing but pending pilot events reserve their conversation',async()=>{
     const options={task:{context_data:{}},state:{llmVersion:1,active:'booking',drafts:{booking:{expiresAt:Date.now()-1000}}}};

@@ -1,4 +1,6 @@
 import { TaskDatabaseService } from './TaskDatabaseService';
+import { HierarchyService } from './HierarchyService';
+import { TaskAccessService } from './TaskAccessService';
 import { Employee, EmployeeRole, TaskAssignment } from './types';
 
 export class PermissionDeniedError extends Error {
@@ -16,6 +18,34 @@ export class PermissionDeniedError extends Error {
 
 export class PermissionService {
     /**
+     * Step 2C: true when `targetId` is anywhere BELOW `actorId` in the reporting chain
+     * (employee_profiles.reporting_manager_id), direct or indirect.
+     */
+    private static async isBelowInChain(actorId: string, targetId: string): Promise<boolean> {
+        const { hierarchy } = await HierarchyService.load();
+        return hierarchy.canAssign(actorId, targetId);
+    }
+
+    /**
+     * Step 5 — THE shared rule for "whose tasks may this person see or assign to".
+     * Used by the web Tasks tab AND the WhatsApp commands so they can never disagree.
+     *   - superuser: everyone
+     *   - everyone else: themselves, everyone below them in the reporting chain,
+     *     and (only when "team sharing" is ON for their department) their department colleagues.
+     */
+    static async visibleAndAssignable(actor: Employee, candidates: Employee[]): Promise<Employee[]> {
+        if (actor.role === 'superuser') return candidates;
+        const { hierarchy } = await HierarchyService.load();
+        const below = new Set(hierarchy.allReports(actor.id).map(p => p.userId));
+        const sharing = await TaskAccessService.isPeerAssignEnabled(actor.department_id);
+        return candidates.filter(e =>
+            e.id === actor.id ||
+            below.has(e.id) ||
+            (sharing && !!actor.department_id && e.department_id === actor.department_id)
+        );
+    }
+
+    /**
      * Resolves the actor's employee profile and task role.
      */
     static async getActor(actorId: string): Promise<Employee> {
@@ -28,8 +58,8 @@ export class PermissionService {
 
     /**
      * Validates if the actor is permitted to read an assigned task.
-     * - Employee: Own tasks only
-     * - Manager: Own department tasks
+     * - Anyone: Own tasks
+     * - Managers: tasks of everyone below them in the reporting chain
      * - Superuser: Any task
      */
     static async assertCanReadTask(actorId: string, task: TaskAssignment): Promise<void> {
@@ -39,19 +69,16 @@ export class PermissionService {
 
         if (task.employee_id === actor.id) return;
 
-        if (actor.role === 'reporting_manager') {
-            const taskOwner = await TaskDatabaseService.getEmployeeById(task.employee_id);
-            if (taskOwner && taskOwner.department_id && taskOwner.department_id === actor.department_id) {
-                return;
-            }
-        }
+        // Anyone below the actor in the reporting chain, or a colleague when team sharing is ON
+        const owner = await TaskDatabaseService.getEmployeeById(task.employee_id);
+        if (owner && (await this.visibleAndAssignable(actor, [owner])).length === 1) return;
 
         await TaskDatabaseService.logAudit({
             eventType: 'permission_denied',
             actorId: actor.id,
             targetEmployeeId: task.employee_id,
             taskId: task.id,
-            details: { action: 'READ_TASK', reason: 'Not task owner or department manager' }
+            details: { action: 'READ_TASK', reason: 'Not task owner or above them in the reporting chain' }
         });
 
         throw new PermissionDeniedError('READ_TASK', actorId, 'You do not have permission to view this task.');
@@ -59,8 +86,8 @@ export class PermissionService {
 
     /**
      * Validates if the actor is permitted to complete or update status of a task.
-     * - Employee: Can complete their own task
-     * - Manager: Can update tasks within their own department
+     * - Anyone: Can complete their own task
+     * - Managers: Can update tasks of everyone below them in the reporting chain
      * - Superuser: Can update any task
      */
     static async assertCanCompleteTask(actorId: string, task: TaskAssignment): Promise<void> {
@@ -70,12 +97,8 @@ export class PermissionService {
 
         if (task.employee_id === actor.id) return;
 
-        if (actor.role === 'reporting_manager') {
-            const taskOwner = await TaskDatabaseService.getEmployeeById(task.employee_id);
-            if (taskOwner && taskOwner.department_id && taskOwner.department_id === actor.department_id) {
-                return;
-            }
-        }
+        // Anyone below the actor in the reporting chain (direct or indirect)
+        if (await this.isBelowInChain(actor.id, task.employee_id)) return;
 
         await TaskDatabaseService.logAudit({
             eventType: 'permission_denied',
@@ -90,9 +113,9 @@ export class PermissionService {
 
     /**
      * Validates if the actor is permitted to assign a task to a target employee.
-     * - Employee: Cannot assign tasks to anyone
-     * - Manager: Can ONLY assign to employees in their OWN department
      * - Superuser: Can assign to any employee across the entire organization
+     * - Everyone else: Can assign only to people BELOW them in the reporting chain
+     *   (employee_profiles.reporting_manager_id, direct or indirect). No reports = cannot assign.
      */
     static async assertCanAssignTask(actorId: string, targetEmployeeId: string): Promise<{ actor: Employee; target: Employee }> {
         const actor = await this.getActor(actorId);
@@ -106,36 +129,8 @@ export class PermissionService {
             return { actor, target };
         }
 
-        if (actor.role === 'reporting_manager') {
-            if (!actor.department_id) {
-                await TaskDatabaseService.logAudit({
-                    eventType: 'permission_denied',
-                    actorId: actor.id,
-                    targetEmployeeId: target.id,
-                    details: { action: 'ASSIGN_TASK', reason: 'Reporting manager has no department assigned' }
-                });
-                throw new PermissionDeniedError('ASSIGN_TASK', actorId, 'Reporting manager is not assigned to a department.');
-            }
-
-            if (target.department_id !== actor.department_id) {
-                await TaskDatabaseService.logAudit({
-                    eventType: 'permission_denied',
-                    actorId: actor.id,
-                    targetEmployeeId: target.id,
-                    details: {
-                        action: 'ASSIGN_TASK',
-                        reason: 'Cross-department assignment prohibited',
-                        actorDept: actor.department_id,
-                        targetDept: target.department_id
-                    }
-                });
-                throw new PermissionDeniedError(
-                    'ASSIGN_TASK',
-                    actorId,
-                    `Reporting Managers can only assign tasks to employees in their own department.`
-                );
-            }
-
+        // Step 2C + Step 5: yourself, anyone below you in the chain, or a colleague when team sharing is ON.
+        if ((await this.visibleAndAssignable(actor, [target])).length === 1) {
             return { actor, target };
         }
 
@@ -144,10 +139,10 @@ export class PermissionService {
             eventType: 'permission_denied',
             actorId: actor.id,
             targetEmployeeId: target.id,
-            details: { action: 'ASSIGN_TASK', reason: 'Employees cannot assign tasks' }
+            details: { action: 'ASSIGN_TASK', reason: 'Target is not below the actor in the reporting chain' }
         });
 
-        throw new PermissionDeniedError('ASSIGN_TASK', actorId, 'Standard employees cannot assign tasks.');
+        throw new PermissionDeniedError('ASSIGN_TASK', actorId, 'You can only assign tasks to people who report to you (directly or indirectly).');
     }
 
     /**

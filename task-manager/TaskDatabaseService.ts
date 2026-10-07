@@ -727,7 +727,64 @@ export class TaskDatabaseService {
             cronLastRunSummary: raw.cronLastRunSummary || null,
             rules,
             killSwitches,
+            whatsappPretendMode: raw.whatsappPretendMode !== false,
+            nlGatewayEnabled: raw.nlGatewayEnabled === true,
         };
+    }
+
+    /**
+     * Strict reader used ONLY by the WhatsApp send gate.
+     * Unlike getTestingConfig(), a database error is thrown (never swallowed), so the gate can fail closed.
+     * Pretend Mode is ON unless it was explicitly switched off.
+     */
+    static async getSendControls(): Promise<{ killSwitches: WhatsAppKillSwitches; pretendMode: boolean }> {
+        const { data, error } = await supabaseAdmin
+            .from('conversation_context')
+            .select('context_data')
+            .eq('phone_number', 'TEST_CONFIG')
+            .eq('system', 'TASK_MANAGER')
+            .maybeSingle();
+
+        if (error) throw error;
+
+        const raw = (data?.context_data as any) || {};
+        const defaults = this.getDefaultKillSwitches();
+        return {
+            killSwitches: {
+                ...defaults,
+                ...(raw.killSwitches || {}),
+                departmentHalt: {
+                    ...(defaults.departmentHalt || {}),
+                    ...(raw.killSwitches?.departmentHalt || {}),
+                },
+                messageTypeHalt: {
+                    ...(defaults.messageTypeHalt || {}),
+                    ...(raw.killSwitches?.messageTypeHalt || {}),
+                },
+            },
+            pretendMode: raw.whatsappPretendMode !== false,
+        };
+    }
+
+    static async setNaturalLanguageGateway(enabled: boolean, actor?: string): Promise<TestingConfig> {
+        const updated = await this.saveTestingConfig({ nlGatewayEnabled: enabled });
+        await this.logAudit({
+            event_type: 'nl_gateway_updated',
+            details: { nlGatewayEnabled: enabled, actor: actor || null },
+        });
+        return updated;
+    }
+
+    static async setPretendMode(enabled: boolean, actor?: string): Promise<TestingConfig> {
+        const updated = await this.saveTestingConfig({ whatsappPretendMode: enabled });
+        await this.logAudit({
+            event_type: 'pretend_mode_updated',
+            actor_id: null,
+            target_employee_id: null,
+            task_id: null,
+            details: { pretendMode: enabled, actor: actor || null },
+        });
+        return updated;
     }
 
     static async saveTestingConfig(config: Partial<TestingConfig>): Promise<TestingConfig> {
