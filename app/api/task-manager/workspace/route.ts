@@ -8,7 +8,7 @@ export const dynamic = 'force-dynamic';
 /**
  * Step 5 — the Procurement "Tasks" tab.
  *   GET  /api/task-manager/workspace?date=YYYY-MM-DD[&department=Procurement]
- *   POST /api/task-manager/workspace   { action: 'assign' | 'set_status', ... }
+ *   POST /api/task-manager/workspace   { action: 'assign' | 'set_status' | 'hand_over', ... }
  *
  * WHO is acting always comes from the signed-in session. The request body can never name the actor,
  * so nobody can act as someone else (unlike the older /tasks route that trusts an actorId).
@@ -60,6 +60,11 @@ export async function POST(request: NextRequest) {
                 date: body.date,
             });
             return NextResponse.json({ success: true, task });
+        }
+
+        if (body.action === 'hand_over') {
+            const result = await WorkspaceService.handOver(userId, { taskId: body.taskId, targetUserId: body.targetUserId });
+            return NextResponse.json({ success: true, task: result.task, toName: result.toName });
         }
 
         if (body.action === 'set_status') {

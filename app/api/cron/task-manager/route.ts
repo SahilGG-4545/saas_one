@@ -4,6 +4,7 @@ import { TaskNotificationService } from '@/task-manager/TaskNotificationService'
 import { TaskDatabaseService } from '@/task-manager/TaskDatabaseService';
 import { TaskMessagingService } from '@/task-manager/TaskMessagingService';
 import { evaluateRuleSchedule } from '@/task-manager/NotificationSchedule';
+import { SuperuserPingService } from '@/task-manager/SuperuserPingService';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -45,6 +46,10 @@ async function handleRequest(request: NextRequest) {
     const force = request.nextUrl.searchParams.get('force') === 'true';
 
     try {
+        // Working with a superuser: send scheduled reminders that are due and each team's regular reminder. This never throws and
+        // never changes what the notification rules below do; with no team switched on it does nothing.
+        if (action === 'auto' && !dryRun) await SuperuserPingService.runDue();
+
         if (action === 'daily_tasks') {
             const result = await TaskDailyGeneratorService.generateDailyFixedTasks({
                 date: targetDate,

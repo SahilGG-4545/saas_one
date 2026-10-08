@@ -8,7 +8,11 @@ import {
 } from '@dnd-kit/core';
 import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from 'framer-motion';
 import { Check, Clock, GripVertical, Loader2, Lock, MoveRight, Plus } from 'lucide-react';
-import { COLUMNS, ColumnDef, EASE, Status, WTask, avatarGradient, initials, shortDate } from './types';
+import { COLUMNS, ColumnDef, EASE, Status, WAssignable, WTask, avatarGradient, initials, shortDate } from './types';
+import GiveTo from './GiveTo';
+
+/** What the card needs to offer "Give to…": the teammates I may give work to, and the action. */
+interface GiveProps { people: WAssignable[]; onGive: (taskId: string, userId: string, name: string) => Promise<boolean> }
 
 /** The pointer decides the target column; if it is between columns, fall back to overlap. */
 const collision: CollisionDetection = args => {
@@ -17,7 +21,7 @@ const collision: CollisionDetection = args => {
 };
 
 /* ── The card's look. Used for the real card AND the ghost that follows the cursor. ─────────────── */
-function CardBody({ task, meId, floating = false }: { task: WTask; meId: string; floating?: boolean }) {
+function CardBody({ task, meId, floating = false, give }: { task: WTask; meId: string; floating?: boolean; give?: GiveProps }) {
     const done = task.status === 'completed';
     const carried = task.isCarriedForward;
     const mine = task.ownerId === meId;
@@ -65,12 +69,20 @@ function CardBody({ task, meId, floating = false }: { task: WTask; meId: string;
                     </span>
                 )}
             </div>
+
+            {!floating && give && task.canHandOver && give.people.length > 0 && (
+                <GiveTo
+                    taskTitle={task.title}
+                    people={give.people}
+                    onGive={(userId, name) => give.onGive(task.id, userId, name)}
+                />
+            )}
         </div>
     );
 }
 
 /* ── One draggable card ──────────────────────────────────────────────────────────────────────── */
-function TaskCard({ task, meId, onMove, reduce }: { task: WTask; meId: string; onMove: (id: string, s: Status) => void; reduce: boolean }) {
+function TaskCard({ task, meId, onMove, reduce, give }: { task: WTask; meId: string; onMove: (id: string, s: Status) => void; reduce: boolean; give?: GiveProps }) {
     const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: task.id, disabled: !task.canChange });
     const index = COLUMNS.findIndex(c => c.id === task.status);
 
@@ -98,7 +110,7 @@ function TaskCard({ task, meId, onMove, reduce }: { task: WTask; meId: string; o
             aria-label={`${task.title}. ${COLUMNS[index]?.label}. ${task.canChange ? 'Drag, or press the left and right arrow keys, to move it.' : 'You cannot move this task.'}`}
             className="rounded-2xl outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-50 dark:focus-visible:ring-offset-zinc-950 touch-manipulation"
         >
-            <CardBody task={task} meId={meId} />
+            <CardBody task={task} meId={meId} give={give} />
         </motion.div>
     );
 }
@@ -136,9 +148,9 @@ function QuickAdd({ onAdd }: { onAdd: (title: string) => Promise<boolean> }) {
 }
 
 /* ── One column (a drop target) ──────────────────────────────────────────────────────────────── */
-function Column({ def, tasks, meId, onMove, onQuickAdd, reduce, dragging }: {
+function Column({ def, tasks, meId, onMove, onQuickAdd, reduce, dragging, give }: {
     def: ColumnDef; tasks: WTask[]; meId: string; onMove: (id: string, s: Status) => void;
-    onQuickAdd: (title: string) => Promise<boolean>; reduce: boolean; dragging: boolean;
+    onQuickAdd: (title: string) => Promise<boolean>; reduce: boolean; dragging: boolean; give?: GiveProps;
 }) {
     const { setNodeRef, isOver } = useDroppable({ id: def.id });
 
@@ -158,7 +170,7 @@ function Column({ def, tasks, meId, onMove, onQuickAdd, reduce, dragging }: {
                 className={`flex-1 space-y-2.5 rounded-2xl p-1 transition-all duration-200 ${isOver ? `ring-2 ring-offset-0 ${def.glow}` : dragging ? 'ring-1 ring-dashed ring-zinc-300 dark:ring-zinc-700' : ''}`}
             >
                 <AnimatePresence initial={false}>
-                    {tasks.map(t => <TaskCard key={t.id} task={t} meId={meId} onMove={onMove} reduce={reduce} />)}
+                    {tasks.map(t => <TaskCard key={t.id} task={t} meId={meId} onMove={onMove} reduce={reduce} give={give} />)}
                 </AnimatePresence>
 
                 {tasks.length === 0 && (
@@ -175,8 +187,8 @@ function Column({ def, tasks, meId, onMove, onQuickAdd, reduce, dragging }: {
 }
 
 /* ── The board ───────────────────────────────────────────────────────────────────────────────── */
-export default function Board({ tasks, meId, onMove, onQuickAdd }: {
-    tasks: WTask[]; meId: string; onMove: (id: string, s: Status) => void; onQuickAdd: (title: string) => Promise<boolean>;
+export default function Board({ tasks, meId, onMove, onQuickAdd, give }: {
+    tasks: WTask[]; meId: string; onMove: (id: string, s: Status) => void; onQuickAdd: (title: string) => Promise<boolean>; give?: GiveProps;
 }) {
     const reduce = !!useReducedMotion();
     const [activeId, setActiveId] = useState<string | null>(null);
@@ -225,7 +237,7 @@ export default function Board({ tasks, meId, onMove, onQuickAdd }: {
                             key={def.id}
                             variants={{ hidden: { opacity: 0, y: 18 }, show: { opacity: 1, y: 0, transition: { duration: 0.7, ease: EASE } } }}
                         >
-                            <Column def={def} tasks={byStatus[def.id]} meId={meId} onMove={onMove} onQuickAdd={onQuickAdd} reduce={reduce} dragging={!!active} />
+                            <Column def={def} tasks={byStatus[def.id]} meId={meId} onMove={onMove} onQuickAdd={onQuickAdd} reduce={reduce} dragging={!!active} give={give} />
                         </motion.div>
                     ))}
                 </motion.div>

@@ -30,6 +30,8 @@ export interface WorkspaceTask {
     assignedDate: string;
     isCarriedForward: boolean;
     canChange: boolean;
+    /** True only for the person who HOLDS the task, while it is not finished. Drives the "Give to…" button. */
+    canHandOver: boolean;
 }
 
 export interface WorkspaceMember {
@@ -51,6 +53,8 @@ export type WorkspaceResponse =
         members: WorkspaceMember[];
         tasks: WorkspaceTask[];
         assignable: Array<{ userId: string; name: string; isMe: boolean }>;
+        /** Working with a superuser: shown only when this team's switch is ON. */
+        superuserCollab: { enabled: boolean; superusers: Array<{ userId: string; name: string }> };
     };
 
 const CARRY_DAYS = 14;
@@ -61,6 +65,16 @@ export function todayIST(): string {
 }
 
 const isDate = (s: unknown): s is string => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s);
+
+/** Only the person holding a task may give it away, and only while it is not finished. (Not even a superuser.) */
+export function canHandOverTask(task: { employee_id: string; status: string }, actorId: string): boolean {
+    return task.employee_id === actorId && task.status !== 'completed';
+}
+
+const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const shortDay = (d: string) => `${Number(d.slice(8, 10))} ${MONTHS_SHORT[Number(d.slice(5, 7)) - 1]}`;
+
+const HANDOVER_NOTE_PREFIX = 'Given by ';
 
 function addDays(date: string, days: number): string {
     const d = new Date(`${date}T12:00:00Z`);
@@ -138,6 +152,7 @@ export class WorkspaceService {
                 assignedDate: r.assigned_date as string,
                 isCarriedForward: (r.assigned_date as string) < date,
                 canChange: canChange(r.employee_id),
+                canHandOver: canHandOverTask(r, actor.id),
                 _created: r.created_at as string,
             }))
             .sort((a, b) => (a.isCarriedForward === b.isCarriedForward ? a._created.localeCompare(b._created) : a.isCarriedForward ? -1 : 1))
@@ -164,6 +179,13 @@ export class WorkspaceService {
             .map(e => ({ userId: e.id, name: e.name, isMe: e.id === actor.id }))
             .sort((a, b) => (a.isMe === b.isMe ? a.name.localeCompare(b.name) : a.isMe ? -1 : 1));
 
+        // Working with a superuser: when this team has it ON, tell the screen who they can work with (a superuser who is unlocked).
+        const collabOn = actor.role !== 'superuser' && await TaskAccessService.isSuperuserCollabEnabled(actor.department_id);
+        const superusers = collabOn
+            ? (await TaskAccessService.partition(pool.filter(e => e.role === 'superuser' && e.id !== actor.id), snapshot)).allowed
+                .map(e => ({ userId: e.id, name: e.name }))
+            : [];
+
         return {
             state: 'ok',
             actor: { userId: actor.id, name: actor.name, role: actor.role, departmentName: actor.department_name },
@@ -172,6 +194,7 @@ export class WorkspaceService {
             members: memberViews,
             tasks,
             assignable,
+            superuserCollab: { enabled: collabOn, superusers },
         };
     }
 
@@ -220,6 +243,91 @@ export class WorkspaceService {
         }
 
         return task;
+    }
+
+    /**
+     * Gives one of MY tasks to a teammate. The same task row MOVES (it is not copied): it leaves my list at once
+     * and lands on theirs, who is told on WhatsApp who gave it.
+     *
+     * Rules: only the current holder · not a finished task · the receiver must be someone I may assign to
+     * (the shared PermissionService rule) and be unlocked for the Task Manager · the move is one conditional
+     * update, so two clicks at the same moment cannot both win.
+     */
+    static async handOver(actorUserId: string, input: { taskId?: string; targetUserId?: string }): Promise<{ task: TaskAssignment; toName: string }> {
+        if (!input.taskId) throw new WorkspaceError(400, 'Missing task.');
+        if (!input.targetUserId) throw new WorkspaceError(400, 'Choose who to give the task to.');
+
+        const actor = await this.requireUnlockedActor(actorUserId);
+        if (input.targetUserId === actor.id) throw new WorkspaceError(400, 'That task is already yours. Choose a teammate.', 'SAME_PERSON');
+
+        const { data: row, error } = await supabaseAdmin.from('task_assignments').select('*').eq('id', input.taskId).maybeSingle();
+        if (error || !row) throw new WorkspaceError(404, 'Task not found.');
+
+        if (row.employee_id !== actor.id) {
+            throw new WorkspaceError(403, 'Only the person who holds a task can give it to someone else.', 'NOT_HOLDER');
+        }
+        if (row.status === 'completed') {
+            throw new WorkspaceError(409, 'This task is already done, so it cannot be given to someone else.', 'ALREADY_DONE');
+        }
+
+        // The same rule as assigning: throws PermissionDeniedError when this person may not give work to that person
+        const { target } = await PermissionService.assertCanAssignTask(actor.id, input.targetUserId);
+
+        const targetAccess = await TaskAccessService.check({ userId: target.id, departmentId: target.department_id });
+        if (!targetAccess.allowed) {
+            throw new WorkspaceError(409, `Cannot give a task to ${target.name}: ${targetAccess.message}`, 'TARGET_LOCKED');
+        }
+
+        // The new holder has not started it, so "in progress" goes back to "to do". Keep a short trail on the card.
+        const newStatus: TaskStatus = row.status === 'in_progress' ? 'pending' : (row.status as TaskStatus);
+        const note = `${HANDOVER_NOTE_PREFIX}${actor.name} on ${shortDay(todayIST())}`;
+        const base = ((row.description as string) || '').trim();
+        const joined = base ? `${base}\n${note}` : note;
+        const description = joined.length <= 1000 ? joined : base || null;
+
+        const { data: moved, error: moveError } = await supabaseAdmin
+            .from('task_assignments')
+            .update({ employee_id: target.id, status: newStatus, description, updated_at: new Date().toISOString() })
+            .eq('id', row.id)
+            .eq('employee_id', actor.id)      // still mine…
+            .neq('status', 'completed')       // …and still not finished
+            .select('*')
+            .maybeSingle();
+
+        if (moveError) {
+            if ((moveError as any).code === '23505') {
+                throw new WorkspaceError(409, `${target.name} already has this same task for that day.`, 'ALREADY_THERE');
+            }
+            console.error('[WorkspaceService] hand-over failed:', moveError);
+            throw new WorkspaceError(500, 'Could not give the task just now. Please try again.');
+        }
+        if (!moved) {
+            throw new WorkspaceError(409, 'This task changed just now. Please refresh and try again.', 'CHANGED');
+        }
+
+        await TaskDatabaseService.logAudit({
+            eventType: 'task_handed_over',
+            actorId: actor.id,
+            targetEmployeeId: target.id,
+            taskId: row.id,
+            details: { title: row.title, assignedDate: row.assigned_date, fromUserId: actor.id, toUserId: target.id, fromStatus: row.status, toStatus: newStatus, via: 'web_tasks_tab' },
+        });
+
+        // Tell the receiver who gave it (names only; gated, so nothing is sent in Pretend Mode). Never blocks the hand-over.
+        if (target.phone_number && target.phone_number.trim().length >= 10) {
+            const from = actor.department_name ? `${actor.name} (${actor.department_name})` : actor.name;
+            const lines = [`🔁 *A task was given to you*`, ``, `*Task:* ${row.title}`];
+            if (base) lines.push(`*Details:* ${base}`);
+            lines.push(`*Given by:* ${from}`, `*Date:* ${row.assigned_date}`, ``, `Reply *tasks* to see your full list.`);
+            TaskMessagingService.sendMessage(target.phone_number, lines.join('\n'), {
+                messageType: 'task_handover',
+                freeformOnly: true, // no template: only reaches people inside WhatsApp's 24-hour window
+            }).catch(err => {
+                console.error('[WorkspaceService] Failed to send hand-over alert:', err?.message);
+            });
+        }
+
+        return { task: moved as TaskAssignment, toName: target.name };
     }
 
     static async setStatus(actorUserId: string, input: { taskId?: string; status?: string }): Promise<TaskAssignment> {

@@ -96,6 +96,20 @@ export function useWorkspace(date: string, departmentName: string) {
         }
     }, [load, post, toast]);
 
+    /** Gives one of MY tasks to a teammate. Not optimistic: the server checks the rules, then the board reloads. */
+    const giveTask = useCallback(async (taskId: string, targetUserId: string, toName: string) => {
+        try {
+            await post({ action: 'hand_over', taskId, targetUserId });
+            toast('success', `Given to ${toName}`);
+            await load();
+            return true;
+        } catch (err) {
+            toast('error', messageOf(err, 'Could not give that task'));
+            load(); // the board may be out of date (e.g. the task just changed)
+            return false;
+        }
+    }, [load, post, toast]);
+
     const ok: WorkspaceOk | null = ws && ws.state === 'ok' ? ws : null;
-    return { ws, ok, loading, refreshing, error, toasts, dismissToast, reload: load, moveTask, addTask };
+    return { ws, ok, loading, refreshing, error, toasts, dismissToast, reload: load, moveTask, addTask, giveTask };
 }

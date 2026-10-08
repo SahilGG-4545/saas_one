@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { AlertTriangle, Bell, CheckCircle2, Clock, Eye, Loader2, Lock, Moon, Plus, Sun, Trash2 } from 'lucide-react';
 import { EASE } from './types';
+import TimeWheelPicker from './TimeWheelPicker';
 
 /**
  * Notifications view: a team sets WHEN its Task Manager messages go out and WHAT they say.
@@ -151,7 +152,10 @@ function RuleCard({ draft, baseline, canEdit, variables, department, onChange, o
             <div className="grid gap-4 sm:grid-cols-[auto_1fr]">
                 <div>
                     <p className={cap}>Send at (IST)</p>
-                    <input id={`rule-time-${draft.key}`} type="time" value={draft.targetTimeIST} disabled={!canEdit} onChange={e => set({ targetTimeIST: e.target.value })} className={`${input} mt-1.5 w-36`} />
+                    <div className="mt-1.5">
+                        <TimeWheelPicker id={`rule-time-${draft.key}`} value={draft.targetTimeIST} disabled={!canEdit} onChange={v => set({ targetTimeIST: v })}
+                            presets={TYPES.map(x => ({ label: x.label, value: x.time }))} ariaLabel="Send at (IST)" />
+                    </div>
                 </div>
                 <div>
                     <p className={cap}>On these days</p>

@@ -16,6 +16,8 @@ export interface WTask {
     assignedDate: string;
     isCarriedForward: boolean;
     canChange: boolean;
+    /** Server decision: I hold this task and it is not finished, so I may give it to a teammate. */
+    canHandOver?: boolean;
 }
 
 export interface WMember {
@@ -40,6 +42,8 @@ export interface WorkspaceOk {
     members: WMember[];
     tasks: WTask[];
     assignable: WAssignable[];
+    /** Working with a superuser: present when the server has it (shown only for a team whose switch is ON). */
+    superuserCollab?: { enabled: boolean; superusers: Array<{ userId: string; name: string }> };
 }
 
 export type Workspace =
