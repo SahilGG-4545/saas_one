@@ -362,8 +362,4 @@ export class TaskMessagingService {
             templateParams: params,
         });
     }
-
-    static async sendFreeformMessage(phone: string, text: string): Promise<boolean> {
-        return this.sendMessage(phone, text);
-    }
 }
