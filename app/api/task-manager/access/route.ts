@@ -106,6 +106,20 @@ export async function POST(request: NextRequest) {
             });
         }
 
+        // Task Import: let a department's people send a task list (Excel / image / text) on WhatsApp
+        if (body.action === 'set_task_import') {
+            if (!body.departmentId || typeof body.enabled !== 'boolean') {
+                return NextResponse.json({ success: false, error: 'Missing departmentId or enabled (true/false)' }, { status: 400 });
+            }
+            await TaskAccessService.setTaskImportEnabled(body.departmentId, body.enabled, guard.label);
+            return NextResponse.json({
+                success: true,
+                message: body.enabled
+                    ? 'People in this team can now send a task list on WhatsApp (preview first, saved only after YES).'
+                    : 'Task import is OFF for this team. Files and images are handled exactly as before.'
+            });
+        }
+
         if (body.action === 'record_kickoff') {
             if (!body.userId) {
                 return NextResponse.json({ success: false, error: 'Missing userId' }, { status: 400 });

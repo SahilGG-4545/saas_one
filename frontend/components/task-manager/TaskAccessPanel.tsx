@@ -24,6 +24,7 @@ interface AccessDepartment {
     enabled: boolean;
     peerAssign: boolean;
     notificationsDelegated: boolean;
+    taskImportEnabled: boolean;
     memberCount: number;
     onboardedCount: number;
     members: AccessMember[];
@@ -51,6 +52,7 @@ export default function TaskAccessPanel({ orgId }: { orgId?: string }) {
     const [notice, setNotice] = useState<string | null>(null);
     const [provisioned, setProvisioned] = useState(true);
     const [nlGateway, setNlGateway] = useState(false);
+    const [taskImportColumnMissing, setTaskImportColumnMissing] = useState(false);
     const [sharingColumnMissing, setSharingColumnMissing] = useState(false);
     const [notificationsColumnMissing, setNotificationsColumnMissing] = useState(false);
     const [departments, setDepartments] = useState<AccessDepartment[]>([]);
@@ -67,6 +69,7 @@ export default function TaskAccessPanel({ orgId }: { orgId?: string }) {
             if (!res.ok || !data.success) throw new Error(data.error || 'Failed to load access settings');
             setProvisioned(Boolean(data.provisioned));
             setNlGateway(Boolean(data.nlGatewayEnabled));
+            setTaskImportColumnMissing(Boolean(data.taskImportColumnMissing));
             setSharingColumnMissing(Boolean(data.teamSharingColumnMissing));
             setNotificationsColumnMissing(Boolean(data.notificationsColumnMissing));
             if (data.readable === false) setError('Access settings could not be read. Everyone is treated as locked until this works again.');
@@ -162,6 +165,19 @@ export default function TaskAccessPanel({ orgId }: { orgId?: string }) {
         post('nl-gateway', { action: 'set_nl_gateway', enabled: next });
     };
 
+    const toggleTaskImport = (d: AccessDepartment) => {
+        const next = !d.taskImportEnabled;
+        const text = next
+            ? `Let ${d.name} send task lists on WhatsApp?
+
+Anyone in ${d.name} who is unlocked for the Task Manager can then send an Excel file (or an image / text that says "add tasks"). The bot shows a numbered preview and saves nothing until they reply YES. While Pretend Mode is ON no reply is actually sent (saving after YES still happens). While the sandbox is ON only the sandbox numbers can use it.`
+            : `Switch task import OFF for ${d.name}?
+
+Their files and images go back to being handled exactly as before.`;
+        if (!window.confirm(text)) return;
+        post(`import-${d.departmentId}`, { action: 'set_task_import', departmentId: d.departmentId, enabled: next });
+    };
+
     const toggleExpanded = (id: string) => {
         setExpanded(prev => {
             const next = new Set(prev);
@@ -224,6 +240,13 @@ export default function TaskAccessPanel({ orgId }: { orgId?: string }) {
                 </div>
             )}
 
+            {provisioned && taskImportColumnMissing && (
+                <div className="p-3 rounded-xl bg-amber-50 border border-amber-300 text-amber-950 text-xs">
+                    <p className="font-black flex items-center gap-2"><AlertTriangle className="w-4 h-4" /> Task import needs one more SQL file</p>
+                    <p>Run <code className="font-mono bg-white/70 px-1 rounded">supabase/migrations/20261007000004_task_manager_task_import.sql</code> once in the Supabase SQL Editor. Until then task import is OFF for every team and its buttons are disabled.</p>
+                </div>
+            )}
+
             <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <div>
                     <p className="font-black text-slate-900">Natural-language chat <span className="text-[10px] font-black uppercase tracking-wider text-indigo-700">Step 4</span></p>
@@ -276,6 +299,19 @@ export default function TaskAccessPanel({ orgId }: { orgId?: string }) {
                                     )}
                                 </button>
                                 <div className="flex items-center gap-2">
+                                <button
+                                    type="button"
+                                    disabled={!provisioned || taskImportColumnMissing || busyKey === `import-${d.departmentId}`}
+                                    onClick={() => toggleTaskImport(d)}
+                                    className={`px-3 py-1.5 rounded-xl font-bold text-[11px] cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+                                        d.taskImportEnabled
+                                            ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                                            : 'bg-white border border-slate-300 hover:bg-slate-100 text-slate-600'
+                                    }`}
+                                    title="People in this team can send a task list (Excel / image / text) on WhatsApp and save it to their Tasks tab"
+                                >
+                                    Task import: {d.taskImportEnabled ? 'ON' : 'OFF'}
+                                </button>
                                 <button
                                     type="button"
                                     disabled={!provisioned || notificationsColumnMissing || busyKey === `notif-${d.departmentId}`}

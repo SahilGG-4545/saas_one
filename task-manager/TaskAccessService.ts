@@ -365,6 +365,51 @@ export class TaskAccessService {
         });
     }
 
+    // ── Task Import: a department's people may send a task list on WhatsApp (task_import_enabled) ────
+    // Same tolerance as the two switches above, and FAIL-CLOSED: if the column does not exist yet or cannot
+    // be read, no department has Task Import.
+
+    static async getTaskImportDepartments(): Promise<{ departments: Set<string>; columnMissing: boolean }> {
+        try {
+            const { data, error } = await supabaseAdmin
+                .from('task_manager_department_settings')
+                .select('department_id, task_import_enabled');
+            if (error) return { departments: new Set(), columnMissing: true };
+            return {
+                departments: new Set((data || []).filter(r => r.task_import_enabled === true).map(r => r.department_id as string)),
+                columnMissing: false,
+            };
+        } catch {
+            return { departments: new Set(), columnMissing: true };
+        }
+    }
+
+    static async isTaskImportEnabled(departmentId: string | null | undefined): Promise<boolean> {
+        if (!departmentId) return false;
+        return (await this.getTaskImportDepartments()).departments.has(departmentId);
+    }
+
+    static async setTaskImportEnabled(departmentId: string, enabled: boolean, actor?: string): Promise<void> {
+        const snapshot = await this.getSnapshot();
+        if (!snapshot.provisioned) throw new AccessNotProvisionedError();
+
+        const dept = await TaskDatabaseService.getDepartmentById(departmentId);
+        if (!dept) throw new Error('Department not found');
+
+        const { error } = await supabaseAdmin
+            .from('task_manager_department_settings')
+            .upsert({ department_id: departmentId, task_import_enabled: enabled, updated_by: actor || null, updated_at: new Date().toISOString() },
+                { onConflict: 'department_id' });
+        if (error) {
+            throw new Error('Could not save this setting. Run supabase/migrations/20261007000004_task_manager_task_import.sql in the Supabase SQL Editor first.');
+        }
+
+        await TaskDatabaseService.logAudit({
+            event_type: 'task_access_task_import_updated',
+            details: { departmentId, departmentName: dept.name, taskImportEnabled: enabled, actor: actor || null },
+        });
+    }
+
     // ── Overview for the Control Center ─────────────────────────────────────────
 
     static async getOverview(): Promise<{
@@ -372,12 +417,14 @@ export class TaskAccessService {
         readable: boolean;
         teamSharingColumnMissing: boolean;
         notificationsColumnMissing: boolean;
+        taskImportColumnMissing: boolean;
         departments: Array<{
             departmentId: string;
             name: string;
             enabled: boolean;
             peerAssign: boolean;
             notificationsDelegated: boolean;
+            taskImportEnabled: boolean;
             memberCount: number;
             onboardedCount: number;
             members: Array<{
@@ -394,6 +441,7 @@ export class TaskAccessService {
         const departments = await TaskDatabaseService.getDepartments();
         const peer = await this.getPeerAssignDepartments();
         const delegated = await this.getDelegatedDepartments();
+        const imports = await this.getTaskImportDepartments();
 
         const { data: profiles, error } = await supabaseAdmin
             .from('employee_profiles')
@@ -414,6 +462,7 @@ export class TaskAccessService {
             readable: snapshot.readable,
             teamSharingColumnMissing: peer.columnMissing,
             notificationsColumnMissing: delegated.columnMissing,
+            taskImportColumnMissing: imports.columnMissing,
             departments: departments.map(d => {
                 const members = people
                     .filter(p => p.department_id === d.id)
@@ -441,6 +490,7 @@ export class TaskAccessService {
                     enabled,
                     peerAssign: peer.departments.has(d.id),
                     notificationsDelegated: delegated.departments.has(d.id),
+                    taskImportEnabled: imports.departments.has(d.id),
                     memberCount: members.length,
                     onboardedCount: members.filter(m => m.onboarded).length,
                     members,
