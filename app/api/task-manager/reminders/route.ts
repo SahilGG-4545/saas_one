@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { TaskNotificationService } from '@/task-manager/TaskNotificationService';
 import { TaskDailyGeneratorService } from '@/task-manager/TaskDailyGeneratorService';
 import { TaskMessagingService } from '@/task-manager/TaskMessagingService';
+import { requireTaskManagerAdmin } from '../_shared/adminGuard';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,6 +12,9 @@ export const dynamic = 'force-dynamic';
  */
 export async function POST(request: NextRequest) {
     try {
+        const guard = await requireTaskManagerAdmin();
+        if (!guard.ok) return guard.response;
+
         const body = await request.json().catch(() => ({}));
         const { action = 'morning_digest', dryRun = false, phone, name } = body;
 

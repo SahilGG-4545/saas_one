@@ -1,5 +1,6 @@
 import { supabaseAdmin } from '@/backend/lib/supabase/admin';
 import { TaskDatabaseService } from './TaskDatabaseService';
+import { TaskAccessService } from './TaskAccessService';
 import { Employee, TaskAssignment, TaskTemplate } from './types';
 
 export interface DailyTaskGenerationOptions {
@@ -72,6 +73,9 @@ export class TaskDailyGeneratorService {
             } else {
                 employees = await TaskDatabaseService.getAllEmployees();
             }
+
+            // Step 6: nobody who is locked out of the Task Manager gets tasks generated for them
+            employees = (await TaskAccessService.partition(employees)).allowed;
 
             if (employees.length === 0) {
                 return {

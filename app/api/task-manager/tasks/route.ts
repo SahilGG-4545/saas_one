@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/backend/lib/supabase/admin';
 import { PermissionService, PermissionDeniedError } from '@/task-manager/PermissionService';
 import { TaskDatabaseService } from '@/task-manager/TaskDatabaseService';
+import { TaskMessagingService } from '@/task-manager/TaskMessagingService';
+import { TaskAccessService } from '@/task-manager/TaskAccessService';
+import { requireActor } from '../_shared/adminGuard';
 import { TaskAssignment } from '@/task-manager/types';
 
 export const dynamic = 'force-dynamic';
@@ -9,7 +12,9 @@ export const dynamic = 'force-dynamic';
 export async function GET(request: NextRequest) {
     try {
         const { searchParams } = new URL(request.url);
-        const actorId = searchParams.get('actorId');
+        const auth = await requireActor(searchParams.get('actorId'));
+        if (!auth.ok) return auth.response;
+        const actorId = auth.userId; // always the logged-in person
         const departmentId = searchParams.get('departmentId') || '';
         const employeeId = searchParams.get('employeeId') || '';
         const status = searchParams.get('status') || '';
@@ -74,6 +79,13 @@ export async function GET(request: NextRequest) {
             } else {
                 taskQuery = taskQuery.eq('employee_id', actor.id); // fallback
             }
+        } else if (targetDepartmentId) {
+            const deptUserIds = employees.map(e => e.id);
+            if (deptUserIds.length > 0) {
+                taskQuery = taskQuery.in('employee_id', deptUserIds);
+            } else {
+                taskQuery = taskQuery.eq('employee_id', '00000000-0000-0000-0000-000000000000');
+            }
         }
 
         if (status && ['pending', 'in_progress', 'completed'].includes(status)) {
@@ -110,7 +122,10 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
     try {
         const body = await request.json();
-        const { action, actorId } = body;
+        const auth = await requireActor(body.actorId);
+        if (!auth.ok) return auth.response;
+        const { action } = body;
+        const actorId = auth.userId; // always the logged-in person
 
         if (!actorId) {
             return NextResponse.json({ success: false, error: 'Missing actorId in request body' }, { status: 400 });
@@ -130,6 +145,17 @@ export async function POST(request: NextRequest) {
             // Enforce RBAC: Manager can only assign in own department, Superuser anywhere, Employee blocked
             const { actor, target } = await PermissionService.assertCanAssignTask(actorId, targetEmployeeId);
 
+            // Access gate (Step 3): the person being assigned must be unlocked (department ON + kickoff sent).
+            const targetAccess = await TaskAccessService.check({ userId: target.id, departmentId: target.department_id });
+            if (!targetAccess.allowed) {
+                return NextResponse.json({
+                    success: false,
+                    code: 'TASK_MANAGER_LOCKED',
+                    reason: targetAccess.reason,
+                    error: `Cannot assign a task to ${target.name}: ${targetAccess.message}`
+                }, { status: 409 });
+            }
+
             const newTask = await TaskDatabaseService.createTaskAssignment({
                 employeeId: target.id,
                 title: title.trim(),
@@ -146,6 +172,30 @@ export async function POST(request: NextRequest) {
                 taskId: newTask.id,
                 details: { title: newTask.title, assignedDate: newTask.assigned_date }
             });
+
+            // Send instant WhatsApp notification to the assigned employee (non-blocking)
+            if (target.phone_number && target.phone_number.trim().length >= 10) {
+                const managerDept = actor.department_name ? ` (${actor.department_name})` : '';
+                const lines = [
+                    `🔔 *New Task Assigned!*`,
+                    ``,
+                    `*Task:* ${newTask.title}`,
+                ];
+                if (newTask.description) {
+                    lines.push(`*Details:* ${newTask.description}`);
+                }
+                lines.push(`*Assigned By:* ${actor.name}${managerDept}`);
+                if (newTask.assigned_date) {
+                    lines.push(`*Date:* ${newTask.assigned_date}`);
+                }
+                lines.push(``);
+                lines.push(`Reply *tasks* to view your full list, or *done <number>* once completed!`);
+
+                const messageText = lines.join('\n');
+                TaskMessagingService.sendMessage(target.phone_number, messageText).catch(err => {
+                    console.error('[AssignTask] Failed to send instant WhatsApp alert:', err);
+                });
+            }
 
             return NextResponse.json({ success: true, task: newTask });
         }
@@ -220,6 +270,58 @@ export async function POST(request: NextRequest) {
             });
 
             return NextResponse.json({ success: true, task: updated });
+        }
+
+        // ── Action 4: Delete Task Assignment ──────────────────────────────────
+        if (action === 'delete_task') {
+            const { taskId } = body;
+
+            if (!taskId) {
+                return NextResponse.json({ success: false, error: 'Missing taskId' }, { status: 400 });
+            }
+
+            // Retrieve assignment
+            const { data: taskRow, error: fetchErr } = await supabaseAdmin
+                .from('task_assignments')
+                .select('*')
+                .eq('id', taskId)
+                .maybeSingle();
+
+            if (fetchErr || !taskRow) {
+                return NextResponse.json({ success: false, error: 'Task assignment not found' }, { status: 404 });
+            }
+
+            // Enforce RBAC: Manager can only delete in own dept or tasks assigned by them, Superuser anywhere
+            const actor = await PermissionService.getActor(actorId);
+            if (actor.role !== 'superuser') {
+                if (actor.role === 'reporting_manager') {
+                    const isAssigner = taskRow.assigned_by === actorId;
+                    const targetEmp = await TaskDatabaseService.getEmployeeById(taskRow.employee_id);
+                    const isSameDept = Boolean(actor.department_id && targetEmp?.department_id === actor.department_id);
+                    if (!isAssigner && !isSameDept) {
+                        return NextResponse.json({ success: false, error: 'Cannot delete tasks outside your department' }, { status: 403 });
+                    }
+                } else {
+                    return NextResponse.json({ success: false, error: 'Only reporting managers and admins can delete tasks' }, { status: 403 });
+                }
+            }
+
+            const { error: delErr } = await supabaseAdmin
+                .from('task_assignments')
+                .delete()
+                .eq('id', taskId);
+
+            if (delErr) throw delErr;
+
+            await TaskDatabaseService.logAudit({
+                eventType: 'task_deleted',
+                actorId,
+                targetEmployeeId: taskRow.employee_id,
+                taskId,
+                details: { title: taskRow.title }
+            });
+
+            return NextResponse.json({ success: true, message: 'Task deleted successfully' });
         }
 
         return NextResponse.json({ success: false, error: 'Unknown action' }, { status: 400 });

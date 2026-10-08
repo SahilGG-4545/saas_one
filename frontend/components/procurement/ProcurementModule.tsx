@@ -6,7 +6,7 @@ import {
     Settings, List, ShoppingCart, 
     FileText, FileSpreadsheet,
     DollarSign, IndianRupee, Layers,
-    Sparkles, RefreshCw
+    Sparkles, RefreshCw, ClipboardList
 } from 'lucide-react';
 import ProcurementAdminSettings from './ProcurementAdminSettings';
 import ProcurementRequestList from './ProcurementRequestList';
@@ -17,11 +17,12 @@ import SitePricingAdminTab from './SitePricingAdminTab';
 import PropertyBudgetsTab from './PropertyBudgetsTab';
 import PaymentUrgencyTrackerTab from './payment-urgency/PaymentUrgencyTrackerTab';
 import ProcurementFeedbackTab from './ProcurementFeedbackTab';
+import ProcurementTasksTab from './ProcurementTasksTab';
 import { SHOW_LEGACY_PER_PROPERTY_CONTROLS } from './procurementFeatureFlags';
 import FinanceOverview from '../accounts/FinanceOverview';
 import { useAuth } from '@/frontend/context/AuthContext';
 
-type TabType = 'orders' | 'urgency-tracker' | 'payment-tracker' | 'requisitions' | 'monthly-feedback' | 'site-budgets' | 'site-pricing' | 'catalog' | 'po-generator' | 'settings';
+type TabType = 'orders' | 'tasks' | 'urgency-tracker' | 'payment-tracker' | 'requisitions' | 'monthly-feedback' | 'site-budgets' | 'site-pricing' | 'catalog' | 'po-generator' | 'settings';
 
 function ProcurementModuleSkeleton() {
     return (
@@ -165,7 +166,7 @@ export default function ProcurementModule({
             const urlParams = new URLSearchParams(window.location.search);
             let tabParam = urlParams.get('procurement_tab') || urlParams.get('subtab') || urlParams.get('tab');
             if (tabParam === 'monthly-requisitions') tabParam = 'requisitions';
-            const linkableTabs = ['orders', 'urgency-tracker', 'payment-tracker', 'requisitions', 'monthly-feedback', 'catalog', 'po-generator', 'settings'];
+            const linkableTabs = ['orders', 'tasks', 'urgency-tracker', 'payment-tracker', 'requisitions', 'monthly-feedback', 'catalog', 'po-generator', 'settings'];
             if (SHOW_LEGACY_PER_PROPERTY_CONTROLS) linkableTabs.push('site-budgets', 'site-pricing');
             if (tabParam && linkableTabs.includes(tabParam)) {
                 setActiveTab(tabParam as TabType);
@@ -175,6 +176,7 @@ export default function ProcurementModule({
 
     const TABS = useMemo(() => [
         { id: 'orders', label: 'All Orders', icon: List, show: true, count: counts.orders },
+        { id: 'tasks', label: 'Tasks', icon: ClipboardList, show: true, count: 0 },
         { id: 'urgency-tracker', label: 'Urgency Tracker (P1-P3)', icon: Layers, show: canViewUrgencyTracker, count: 0 },
         { id: 'payment-tracker', label: 'Payment Tracker', icon: IndianRupee, show: canViewPaymentTracker, count: 0 },
         { id: 'requisitions', label: 'Monthly Requisitions', icon: FileSpreadsheet, show: true, count: 0 },
@@ -235,6 +237,10 @@ export default function ProcurementModule({
             <div className="min-h-[55vh] transition-opacity duration-200">
                 {activeTab === 'settings' && isSuperAdmin && (
                     <ProcurementAdminSettings organizationId={orgId} properties={properties} />
+                )}
+
+                {activeTab === 'tasks' && (
+                    <ProcurementTasksTab departmentName="Procurement" />
                 )}
 
                 {activeTab === 'orders' && (

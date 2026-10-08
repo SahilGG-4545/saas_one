@@ -1,6 +1,7 @@
 import { supabaseAdmin } from '@/backend/lib/supabase/admin';
 import { WhatsAppRecipientResolver, ResolvedWhatsAppUser } from '@/backend/services/WhatsAppRecipientResolver';
 import { WhatsAppQueueService } from '@/backend/services/WhatsAppQueueService';
+import { PettyCashNotificationService } from '@/backend/services/PettyCashNotificationService';
 
 interface DispatchOptions {
     featureKey: string;
@@ -82,8 +83,14 @@ export function formatTimeString(timeStr?: string | null): string {
  * reads the org's whatsapp_templates map, and enqueues one whatsapp_queue row per recipient.
  */
 export const WhatsAppEventProcessor = {
-    async processEvent(event: { event_type: string; payload: any }): Promise<void> {
+    async processEvent(event: { event_type: string; payload: any; id?: string; entity_id?: string }): Promise<void> {
         const { event_type, payload } = event;
+
+        if(event_type?.startsWith('PETTY_CASH_')) {
+            if(!event.id||!event.entity_id)throw new Error('Petty Cash outbox identity required');
+            await PettyCashNotificationService.dispatch({...event,id:event.id,entity_id:event.entity_id},'whatsapp');
+            return;
+        }
 
         switch (event_type) {
             // Tickets
@@ -2619,4 +2626,3 @@ export const WhatsAppEventProcessor = {
         }
     }
 };
-

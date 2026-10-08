@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { CapabilityDomain } from '@/frontend/types/rbac';
+import PettyCashNavLink from '@/frontend/components/pettyCash/PettyCashNavLink';
 import CapabilityWrapper from '../auth/CapabilityWrapper';
 import { useAuth } from '@/frontend/context/AuthContext';
 import FeedbackModal from '../ui/FeedbackModal';
@@ -115,7 +116,7 @@ export default function DashboardSidebar({
         // in from this sidebar, only from the admin dashboards. Visibility is gated by the
         // `petty_cash` capability, so tenant-like roles never see it.
         // The Payment Tracker deliberately stays out: it is finance-only (item 7).
-        items.push({ label: 'Petty Cash', href: `/${orgId}/petty-cash`, icon: Wallet, domain: 'petty_cash' as const });
+        // Petty Cash is rendered once in the shared personal section for every internal role.
 
         if (userRole === 'org_super_admin') {
             items.push({ label: 'Water Analytics', href: `/${orgId}/dashboard?tab=water`, icon: Droplets, domain: 'dashboards' as const });
@@ -457,6 +458,11 @@ export default function DashboardSidebar({
                             </div>
                         </div>
                     )}
+
+                    <div data-navigation-section="management-hub">
+                        <p className="px-4 mb-2 text-[10px] font-bold uppercase tracking-widest text-text-secondary">Management Hub</p>
+                        <PettyCashNavLink onNavigate={handleLinkClick} />
+                    </div>
 
                     {/* 4. SYSTEM & PERSONAL Section (Always below primary role navigation) */}
                     {!isExternalRole && (
