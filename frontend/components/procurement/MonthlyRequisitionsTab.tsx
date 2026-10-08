@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { createClient } from '@/frontend/utils/supabase/client';
 import {
     FileText, Upload, CheckCircle2, Clock, Download, Filter,
@@ -17,6 +17,7 @@ import PropertyBudgetManagerModal from './PropertyBudgetManagerModal';
 import BulkApproverUploadModal from './BulkApproverUploadModal';
 import MonthlyFeedbackFormModal from './MonthlyFeedbackFormModal';
 import { SHOW_LEGACY_PER_PROPERTY_CONTROLS } from './procurementFeatureFlags';
+import RequisitionApproverSelect, { type RequisitionApprover } from './RequisitionApproverSelect';
 
 interface Property {
     id: string;
@@ -77,7 +78,11 @@ export default function MonthlyRequisitionsTab({ user, organizationId, propertyI
     const [hasPropertyMembershipAdmin, setHasPropertyMembershipAdmin] = useState(false);
     const [requisitions, setRequisitions] = useState<MonthlyRequisition[]>([]);
     const [properties, setProperties] = useState<Property[]>([]);
-    const [approverUsers, setApproverUsers] = useState<any[]>([]);
+    const [approverUsers, setApproverUsers] = useState<RequisitionApprover[]>([]);
+    const [approversLoading, setApproversLoading] = useState(false);
+    const [approversError, setApproversError] = useState('');
+    const approverRequest = useRef(0);
+    const approverOrganizationId = organizationId || user?.user_metadata?.organization_id || '';
     const [isLoading, setIsLoading] = useState(true);
     const [isRefreshing, setIsRefreshing] = useState(false);
     const [viewMode, setViewMode] = useState<'list' | 'create_sheet'>('list');
@@ -252,27 +257,34 @@ export default function MonthlyRequisitionsTab({ user, organizationId, propertyI
         }
     }, [supabase, organizationId, propertyId, user?.id, isSuperAdmin, isProcurementRole]);
 
-    // Load Approvers (Admins & Directors)
+    // Load eligible approvers through an organization-authorized server lookup.
     const fetchApprovers = useCallback(async () => {
-        try {
-            if (!organizationId) return;
-            const { data: members } = await supabase
-                .from('organization_memberships')
-                .select('user:users!user_id(id, full_name, email, phone), role')
-                .eq('organization_id', organizationId)
-                .in('role', ['org_super_admin', 'master_admin', 'org_admin', 'property_admin'])
-                .eq('is_active', true);
-
-            if (members) {
-                const usersList = members.map((m: any) => m.user).filter(Boolean);
-                const uniqueUsers = Array.from(new Map(usersList.map((u: any) => [u.id, u])).values());
-                setApproverUsers(uniqueUsers);
-                setSelectedApproverId(prev => prev || uniqueUsers[0]?.id || '');
-            }
-        } catch (e) {
-            console.error('Failed to fetch approvers:', e);
+        const requestId = ++approverRequest.current;
+        setApproverUsers([]);
+        setApproversError('');
+        if (!approverOrganizationId) {
+            setSelectedApproverId('');
+            setApproversLoading(false);
+            setApproversError('Select an organization to load approvers.');
+            return;
         }
-    }, [supabase, organizationId]);
+        setApproversLoading(true);
+        try {
+            const response = await fetch(`/api/procurement/requisitions/approvers?organization_id=${encodeURIComponent(approverOrganizationId)}`, { cache: 'no-store' });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || 'Could not load approvers.');
+            if (requestId !== approverRequest.current) return;
+            const users: RequisitionApprover[] = data.approvers || [];
+            setApproverUsers(users);
+            setSelectedApproverId(prev => users.some(user => user.id === prev) ? prev : '');
+        } catch (error) {
+            if (requestId !== approverRequest.current) return;
+            setSelectedApproverId('');
+            setApproversError(error instanceof Error ? error.message : 'Could not load approvers. Please retry.');
+        } finally {
+            if (requestId === approverRequest.current) setApproversLoading(false);
+        }
+    }, [approverOrganizationId]);
 
     // Load Requisitions without jarring skeleton flicker
     const fetchRequisitions = useCallback(async (showSkeleton: boolean = false) => {
@@ -329,6 +341,7 @@ export default function MonthlyRequisitionsTab({ user, organizationId, propertyI
     const handleVendorQuotationSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!vendorQuoteModalReq) return;
+        if (approversLoading || approversError || !approverUsers.some(user => user.id === selectedApproverId)) return;
 
         setIsSubmittingVendorQuote(true);
         try {
@@ -1039,18 +1052,9 @@ export default function MonthlyRequisitionsTab({ user, organizationId, propertyI
                                     <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
                                         Select Designated Approver <span className="text-red-500">*</span>
                                     </label>
-                                    <select
-                                        value={selectedApproverId}
-                                        onChange={e => setSelectedApproverId(e.target.value)}
-                                        required
-                                        className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-sky-500"
-                                    >
-                                        {approverUsers.map(u => (
-                                            <option key={u.id} value={u.id}>
-                                                {u.full_name || u.email} ({u.email})
-                                            </option>
-                                        ))}
-                                    </select>
+                                    <RequisitionApproverSelect approvers={approverUsers} value={selectedApproverId}
+                                        onChange={setSelectedApproverId} loading={approversLoading}
+                                        error={approversError} onRetry={fetchApprovers} />
                                 </div>
 
                                 <div>
@@ -1088,7 +1092,7 @@ export default function MonthlyRequisitionsTab({ user, organizationId, propertyI
                                     </button>
                                     <button
                                         type="submit"
-                                        disabled={isSubmittingVendorQuote}
+                                        disabled={isSubmittingVendorQuote || approversLoading || !!approversError || !selectedApproverId}
                                         className="h-9 px-4.5 inline-flex items-center gap-1.5 rounded-xl text-xs font-black text-white bg-sky-600 hover:bg-sky-700 shadow-md shadow-sky-600/20 transition-all disabled:opacity-50 cursor-pointer"
                                     >
                                         {isSubmittingVendorQuote ? (
@@ -1286,7 +1290,10 @@ export default function MonthlyRequisitionsTab({ user, organizationId, propertyI
                 onClose={() => setShowBulkApprovalModal(false)}
                 requisitions={requisitions}
                 approvers={approverUsers}
-                organizationId={organizationId || ''}
+                approversLoading={approversLoading}
+                approversError={approversError}
+                onRetryApprovers={fetchApprovers}
+                organizationId={approverOrganizationId}
                 currentUser={user}
                 onSuccess={() => {
                     fetchRequisitions();
