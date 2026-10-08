@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { Search, UserCheck, Edit2, Check, AlertCircle, RefreshCw, UserPlus, Eye, ShieldCheck, AlertTriangle, Info, X, Trash2, ChevronDown } from 'lucide-react';
+import { Search, UserCheck, Edit2, Edit3, UserCog, Check, AlertCircle, RefreshCw, UserPlus, Eye, ShieldCheck, AlertTriangle, Info, X, Trash2, ChevronDown } from 'lucide-react';
 import { formatAppRole } from '../../lib/accounts/roles';
 
 interface SearchableManagerDropdownProps {
@@ -236,6 +236,86 @@ export default function HREmployeeDirectory({ orgId, organizationId, onRefresh }
     const [selectedEmpForInfo, setSelectedEmpForInfo] = useState<any | null>(null);
     const [deletingEmp, setDeletingEmp] = useState<{ id: string; name: string; code: string } | null>(null);
     const [deleting, setDeleting] = useState(false);
+    const [editingEmpData, setEditingEmpData] = useState<any | null>(null);
+    const [editFormData, setEditFormData] = useState({
+        id: '',
+        employee_code: '',
+        first_name: '',
+        last_name: '',
+        email: '',
+        contact_number: '',
+        department: '',
+        department_id: '',
+        designation: '',
+        location: '',
+        reporting_manager_id: ''
+    });
+    const [savingEdit, setSavingEdit] = useState(false);
+    const [editError, setEditError] = useState('');
+
+    const handleOpenEditModal = (emp: any) => {
+        setEditError('');
+        setEditingEmpData(emp);
+        setEditFormData({
+            id: emp.id,
+            employee_code: emp.employee_code || '',
+            first_name: emp.first_name || '',
+            last_name: emp.last_name || '',
+            email: emp.email || emp.user?.email || '',
+            contact_number: emp.contact_number || emp.phone || emp.user?.phone || '',
+            department: emp.department || '',
+            department_id: emp.department_id || '',
+            designation: emp.designation || '',
+            location: emp.location || '',
+            reporting_manager_id: emp.reporting_manager_id || ''
+        });
+    };
+
+    const handleSaveEdit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!editingEmpData) return;
+        setSavingEdit(true);
+        setEditError('');
+        try {
+            const payload = {
+                employee_id: editingEmpData.id,
+                employee_code: editFormData.employee_code.trim(),
+                first_name: editFormData.first_name.trim(),
+                last_name: editFormData.last_name.trim(),
+                email: editFormData.email.trim(),
+                contact_number: editFormData.contact_number.trim(),
+                phone: editFormData.contact_number.trim(),
+                department: editFormData.department.trim(),
+                department_id: editFormData.department_id || null,
+                designation: editFormData.designation.trim(),
+                location: editFormData.location.trim(),
+                reporting_manager_id: editFormData.reporting_manager_id || null,
+                sync_open_tickets: true
+            };
+
+            const res = await fetch('/api/hr/admin/employees', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            const data = await res.json();
+            if (data.success) {
+                setSuccessMsg(`Employee ${payload.first_name} ${payload.last_name} (${payload.employee_code}) updated successfully!`);
+                setEditingEmpData(null);
+                fetchEmployees();
+                fetchAllManagers();
+                onRefresh?.();
+            } else {
+                setEditError(data.error || 'Failed to update employee information');
+            }
+        } catch (err: any) {
+            console.error('Error saving employee edit:', err);
+            setEditError(err.message || 'An unexpected error occurred while saving.');
+        } finally {
+            setSavingEdit(false);
+        }
+    };
 
     // Normalize manager name variations for accurate reportees matching
     const normalizeManagerName = (str: string): string => {
@@ -807,6 +887,15 @@ export default function HREmployeeDirectory({ orgId, organizationId, onRefresh }
                                                         </button>
 
                                                         <button
+                                                            onClick={() => handleOpenEditModal(emp)}
+                                                            className="px-2 py-1 text-[#587e85] hover:text-[#3d5a5f] dark:text-teal-300 dark:hover:text-teal-200 rounded-lg hover:bg-[#587e85]/10 dark:hover:bg-teal-950/40 transition-colors inline-flex items-center gap-1 text-[11px] font-semibold border border-[#587e85]/30"
+                                                            title="Edit Employee Information (Code, Name, Department, etc.)"
+                                                        >
+                                                            <Edit3 className="w-3.5 h-3.5 text-[#587e85] dark:text-teal-400" />
+                                                            <span>Edit</span>
+                                                        </button>
+
+                                                        <button
                                                             onClick={() => {
                                                                 setEditingEmpId(emp.id);
                                                                 setSelectedManagerId(emp.reporting_manager_id || '');
@@ -1000,38 +1089,52 @@ export default function HREmployeeDirectory({ orgId, organizationId, onRefresh }
 
                         {/* Footer */}
                         <div className="shrink-0 flex items-center justify-between px-5 py-3.5 bg-slate-50/50 dark:bg-slate-800/50 border-t border-slate-100 dark:border-slate-800">
-                            {!selectedEmpForInfo.is_app_linked ? (
+                            <div className="flex items-center gap-2">
                                 <button
                                     onClick={() => {
-                                        const empToOnboard = selectedEmpForInfo;
+                                        const empToEdit = selectedEmpForInfo;
                                         setSelectedEmpForInfo(null);
-                                        setNewEmpData({
-                                            user_id: empToOnboard.user_id || '',
-                                            employee_code: empToOnboard.employee_code || '',
-                                            first_name: empToOnboard.first_name || '',
-                                            last_name: empToOnboard.last_name || '',
-                                            email: empToOnboard.email || '',
-                                            contact_number: empToOnboard.contact_number || empToOnboard.phone || '',
-                                            department: empToOnboard.department || 'Operations',
-                                            department_id: empToOnboard.department_id || '',
-                                            designation: empToOnboard.designation || 'Staff',
-                                            location: empToOnboard.location || 'Main Site',
-                                            reporting_manager_id: empToOnboard.reporting_manager_id || '',
-                                            create_app_account: !empToOnboard.is_app_linked,
-                                            role: 'staff'
-                                        });
-                                        setShowAddModal(true);
+                                        handleOpenEditModal(empToEdit);
                                     }}
-                                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs flex items-center gap-1.5 shadow-sm"
+                                    className="px-3.5 py-2 bg-[#587e85] hover:bg-[#47676d] text-white rounded-xl font-bold text-xs flex items-center gap-1.5 shadow-sm transition-colors cursor-pointer"
                                 >
-                                    <UserPlus className="w-4 h-4" />
-                                    Onboard App User
+                                    <Edit3 className="w-3.5 h-3.5" />
+                                    Edit Details
                                 </button>
-                            ) : (
-                                <div className="text-[11px] text-slate-400 font-medium">
-                                    Synced with active user database
-                                </div>
-                            )}
+
+                                {!selectedEmpForInfo.is_app_linked ? (
+                                    <button
+                                        onClick={() => {
+                                            const empToOnboard = selectedEmpForInfo;
+                                            setSelectedEmpForInfo(null);
+                                            setNewEmpData({
+                                                user_id: empToOnboard.user_id || '',
+                                                employee_code: empToOnboard.employee_code || '',
+                                                first_name: empToOnboard.first_name || '',
+                                                last_name: empToOnboard.last_name || '',
+                                                email: empToOnboard.email || '',
+                                                contact_number: empToOnboard.contact_number || empToOnboard.phone || '',
+                                                department: empToOnboard.department || 'Operations',
+                                                department_id: empToOnboard.department_id || '',
+                                                designation: empToOnboard.designation || 'Staff',
+                                                location: empToOnboard.location || 'Main Site',
+                                                reporting_manager_id: empToOnboard.reporting_manager_id || '',
+                                                create_app_account: !empToOnboard.is_app_linked,
+                                                role: 'staff'
+                                            });
+                                            setShowAddModal(true);
+                                        }}
+                                        className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs flex items-center gap-1.5 shadow-sm"
+                                    >
+                                        <UserPlus className="w-3.5 h-3.5" />
+                                        Onboard App User
+                                    </button>
+                                ) : (
+                                    <div className="text-[11px] text-slate-400 font-medium">
+                                        Synced with active user database
+                                    </div>
+                                )}
+                            </div>
 
                             <button
                                 onClick={() => setSelectedEmpForInfo(null)}
@@ -1347,6 +1450,267 @@ export default function HREmployeeDirectory({ orgId, organizationId, onRefresh }
                                 {deleting ? 'Removing...' : 'Confirm Remove'}
                             </button>
                         </div>
+                    </div>
+                </div>
+            )}
+            {/* Edit Employee Info Modal */}
+            {editingEmpData && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-2 sm:p-4 animate-in fade-in duration-150">
+                    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl sm:rounded-3xl shadow-2xl max-w-lg w-full max-h-[92vh] sm:max-h-[85vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-200 my-auto">
+                        {/* Header */}
+                        <div className="shrink-0 flex items-center justify-between px-4 sm:px-6 py-3.5 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/50">
+                            <div className="flex items-center gap-2.5">
+                                <div className="p-2 bg-[#587e85]/10 dark:bg-[#587e85]/20 text-[#587e85] dark:text-teal-300 rounded-xl">
+                                    <UserCog className="w-5 h-5" />
+                                </div>
+                                <div>
+                                    <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
+                                        Edit Employee Information
+                                    </h3>
+                                    <p className="text-[11px] text-slate-500 font-mono mt-0.5">
+                                        {editingEmpData.employee_code} • {editingEmpData.first_name} {editingEmpData.last_name}
+                                    </p>
+                                </div>
+                            </div>
+                            <button
+                                onClick={() => setEditingEmpData(null)}
+                                className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg transition-colors shrink-0"
+                            >
+                                ✕
+                            </button>
+                        </div>
+
+                        <form onSubmit={handleSaveEdit} className="flex flex-col flex-1 min-h-0 text-xs">
+                            <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-3.5">
+                                {/* Error Banner */}
+                                {editError && (
+                                    <div className="p-3 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800/80 rounded-xl flex items-center gap-2 text-xs text-red-700 dark:text-red-300">
+                                        <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
+                                        <span>{editError}</span>
+                                    </div>
+                                )}
+
+                                {/* App Link Status Notice */}
+                                {editingEmpData.is_app_linked ? (
+                                    <div className="p-2.5 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 rounded-xl flex items-center justify-between text-xs text-emerald-800 dark:text-emerald-300">
+                                        <div className="flex items-center gap-2">
+                                            <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+                                            <div>
+                                                <span className="font-bold">Linked App Account: </span>
+                                                <span>{editingEmpData.app_email || editingEmpData.user?.email || editingEmpData.email}</span>
+                                            </div>
+                                        </div>
+                                        <span className="text-[10px] bg-emerald-100 dark:bg-emerald-900/60 font-bold px-2 py-0.5 rounded-full text-emerald-700 dark:text-emerald-300 uppercase">
+                                            {formatAppRole(editingEmpData)}
+                                        </span>
+                                    </div>
+                                ) : (
+                                    <div className="p-2.5 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 rounded-xl flex items-center gap-2 text-xs text-amber-800 dark:text-amber-300">
+                                        <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                                        <span>In Excel / Directory only (no linked app login).</span>
+                                    </div>
+                                )}
+
+                                {/* Employee Code & Location */}
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                    <div>
+                                        <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                                            Employee Code *
+                                        </label>
+                                        <input
+                                            type="text"
+                                            required
+                                            value={editFormData.employee_code}
+                                            onChange={e => setEditFormData({ ...editFormData, employee_code: e.target.value })}
+                                            placeholder="e.g. E005"
+                                            className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white font-mono font-bold outline-none focus:ring-2 focus:ring-[#587e85]"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                                            Location / Site
+                                        </label>
+                                        <input
+                                            type="text"
+                                            value={editFormData.location}
+                                            onChange={e => setEditFormData({ ...editFormData, location: e.target.value })}
+                                            placeholder="e.g. Lower Parel"
+                                            className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-[#587e85]"
+                                        />
+                                    </div>
+                                </div>
+
+                                {/* Name */}
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                    <div>
+                                        <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                                            First Name *
+                                        </label>
+                                        <input
+                                            type="text"
+                                            required
+                                            value={editFormData.first_name}
+                                            onChange={e => setEditFormData({ ...editFormData, first_name: e.target.value })}
+                                            placeholder="e.g. Sahil"
+                                            className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-[#587e85]"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                                            Last Name *
+                                        </label>
+                                        <input
+                                            type="text"
+                                            required
+                                            value={editFormData.last_name}
+                                            onChange={e => setEditFormData({ ...editFormData, last_name: e.target.value })}
+                                            placeholder="e.g. Sitaprao"
+                                            className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-[#587e85]"
+                                        />
+                                    </div>
+                                </div>
+
+                                {/* Email & Phone */}
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                    <div>
+                                        <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                                            Email Address *
+                                        </label>
+                                        <input
+                                            type="email"
+                                            required
+                                            value={editFormData.email}
+                                            onChange={e => setEditFormData({ ...editFormData, email: e.target.value })}
+                                            placeholder="e.g. employee@company.com"
+                                            className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-[#587e85]"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                                            Contact / Mobile Number
+                                        </label>
+                                        <input
+                                            type="tel"
+                                            value={editFormData.contact_number}
+                                            onChange={e => setEditFormData({ ...editFormData, contact_number: e.target.value })}
+                                            placeholder="e.g. 9820000000"
+                                            className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-[#587e85]"
+                                        />
+                                    </div>
+                                </div>
+
+                                {/* Department & Designation */}
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                    <div>
+                                        <div className="flex items-center justify-between mb-1">
+                                            <label className="block font-semibold text-slate-700 dark:text-slate-300">
+                                                Department *
+                                            </label>
+                                            {departmentsList.some(d => d.name.toLowerCase() === (editFormData.department || '').toLowerCase() || d.id === editFormData.department_id) && (
+                                                <span className="text-[10px] font-mono font-semibold px-1.5 py-0.5 rounded bg-teal-50 dark:bg-teal-950/60 text-[#587e85] dark:text-teal-300 border border-[#587e85]/30">
+                                                    Matched
+                                                </span>
+                                            )}
+                                        </div>
+                                        {departmentsList.length > 0 ? (
+                                            <select
+                                                value={editFormData.department_id || (departmentsList.find(d => d.name.toLowerCase() === (editFormData.department || '').toLowerCase())?.id || '')}
+                                                onChange={e => {
+                                                    const chosenId = e.target.value;
+                                                    const chosen = departmentsList.find(d => d.id === chosenId);
+                                                    if (chosen) {
+                                                        setEditFormData({
+                                                            ...editFormData,
+                                                            department: chosen.name,
+                                                            department_id: chosen.id
+                                                        });
+                                                    } else {
+                                                        setEditFormData({
+                                                            ...editFormData,
+                                                            department: chosenId,
+                                                            department_id: ''
+                                                        });
+                                                    }
+                                                }}
+                                                className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-[#587e85] text-xs"
+                                            >
+                                                <option value="">Select Department...</option>
+                                                {departmentsList.map(d => (
+                                                    <option key={d.id} value={d.id}>
+                                                        {d.name} {d.code ? `(${d.code})` : ''}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        ) : (
+                                            <input
+                                                type="text"
+                                                value={editFormData.department}
+                                                onChange={e => setEditFormData({ ...editFormData, department: e.target.value })}
+                                                placeholder="e.g. Operations, Procurement..."
+                                                className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-[#587e85]"
+                                            />
+                                        )}
+                                    </div>
+                                    <div>
+                                        <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                                            Designation
+                                        </label>
+                                        <input
+                                            type="text"
+                                            value={editFormData.designation}
+                                            onChange={e => setEditFormData({ ...editFormData, designation: e.target.value })}
+                                            placeholder="e.g. Executive, Senior Manager..."
+                                            className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-[#587e85]"
+                                        />
+                                    </div>
+                                </div>
+
+                                {/* Reporting Manager */}
+                                <div>
+                                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                                        Reporting Manager
+                                    </label>
+                                    <SearchableManagerDropdown
+                                        value={editFormData.reporting_manager_id}
+                                        onChange={(id) => setEditFormData({ ...editFormData, reporting_manager_id: id })}
+                                        employees={allManagers.length > 0 ? allManagers : employees}
+                                        currentEmpId={editingEmpData.id}
+                                        placeholder="Select Manager..."
+                                    />
+                                    <div className="text-[11px] text-slate-400 mt-1">
+                                        Reassigning will automatically route any new HR grievances or escalation workflows to this manager.
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Footer */}
+                            <div className="shrink-0 flex items-center justify-end gap-2 px-4 sm:px-6 py-3 bg-slate-50/50 dark:bg-slate-800/50 border-t border-slate-100 dark:border-slate-800">
+                                <button
+                                    type="button"
+                                    onClick={() => setEditingEmpData(null)}
+                                    className="px-4 py-2 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-xl font-semibold hover:bg-slate-300 transition-colors"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={savingEdit}
+                                    className="px-5 py-2 bg-[#587e85] hover:bg-[#47676d] text-white rounded-xl font-bold shadow-md disabled:opacity-50 transition-colors flex items-center gap-1.5"
+                                >
+                                    {savingEdit ? (
+                                        <>
+                                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                                            <span>Saving...</span>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Check className="w-3.5 h-3.5" />
+                                            <span>Save Changes</span>
+                                        </>
+                                    )}
+                                </button>
+                            </div>
+                        </form>
                     </div>
                 </div>
             )}
