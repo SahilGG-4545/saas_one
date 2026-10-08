@@ -97,9 +97,35 @@ export async function GET(
         );
         const isSubmitter = Boolean(reqUserId && ticket.raised_by_user_id === reqUserId);
 
+        let isDesignatedAdminConfigAssignee = false;
+        try {
+            const { data: orgSettings } = await supabaseAdmin
+                .from('organization_settings')
+                .select('hr_escalation_config, notification_matrix')
+                .eq('organization_id', ticket.organization_id)
+                .maybeSingle();
+
+            const configObj = orgSettings?.notification_matrix?.hr_escalation_config || orgSettings?.hr_escalation_config || {};
+            let flowAssigneesConfig = configObj.flow_assignees || {};
+            while (flowAssigneesConfig && flowAssigneesConfig.flow_assignees) {
+                flowAssigneesConfig = flowAssigneesConfig.flow_assignees;
+            }
+            const tType = ticket.ticket_type || ticket.category?.ticket_type || '';
+            const configAssigneesForType = new Set<string>();
+            const flowObj = flowAssigneesConfig[tType] || {};
+            Object.values(flowObj).forEach((val: any) => {
+                if (Array.isArray(val)) val.forEach((id: string) => configAssigneesForType.add(id));
+            });
+            if (reqUserId && configAssigneesForType.has(reqUserId)) {
+                isDesignatedAdminConfigAssignee = true;
+            }
+        } catch (e) {
+            console.warn('Could not read escalation config for ticket authorization:', e);
+        }
+
         if (ticket.is_anonymous) {
-            // Anonymous feedback tickets are strictly accessible to Org Super Admin, the assigned handler, or the submitter
-            if (!isSuperAdmin && !isAssigned && !isSubmitter) {
+            // Anonymous feedback tickets are strictly accessible to Org Super Admin, the assigned handler, designated Admin Config assignees, or the submitter
+            if (!isSuperAdmin && !isAssigned && !isSubmitter && !isDesignatedAdminConfigAssignee) {
                 return NextResponse.json({ success: false, error: 'Anonymous feedback tickets are restricted to Org Super Admin, assigned users, and the submitter.' }, { status: 403 });
             }
             if (!isSubmitter) {
@@ -114,8 +140,8 @@ export async function GET(
                 };
             }
         } else if (isConfidential) {
-            // Confidential tickets are strictly restricted to Org Super Admin, the explicitly assigned user, or the submitter
-            if (!isSuperAdmin && !isAssigned && !isSubmitter) {
+            // Confidential tickets are strictly restricted to Org Super Admin, the explicitly assigned user, designated Admin Config assignees, or the submitter
+            if (!isSuperAdmin && !isAssigned && !isSubmitter && !isDesignatedAdminConfigAssignee) {
                 return NextResponse.json({ success: false, error: 'Confidential tickets are not accessible to unauthorized roles and are restricted to Org Super Admin, Director, and assigned users.' }, { status: 403 });
             }
         }

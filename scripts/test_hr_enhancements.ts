@@ -164,7 +164,7 @@ async function testEnhancements() {
         // 4. TEST DESIGNATION FROM EMPLOYEE_PROFILES IN TICKET DETAILS
         console.log('\n--- TEST 4: Designation in Ticket Details ---');
         if (testTicket) {
-            const reqDetail = new Request(`http://localhost/api/hr/tickets/${testTicket.id}?userId=${hrUserId}&role=hr`);
+            const reqDetail = new Request(`http://localhost/api/hr/tickets/${testTicket.id}?userId=${hrUserId}&role=org_super_admin`);
             const resDetail = await getTicketById(reqDetail, { params: Promise.resolve({ id: testTicket.id }) });
             const dataDetail = await resDetail.json();
 

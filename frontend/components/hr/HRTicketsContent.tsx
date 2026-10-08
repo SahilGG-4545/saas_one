@@ -21,16 +21,22 @@ import SLALiveTimer from '@/frontend/components/hr/SLALiveTimer';
 import HROrgChartTree from '@/frontend/components/hr/HROrgChartTree';
 import EmployeeQuickProfileModal, { EmployeeProfileModalData } from '@/frontend/components/hr/EmployeeQuickProfileModal';
 import HRNotesTrackerTab from '@/frontend/components/hr/HRNotesTrackerTab';
+import { hrDataCache } from '@/frontend/components/hr/hrDataCache';
 
 export function HRTicketsContent({ orgId }: { orgId: string }) {
     const { user, membership } = useAuth();
     const searchParams = useSearchParams();
 
     const [activeTab, setActiveTab] = useState<'tickets' | 'notes' | 'tree' | 'directory' | 'reconciliation' | 'config' | 'analytics'>('tickets');
+    const [visitedTabs, setVisitedTabs] = useState<Set<string>>(new Set(['tickets']));
     const [viewMode, setViewMode] = useState<'kanban' | 'table' | 'properties'>('table');
 
-    const [tickets, setTickets] = useState<any[]>([]);
-    const [properties, setProperties] = useState<any[]>([]);
+    const [tickets, setTickets] = useState<any[]>(() => {
+        return hrDataCache.getTickets(`${orgId}_initial`).data || [];
+    });
+    const [properties, setProperties] = useState<any[]>(() => {
+        return hrDataCache.getProperties(orgId).data || [];
+    });
     const [selectedPropertyId, setSelectedPropertyId] = useState<string>('all');
     const [scopeFilter, setScopeFilter] = useState<'all' | 'my_raised' | 'assigned_to_me' | 'department' | 'my_team_assigned'>('all');
     const [departmentSubView, setDepartmentSubView] = useState<'tree' | 'table'>('tree');
@@ -39,8 +45,19 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
     const [ticketTypeFilter, setTicketTypeFilter] = useState<string>('all');
     const [statusFilter, setStatusFilter] = useState<string>('all');
     const [searchQuery, setSearchQuery] = useState<string>('');
-    const [loading, setLoading] = useState(true);
-    const [employeesList, setEmployeesList] = useState<any[]>([]);
+    const [loading, setLoading] = useState(false);
+    const [employeesList, setEmployeesList] = useState<any[]>(() => {
+        return hrDataCache.getEmployees(orgId).data || [];
+    });
+
+    useEffect(() => {
+        setVisitedTabs(prev => {
+            if (prev.has(activeTab)) return prev;
+            const next = new Set(prev);
+            next.add(activeTab);
+            return next;
+        });
+    }, [activeTab]);
 
     // Tree View State
     const [treeViewMode, setTreeViewMode] = useState<'chart' | 'list'>('chart');
@@ -80,16 +97,22 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
     }, [orgId]);
 
     const fetchEmployeesList = async () => {
+        const cached = hrDataCache.getEmployees(orgId);
+        if (cached.data && cached.data.length > 0) {
+            setEmployeesList(cached.data);
+        }
         try {
             const res = await fetch(`/api/hr/admin/employees?orgId=${orgId}`);
             const data = await res.json();
             if (data.success && data.data) {
                 setEmployeesList(data.data || []);
+                hrDataCache.setEmployees(orgId, data.data || []);
             } else {
                 const fallbackRes = await fetch(`/api/hr/admin/escalation-config?orgId=${orgId}`);
                 const fallbackData = await fallbackRes.json();
                 if (fallbackData.success && fallbackData.data?.employees) {
                     setEmployeesList(fallbackData.data.employees || []);
+                    hrDataCache.setEmployees(orgId, fallbackData.data.employees || []);
                 }
             }
         } catch (e) {
@@ -353,6 +376,10 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
     }, [orgId, user?.id, userRole, selectedPropertyId]);
 
     const fetchProperties = async () => {
+        const cached = hrDataCache.getProperties(orgId);
+        if (cached.data && cached.data.length > 0) {
+            setProperties(cached.data);
+        }
         try {
             let res = await fetch(`/api/properties?organizationId=${orgId}`);
             let text = await res.text();
@@ -383,6 +410,9 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
             }
 
             setProperties(propsList);
+            if (propsList.length > 0) {
+                hrDataCache.setProperties(orgId, propsList);
+            }
         } catch (err) {
             console.error('Error fetching properties:', err);
         }
@@ -393,7 +423,16 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
             setLoading(false);
             return;
         }
-        if (!isBackground && tickets.length === 0) setLoading(true);
+        const cacheKey = `${orgId}_${user.id}_${selectedPropertyId}_${userRole}`;
+        const cached = hrDataCache.getTickets(cacheKey);
+        if (cached.data && cached.data.length > 0) {
+            if (tickets.length === 0) {
+                setTickets(cached.data);
+            }
+            setLoading(false);
+        } else if (!isBackground && tickets.length === 0) {
+            setLoading(true);
+        }
         try {
             const url = new URL('/api/hr/tickets', window.location.origin);
             url.searchParams.append('orgId', orgId);
@@ -408,18 +447,21 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
             let data: any = {};
             try { data = text ? JSON.parse(text) : {}; } catch {}
             if (data.success) {
-                setTickets(data.data || []);
+                const list = data.data || [];
+                setTickets(list);
+                hrDataCache.setTickets(cacheKey, list);
             }
         } catch (err) {
             console.error('Error fetching tickets:', err);
         } finally {
-            if (!isBackground) setLoading(false);
+            setLoading(false);
         }
     };
 
     const handleUpdateStatus = async (ticketId: string, newStatus: string) => {
         // Optimistic UI update
         setTickets(prev => prev.map(t => t.id === ticketId ? { ...t, status: newStatus } : t));
+        hrDataCache.updateTicketStatus(ticketId, newStatus);
         try {
             const res = await fetch(`/api/hr/tickets/${ticketId}`, {
                 method: 'PATCH',
@@ -1268,8 +1310,9 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
             )}
 
             {/* TAB 1: ORGANIZATION REPORTING TREE & WORKLOAD INSPECTOR */}
-            {activeTab === 'tree' && (
-                <div className="space-y-5">
+            {visitedTabs.has('tree') && (
+                <div className={activeTab === 'tree' ? 'space-y-5' : 'hidden'}>
+                    <div className="space-y-5">
                     {/* View Mode Toggle Bar */}
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white dark:bg-slate-900 p-3 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xs">
                         <div className="flex items-center gap-2">
@@ -1623,10 +1666,13 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
                         </div>
                     ) : null}
                 </div>
+                </div>
             )}
 
-            {/* TAB 2: HR ADMIN, OPS SUPER ADMIN & PROPERTY ADMIN KPI STAT CARDS */}
-            {activeTab === 'tickets' && (canViewOrgWide || isManager || isScopedRole) && (() => {
+            {/* TAB 2: HR ADMIN, OPS SUPER ADMIN & PROPERTY ADMIN KPI STAT CARDS & TICKETS */}
+            {visitedTabs.has('tickets') && (
+                <div className={activeTab === 'tickets' ? 'space-y-4' : 'hidden'}>
+                    {(canViewOrgWide || isManager || isScopedRole) && (() => {
                 const isStrictOrgSuperAdmin = ['org_super_admin', 'master_admin', 'super_admin'].includes(userRole);
                 const showHrQueries = isStrictOrgSuperAdmin || isHrRole || hrQueriesCount > 0;
                 const showConfidential = isStrictOrgSuperAdmin || confidentialCount > 0;
@@ -1882,8 +1928,7 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
             })()}
 
             {/* MAIN TICKETS TAB */}
-            {activeTab === 'tickets' && (
-                <div className="space-y-4">
+            <div className="space-y-4">
                     {/* Non-HR Scope Filter Pills & Assignee Inspector Dropdown */}
                     <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3 bg-white dark:bg-slate-900 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xs">
                         <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800/80 p-1 rounded-xl overflow-x-auto no-scrollbar whitespace-nowrap">
@@ -2021,7 +2066,7 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
                     </div>
 
                     {/* Content Section: Table */}
-                    {loading ? (
+                    {loading && tickets.length === 0 ? (
                         <div className="p-12 text-center bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800">
                             <div className="w-8 h-8 border-3 border-[#587e85] border-t-transparent rounded-full animate-spin mx-auto" />
                             <p className="text-xs font-bold text-slate-500 mt-3">Loading tickets data...</p>
@@ -2404,21 +2449,40 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
                         </div>
                     )}
                 </div>
+                </div>
             )}
 
             {/* TAB 3: OTHER HR MODULE TABS */}
-            {activeTab === 'notes' && (
-                <HRNotesTrackerTab
-                    orgId={orgId}
-                    currentUserId={user?.id}
-                    currentUserRole={userRole}
-                    onOpenTicket={(ticketId) => setSelectedTicketId(ticketId)}
-                />
+            {visitedTabs.has('notes') && (
+                <div className={activeTab === 'notes' ? 'block' : 'hidden'}>
+                    <HRNotesTrackerTab
+                        orgId={orgId}
+                        currentUserId={user?.id}
+                        currentUserRole={userRole}
+                        onOpenTicket={(ticketId) => setSelectedTicketId(ticketId)}
+                    />
+                </div>
             )}
-            {activeTab === 'directory' && <HREmployeeDirectory orgId={orgId} />}
-            {activeTab === 'reconciliation' && <HRReconciliationDashboard orgId={orgId} />}
-            {activeTab === 'config' && <HRAdminConfigPanel orgId={orgId} />}
-            {activeTab === 'analytics' && <HRAnalyticsDashboard orgId={orgId} tickets={tickets} />}
+            {visitedTabs.has('directory') && (
+                <div className={activeTab === 'directory' ? 'block' : 'hidden'}>
+                    <HREmployeeDirectory orgId={orgId} cachedEmployees={employeesList} />
+                </div>
+            )}
+            {visitedTabs.has('reconciliation') && (
+                <div className={activeTab === 'reconciliation' ? 'block' : 'hidden'}>
+                    <HRReconciliationDashboard orgId={orgId} />
+                </div>
+            )}
+            {visitedTabs.has('config') && (
+                <div className={activeTab === 'config' ? 'block' : 'hidden'}>
+                    <HRAdminConfigPanel orgId={orgId} />
+                </div>
+            )}
+            {visitedTabs.has('analytics') && (
+                <div className={activeTab === 'analytics' ? 'block' : 'hidden'}>
+                    <HRAnalyticsDashboard orgId={orgId} tickets={tickets} />
+                </div>
+            )}
 
             {/* Modals */}
             <TicketCreateModal

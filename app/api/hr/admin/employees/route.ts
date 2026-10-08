@@ -73,44 +73,7 @@ export async function GET(request: Request) {
             !u.deleted_at && !excludedUserIds.has(u.id)
         );
 
-        if (appUsers.length > 0 && profiles.length > 0) {
-            const updatesToPersist: { id: string; user_id: string }[] = [];
-
-            for (const p of profiles) {
-                if (!p.user_id) {
-                    const pName = `${p.first_name || ''} ${p.last_name || ''}`.toLowerCase().trim();
-                    const pEmail = (p.email || '').toLowerCase().trim();
-                    const pPhone = (p.contact_number || p.phone || '').replace(/\D/g, '');
-
-                    const match = appUsers.find(u => {
-                        const uEmail = (u.email || '').toLowerCase().trim();
-                        const uPhone = (u.phone || '').replace(/\D/g, '');
-                        const uName = (u.full_name || '').toLowerCase().trim();
-
-                        return (uEmail && pEmail && uEmail === pEmail) ||
-                               (uPhone && pPhone && uPhone.length >= 10 && uPhone === pPhone) ||
-                               (uName && pName && uName.length >= 5 && uName === pName);
-                    });
-
-                    if (match) {
-                        p.user_id = match.id;
-                        p.reconciliation_status = 'linked';
-                        p.user = match;
-                        updatesToPersist.push({ id: p.id, user_id: match.id });
-                    }
-                }
-            }
-
-            // Persist auto-links in DB
-            if (updatesToPersist.length > 0) {
-                Promise.all(updatesToPersist.map(u =>
-                    supabaseAdmin
-                        .from('employee_profiles')
-                        .update({ user_id: u.user_id, reconciliation_status: 'linked', updated_at: new Date().toISOString() })
-                        .eq('id', u.id)
-                )).catch(err => console.error('Error persisting auto-links:', err));
-            }
-        }
+        // Note: Automatic DB reconciling writes are handled by /api/hr/admin/reconcile to keep GET pure & ultra-fast.
 
         // Build role lookup map for linked users
         const userRoleMap = new Map<string, string>();
@@ -174,7 +137,10 @@ export async function GET(request: Request) {
             combined = combined.filter(emp => emp.department === department);
         }
 
-        return NextResponse.json({ success: true, data: combined });
+        return NextResponse.json(
+            { success: true, data: combined },
+            { headers: { 'Cache-Control': 'private, max-age=15, stale-while-revalidate=60' } }
+        );
     } catch (err: any) {
         return NextResponse.json({ success: false, error: err.message }, { status: 500 });
     }
