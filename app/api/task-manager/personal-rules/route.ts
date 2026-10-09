@@ -1,16 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/frontend/utils/supabase/server';
-import { DepartmentRulesService, RulesError } from '@/task-manager/DepartmentRulesService';
+import { PersonalRulesService } from '@/task-manager/PersonalRulesService';
+import { RulesError } from '@/task-manager/DepartmentRulesService';
 
 export const dynamic = 'force-dynamic';
 
 /**
- * Step 6 — a team manages its own Task Manager notifications.
- *   GET  /api/task-manager/department-rules[?department=Procurement]
- *   POST /api/task-manager/department-rules  { action: 'save' | 'delete' | 'preview', ... }
+ * A superuser's own Task Manager notifications (sent only to them).
+ *   GET  /api/task-manager/personal-rules
+ *   POST /api/task-manager/personal-rules  { action: 'save' | 'delete' | 'preview', ... }
  *
- * WHO is acting always comes from the signed-in session; the body can never name the actor or the department
- * (only a superuser may name a department by label). A person can only ever reach rules of their OWN department.
+ * WHO is acting always comes from the signed-in session; the body can never name the person. Superusers only.
  * Nothing here sends a message: 'preview' is a simulation that writes nothing.
  */
 async function sessionUserId(): Promise<string | null> {
@@ -23,15 +23,15 @@ function fail(err: unknown) {
     if (err instanceof RulesError) {
         return NextResponse.json({ success: false, error: err.message, code: err.code }, { status: err.status });
     }
-    console.error('[DepartmentRulesAPI] error:', err);
+    console.error('[PersonalRulesAPI] error:', err);
     return NextResponse.json({ success: false, error: err instanceof Error ? err.message : 'Something went wrong' }, { status: 500 });
 }
 
-export async function GET(request: NextRequest) {
+export async function GET() {
     try {
         const userId = await sessionUserId();
         if (!userId) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-        const data = await DepartmentRulesService.list(userId, request.nextUrl.searchParams.get('department') || undefined);
+        const data = await PersonalRulesService.list(userId);
         return NextResponse.json({ success: true, ...data });
     } catch (err) {
         return fail(err);
@@ -44,22 +44,21 @@ export async function POST(request: NextRequest) {
         if (!userId) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
         const body = await request.json().catch(() => ({}));
-        const department = typeof body.department === 'string' ? body.department : undefined;
 
         if (body.action === 'save') {
-            const rule = await DepartmentRulesService.save(userId, body.rule || {}, department);
+            const rule = await PersonalRulesService.save(userId, body.rule || {});
             return NextResponse.json({ success: true, rule });
         }
         if (body.action === 'delete') {
-            await DepartmentRulesService.remove(userId, String(body.ruleId || ''), department);
+            await PersonalRulesService.remove(userId, String(body.ruleId || ''));
             return NextResponse.json({ success: true });
         }
         if (body.action === 'send_now') {
-            const result = await DepartmentRulesService.sendNow(userId, { ruleId: String(body.ruleId || ''), confirm: body.confirm === true }, department);
+            const result = await PersonalRulesService.sendNow(userId, String(body.ruleId || ''));
             return NextResponse.json({ success: true, result });
         }
         if (body.action === 'preview') {
-            const preview = await DepartmentRulesService.preview(userId, body.rule || {}, department);
+            const preview = await PersonalRulesService.preview(userId, body.rule || {});
             return NextResponse.json({ success: true, ...preview });
         }
         return NextResponse.json({ success: false, error: `Invalid action: ${body.action}` }, { status: 400 });

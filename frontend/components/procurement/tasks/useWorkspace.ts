@@ -110,6 +110,35 @@ export function useWorkspace(date: string, departmentName: string) {
         }
     }, [load, post, toast]);
 
+    /** Deletes a task for good. No confirmation by design; the server checks who may do it, then the board reloads. */
+    const deleteTask = useCallback(async (taskId: string) => {
+        try {
+            await post({ action: 'delete_task', taskId });
+            toast('success', 'Task deleted');
+            await load();
+            return true;
+        } catch (err) {
+            toast('error', messageOf(err, 'Could not delete that task'));
+            load();
+            return false;
+        }
+    }, [load, post, toast]);
+
+    /** Locks (comes back every working day) or unlocks one of MY tasks. The screen changes at once and snaps back if the server refuses. */
+    const setLocked = useCallback(async (taskId: string, locked: boolean) => {
+        const before = wsRef.current;
+        if (!before || before.state !== 'ok') return;
+        setWs({ ...before, tasks: before.tasks.map(t => (t.id === taskId ? { ...t, locked } : t)) });
+        try {
+            await post({ action: 'set_locked', taskId, locked });
+            toast('success', locked ? 'Locked. This task comes back every working day.' : 'Unlocked. It will not come back.');
+            load();
+        } catch (err) {
+            setWs(before);
+            toast('error', messageOf(err, 'Could not change that task'));
+        }
+    }, [load, post, toast]);
+
     const ok: WorkspaceOk | null = ws && ws.state === 'ok' ? ws : null;
-    return { ws, ok, loading, refreshing, error, toasts, dismissToast, reload: load, moveTask, addTask, giveTask };
+    return { ws, ok, loading, refreshing, error, toasts, dismissToast, reload: load, moveTask, addTask, giveTask, deleteTask, setLocked };
 }

@@ -18,6 +18,12 @@ export interface WTask {
     canChange: boolean;
     /** Server decision: I hold this task and it is not finished, so I may give it to a teammate. */
     canHandOver?: boolean;
+    /** A personal fixed task: comes back every working day, and cannot be deleted until unlocked. */
+    locked?: boolean;
+    /** The holder may lock or unlock it. */
+    canLock?: boolean;
+    /** Console view only: who gave it and from which department */
+    meta?: { from: string; department: string };
 }
 
 export interface WMember {

@@ -19,11 +19,10 @@ import SuperuserPanel from './tasks/SuperuserPanel';
  */
 
 type View = 'board' | 'team' | 'notifications' | 'superuser';
-type Filter = 'all' | 'mine' | 'today' | 'carried';
+type Filter = 'all' | 'today' | 'carried';
 
 const FILTERS: ReadonlyArray<{ id: Filter; label: string }> = [
     { id: 'all', label: 'All' },
-    { id: 'mine', label: 'My tasks' },
     { id: 'today', label: 'Today' },
     { id: 'carried', label: 'Carried forward' },
 ];
@@ -91,17 +90,19 @@ export default function ProcurementTasksTab({ departmentName = 'Procurement' }: 
     const [filter, setFilter] = useState<Filter>('all');
     const [dialog, setDialog] = useState<{ open: boolean; target: string | null }>({ open: false, target: null });
 
-    const { ws, ok, loading, refreshing, error, toasts, dismissToast, reload, moveTask, addTask, giveTask } = useWorkspace(date, departmentName);
+    const { ws, ok, loading, refreshing, error, toasts, dismissToast, reload, moveTask, addTask, giveTask, deleteTask, setLocked } = useWorkspace(date, departmentName);
+
+    // The board shows only MY tasks; the Team tab is where other people's tasks live.
+    const mine: WTask[] = useMemo(() => (ok ? ok.tasks.filter(t => t.ownerId === ok.actor.userId) : []), [ok]);
 
     const filtered: WTask[] = useMemo(() => {
         if (!ok) return [];
-        return ok.tasks.filter(t => {
-            if (filter === 'mine') return t.ownerId === ok.actor.userId;
+        return mine.filter(t => {
             if (filter === 'today') return !t.isCarriedForward;
             if (filter === 'carried') return t.isCarriedForward;
             return true;
         });
-    }, [ok, filter]);
+    }, [ok, mine, filter]);
 
     const counts = useMemo(() => ({
         todo: filtered.filter(t => t.status === 'pending').length,
@@ -111,14 +112,13 @@ export default function ProcurementTasksTab({ departmentName = 'Procurement' }: 
     }), [filtered]);
 
     const filterCounts = useMemo(() => {
-        const all = ok?.tasks || [];
+        const all = mine;
         return {
             all: all.length,
-            mine: all.filter(t => t.ownerId === ok?.actor.userId).length,
             today: all.filter(t => !t.isCarriedForward).length,
             carried: all.filter(t => t.isCarriedForward).length,
         };
-    }, [ok]);
+    }, [mine]);
 
     if (loading && !ws) return <Skeleton />;
     if (ws && (ws.state === 'locked' || ws.state === 'no_profile')) return <LockScreen message={ws.message} />;
@@ -205,7 +205,7 @@ export default function ProcurementTasksTab({ departmentName = 'Procurement' }: 
                         { id: 'board' as View, label: 'Board', icon: <LayoutGrid className="h-3.5 w-3.5" /> },
                         { id: 'team' as View, label: 'Team', icon: <Users className="h-3.5 w-3.5" /> },
                         { id: 'notifications' as View, label: 'Notifications', icon: <Bell className="h-3.5 w-3.5" /> },
-                        ...(collab ? [{ id: 'superuser' as View, label: collab.superusers[0].name.split(' ')[0], icon: <Send className="h-3.5 w-3.5" /> }] : []),
+                        ...(collab ? [{ id: 'superuser' as View, label: 'Send', icon: <Send className="h-3.5 w-3.5" /> }] : []),
                     ]}
                 />
                 {view === 'board' && (
@@ -219,13 +219,13 @@ export default function ProcurementTasksTab({ departmentName = 'Procurement' }: 
             {/* content */}
             <AnimatePresence mode="wait" initial={false}>
                 <motion.div key={view} initial={reduce ? false : { opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={reduce ? undefined : { opacity: 0, y: -6 }} transition={{ duration: 0.3, ease: EASE }}>
-                    {view === 'board' && <Board tasks={filtered} meId={meId} onMove={moveTask} onQuickAdd={quickAdd} give={give} />}
+                    {view === 'board' && <Board tasks={filtered} meId={meId} onMove={moveTask} onQuickAdd={quickAdd} onDelete={deleteTask} onLock={setLocked} give={give} />}
                     {view === 'team' && <TeamView members={ok.members} tasks={ok.tasks} assignable={ok.assignable} onAssign={openDialog} />}
                     {view === 'notifications' && <NotificationsView departmentName={departmentName} />}
                     {view === 'superuser' && collab && (
                         <SuperuserPanel
                             onAddTask={(recipientId, title) => addTask({ targetUserId: recipientId, title, date })}
-                            onGiveTask={(taskId, recipientId, name) => giveTask(taskId, recipientId, name)}
+                            onDeleteTask={deleteTask}
                             onChanged={reload}
                         />
                     )}

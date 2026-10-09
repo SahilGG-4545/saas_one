@@ -1,21 +1,22 @@
 'use client';
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { Bell, CalendarClock, Check, Clock, Loader2, Plus, Send, X } from 'lucide-react';
+import { Bell, CalendarClock, Check, Clock, Loader2, Plus, Send, Trash2, X } from 'lucide-react';
 import { buildPingText } from '@/task-manager/pingMessage';
 import { useSuperuserPings } from './useSuperuserPings';
+import TimeWheelPicker from './TimeWheelPicker';
 
 /**
- * The "superuser" view (for example Saniel): see the tasks your team gave him, remind him about some or all of them — now or
+ * The "superuser" view (the manager): see the tasks your team gave them, remind them about some or all of them — now or
  * later — with a live preview of the exact WhatsApp message, and set the team's one shared regular reminder.
  * The server decides what is allowed; this screen only shows and sends.
  */
 
 const DAYS = [{ d: 1, l: 'Mon' }, { d: 2, l: 'Tue' }, { d: 3, l: 'Wed' }, { d: 4, l: 'Thu' }, { d: 5, l: 'Fri' }, { d: 6, l: 'Sat' }, { d: 0, l: 'Sun' }];
-const TIMES = Array.from({ length: 96 }, (_, i) => `${String(Math.floor(i / 4)).padStart(2, '0')}:${String((i % 4) * 15).padStart(2, '0')}`);
 
 const pad = (n: number) => String(n).padStart(2, '0');
-const localInput = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+const dateInput = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const timeInput = (d: Date) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 /** The next quarter-hour at least `minutes` from now (the scheduler runs every 15 minutes). */
 function quarterHourFromNow(minutes: number): Date {
     const d = new Date(Date.now() + minutes * 60000);
@@ -30,21 +31,21 @@ const STATUS_STYLE: Record<string, string> = {
     failed: 'bg-rose-100 text-rose-800', cancelled: 'bg-zinc-200 text-zinc-600',
 };
 
-export default function SuperuserPanel({ onAddTask, onGiveTask, onChanged }: {
+export default function SuperuserPanel({ onAddTask, onDeleteTask, onChanged }: {
     onAddTask: (recipientId: string, title: string) => Promise<boolean>;
-    onGiveTask: (taskId: string, recipientId: string, name: string) => Promise<boolean>;
+    onDeleteTask: (taskId: string) => Promise<boolean>;
     onChanged: () => void;
 }) {
     const { panel, loading, error, send, cancel, saveReminder, reload } = useSuperuserPings(true);
     const [picked, setPicked] = useState<Set<string>>(new Set());
     const [from, setFrom] = useState('');
     const [note, setNote] = useState('');
-    const [when, setWhen] = useState('');
+    const [whenDate, setWhenDate] = useState('');
+    const [whenTime, setWhenTime] = useState('09:00');
     const [newTask, setNewTask] = useState('');
     const [busy, setBusy] = useState<string | null>(null);
     const [message, setMessage] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
     const [rem, setRem] = useState<{ enabled: boolean; time: string; days: number[] } | null>(null);
-    const [dragging, setDragging] = useState(false);
 
     // pick everything by default, and keep the picks valid when the list changes
     useEffect(() => {
@@ -58,6 +59,7 @@ export default function SuperuserPanel({ onAddTask, onGiveTask, onChanged }: {
         setRem(r => r || { enabled: panel.reminder.enabled, time: panel.reminder.time, days: panel.reminder.days });
     }, [panel]);
 
+    const when = whenDate ? `${whenDate}T${whenTime}` : '';
     const chosen = useMemo(() => (panel?.tasks || []).filter(t => picked.has(t.id)), [panel, picked]);
     const preview = panel ? buildPingText({ fromLabel: from || panel.me.name, department: panel.department, tasks: chosen.map(t => t.title), note }) : '';
 
@@ -70,7 +72,7 @@ export default function SuperuserPanel({ onAddTask, onGiveTask, onChanged }: {
         </div>;
     }
     const who = panel.recipient;
-    const first = who.name.split(' ')[0];
+    const first = 'Manager';
 
     const flash = (kind: 'ok' | 'err', text: string) => { setMessage({ kind, text }); setTimeout(() => setMessage(null), 5000); };
 
@@ -79,7 +81,7 @@ export default function SuperuserPanel({ onAddTask, onGiveTask, onChanged }: {
         setBusy('send');
         const r = await send({ taskIds: chosen.map(t => t.id), fromLabel: from, note, sendAt, force });
         setBusy(null);
-        if (r.ok) { flash('ok', r.status === 'sent' ? `Sent to ${first}.` : `Scheduled for ${whenLabel(sendAt!)}.`); setNote(''); setWhen(''); return; }
+        if (r.ok) { flash('ok', r.status === 'sent' ? `Sent to ${first}.` : `Scheduled for ${whenLabel(sendAt!)}.`); setNote(''); setWhenDate(''); return; }
         if (r.code === 'RECENT' && window.confirm(`${r.message}`)) return doSend(sendAt, true);
         if (r.code !== 'RECENT') flash('err', r.message);
     };
@@ -100,9 +102,9 @@ export default function SuperuserPanel({ onAddTask, onGiveTask, onChanged }: {
         if (ok) { setNewTask(''); await reload(); onChanged(); }
     };
 
-    const give = async (id: string) => {
-        setBusy(`give-${id}`);
-        const ok = await onGiveTask(id, who.id, who.name);
+    const remove = async (id: string) => {
+        setBusy(`del-${id}`);
+        const ok = await onDeleteTask(id);
         setBusy(null);
         if (ok) { await reload(); onChanged(); }
     };
@@ -126,7 +128,7 @@ export default function SuperuserPanel({ onAddTask, onGiveTask, onChanged }: {
                         </button>
                     )}
                 </div>
-                {panel.tasks.length === 0 && <p className="rounded-2xl border border-dashed border-zinc-300 p-4 text-xs text-zinc-500 dark:border-zinc-700">Nothing yet. Add a task for {first} below, or drag one of your tasks onto the box.</p>}
+                {panel.tasks.length === 0 && <p className="rounded-2xl border border-dashed border-zinc-300 p-4 text-xs text-zinc-500 dark:border-zinc-700">Nothing yet. Add a task for the {first.toLowerCase()} below.</p>}
                 <ul className="space-y-1.5">
                     {panel.tasks.map(t => (
                         <li key={t.id}>
@@ -136,6 +138,13 @@ export default function SuperuserPanel({ onAddTask, onGiveTask, onChanged }: {
                                     <span className="block break-words font-bold text-zinc-900 dark:text-zinc-100">{t.title}</span>
                                     <span className="text-[11px] text-zinc-500">from {t.assignerName}{t.status === 'in_progress' ? ' · in progress' : ''}</span>
                                 </span>
+                                {t.assignerId === panel.me.id && (
+                                    <button type="button" disabled={busy === `del-${t.id}`} aria-label={`Delete ${t.title}`} title="Delete task"
+                                        onClick={e => { e.preventDefault(); e.stopPropagation(); remove(t.id); }}
+                                        className="shrink-0 rounded-lg p-1.5 text-zinc-400 transition-colors hover:bg-rose-50 hover:text-rose-600 disabled:opacity-50 dark:hover:bg-rose-950/30">
+                                        {busy === `del-${t.id}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                                    </button>
+                                )}
                             </label>
                         </li>
                     ))}
@@ -147,28 +156,6 @@ export default function SuperuserPanel({ onAddTask, onGiveTask, onChanged }: {
                         {busy === 'add' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />} Add
                     </button>
                 </form>
-
-                {/* give one of my own tasks */}
-                <div
-                    onDragOver={e => { e.preventDefault(); setDragging(true); }}
-                    onDragLeave={() => setDragging(false)}
-                    onDrop={e => { e.preventDefault(); setDragging(false); const id = e.dataTransfer.getData('text/task-id'); if (id) give(id); }}
-                    className={`mt-3 rounded-2xl border-2 border-dashed p-3 text-xs transition-colors ${dragging ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-950/30' : 'border-zinc-300 dark:border-zinc-700'}`}
-                >
-                    <p className="mb-2 font-bold text-zinc-600 dark:text-zinc-300">Give one of your tasks to {first}: drag it here, or press Give.</p>
-                    {panel.myOpen.length === 0 && <p className="text-zinc-500">You have no open tasks.</p>}
-                    <div className="flex flex-wrap gap-1.5">
-                        {panel.myOpen.map(t => (
-                            <span key={t.id} draggable onDragStart={e => e.dataTransfer.setData('text/task-id', t.id)}
-                                className="inline-flex max-w-full cursor-grab items-center gap-1.5 rounded-full border border-zinc-200 bg-white py-1 pl-3 pr-1 font-bold text-zinc-700 active:cursor-grabbing dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200">
-                                <span className="truncate">{t.title}</span>
-                                <button type="button" disabled={busy === `give-${t.id}`} onClick={() => give(t.id)} className="rounded-full bg-indigo-600 px-2 py-0.5 text-[10px] font-black text-white disabled:opacity-50">
-                                    {busy === `give-${t.id}` ? '…' : 'Give'}
-                                </button>
-                            </span>
-                        ))}
-                    </div>
-                </div>
             </section>
 
             {/* 2. the message */}
@@ -183,7 +170,7 @@ export default function SuperuserPanel({ onAddTask, onGiveTask, onChanged }: {
                     </label>
                 </div>
                 <label className="mt-2 block text-[11px] font-bold text-zinc-500">Note (optional)
-                    <textarea className={`${input} mt-1 h-16 resize-none`} value={note} onChange={e => setNote(e.target.value)} maxLength={300} placeholder="Anything he should know" />
+                    <textarea className={`${input} mt-1 h-16 resize-none`} value={note} onChange={e => setNote(e.target.value)} maxLength={300} placeholder="Anything the manager should know" />
                 </label>
 
                 <p className="mb-1 mt-3 text-[11px] font-bold uppercase tracking-wide text-zinc-400">What {first} will see</p>
@@ -196,14 +183,15 @@ export default function SuperuserPanel({ onAddTask, onGiveTask, onChanged }: {
                         {busy === 'send' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />} Send now
                     </button>
                     <span className="text-[11px] font-bold text-zinc-400">or later:</span>
-                    <input type="datetime-local" step={900} value={when} onChange={e => setWhen(e.target.value)} className="rounded-xl border border-zinc-300 bg-white px-2 py-1.5 text-xs font-semibold dark:border-zinc-700 dark:bg-zinc-950" aria-label="When to send" />
-                    <button type="button" disabled={busy === 'send' || !chosen.length || !when} onClick={schedule} className="flex items-center gap-1.5 rounded-xl border border-indigo-300 px-3 py-2 text-xs font-black text-indigo-700 disabled:opacity-50 dark:border-indigo-700 dark:text-indigo-300">
+                    <input type="date" min={dateInput(new Date())} value={whenDate} onChange={e => setWhenDate(e.target.value)} className="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-xs font-semibold dark:border-zinc-700 dark:bg-zinc-950" aria-label="Date to send" />
+                    <TimeWheelPicker value={whenTime} onChange={setWhenTime} ariaLabel="Time to send" />
+                    <button type="button" disabled={busy === 'send' || !chosen.length || !whenDate} onClick={schedule} className="flex items-center gap-1.5 rounded-xl border border-indigo-300 px-3 py-2 text-xs font-black text-indigo-700 disabled:opacity-50 dark:border-indigo-700 dark:text-indigo-300">
                         <Clock className="h-3.5 w-3.5" /> Schedule
                     </button>
                 </div>
                 <div className="mt-2 flex flex-wrap gap-1.5 text-[11px]">
-                    <button type="button" className="rounded-full bg-zinc-100 px-2.5 py-1 font-bold text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300" onClick={() => setWhen(localInput(quarterHourFromNow(60)))}>In 1 hour</button>
-                    <button type="button" className="rounded-full bg-zinc-100 px-2.5 py-1 font-bold text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300" onClick={() => { const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(9, 0, 0, 0); setWhen(localInput(d)); }}>Tomorrow 9:00</button>
+                    <button type="button" className="rounded-full bg-zinc-100 px-2.5 py-1 font-bold text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300" onClick={() => { const d = quarterHourFromNow(60); setWhenDate(dateInput(d)); setWhenTime(timeInput(d)); }}>In 1 hour</button>
+                    <button type="button" className="rounded-full bg-zinc-100 px-2.5 py-1 font-bold text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300" onClick={() => { const d = new Date(); d.setDate(d.getDate() + 1); setWhenDate(dateInput(d)); setWhenTime('09:00'); }}>Tomorrow 9:00</button>
                 </div>
                 <p className="mt-2 text-[11px] text-zinc-400">Scheduled reminders go out within 15 minutes of the time you pick.</p>
             </section>
@@ -229,18 +217,18 @@ export default function SuperuserPanel({ onAddTask, onGiveTask, onChanged }: {
             {/* 4. the team's shared regular reminder */}
             <section className={card} aria-label="Regular reminders">
                 <h3 className={`${h} mb-1 flex items-center gap-2`}><Bell className="h-4 w-4 text-zinc-400" /> Regular reminders (shared by the whole team)</h3>
-                <p className="mb-3 text-[11px] text-zinc-500">One reminder for everyone: {first}&rsquo;s pending tasks from your team, grouped by who gave them.</p>
+                <p className="mb-3 text-[11px] text-zinc-500">One reminder for everyone: the {first.toLowerCase()}&rsquo;s pending tasks from your team, grouped by who gave them.</p>
                 {rem && (
                     <>
                         <label className="mb-3 flex cursor-pointer items-center gap-2 text-xs font-bold text-zinc-700 dark:text-zinc-200">
                             <input type="checkbox" checked={rem.enabled} onChange={e => setRem({ ...rem, enabled: e.target.checked })} className="h-4 w-4 accent-indigo-600" /> Send regular reminders
                         </label>
                         <div className="mb-3 flex flex-wrap items-center gap-3">
-                            <label className="text-[11px] font-bold text-zinc-500">At
-                                <select value={rem.time} onChange={e => setRem({ ...rem, time: e.target.value })} className="ml-2 rounded-xl border border-zinc-300 bg-white px-2 py-1.5 text-xs font-semibold dark:border-zinc-700 dark:bg-zinc-950">
-                                    {TIMES.map(t => <option key={t} value={t}>{t}</option>)}
-                                </select>
-                            </label>
+                            <div className="text-[11px] font-bold text-zinc-500">At
+                                <div className="ml-2 inline-block align-middle">
+                                    <TimeWheelPicker value={rem.time} onChange={time => setRem({ ...rem, time })} ariaLabel="Reminder time" />
+                                </div>
+                            </div>
                             <div className="flex flex-wrap gap-1.5" role="group" aria-label="Days">
                                 {DAYS.map(({ d, l }) => (
                                     <button key={d} type="button" aria-pressed={rem.days.includes(d)}
