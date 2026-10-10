@@ -123,6 +123,13 @@ async function handleRequest(request: NextRequest) {
         let executedCount = 0;
 
         for (const rule of candidates) {
+            // The original department-less ("Tech") rules are retired: every team, Tech included, now owns its schedules.
+            // Only a rule that belongs to a department, or to one person (a superuser's personal rule), runs.
+            if ((!rule.departmentId || rule.departmentId === 'all') && !rule.ownerUserId) {
+                ruleResults.push({ ruleId: rule.id, ruleName: rule.name, status: 'disabled', message: `Rule '${rule.name}' is retired: teams now manage their own notifications.` });
+                continue;
+            }
+
             // Step 6: every rule runs for ITS OWN department. Rules without one (the original Tech rules) keep using the default.
             // A personal rule (ownerUserId) belongs to one person: it uses that person's department for the kill switches.
             let ruleDept = rule.departmentId && rule.departmentId !== 'all' ? rule.departmentId : deptId;

@@ -182,7 +182,7 @@ function Column({ def, tasks, meId, onMove, onQuickAdd, onDelete, onLock, reduce
     return (
         <section
             aria-label={def.label}
-            className="flex min-h-[240px] flex-col rounded-3xl border border-zinc-200 bg-zinc-50/80 p-3 dark:border-zinc-800 dark:bg-zinc-900/40"
+            className="flex min-h-[240px] max-h-[70vh] flex-col rounded-3xl border border-zinc-200 bg-zinc-50/80 p-3 dark:border-zinc-800 dark:bg-zinc-900/40"
         >
             <header className="mb-3 flex items-center gap-2 px-1">
                 <span className={`h-2.5 w-2.5 rounded-full ${def.dot}`} />
@@ -192,7 +192,7 @@ function Column({ def, tasks, meId, onMove, onQuickAdd, onDelete, onLock, reduce
 
             <div
                 ref={setNodeRef}
-                className={`flex-1 space-y-2.5 rounded-2xl p-1 transition-all duration-200 ${isOver ? `ring-2 ring-offset-0 ${def.glow}` : dragging ? 'ring-1 ring-dashed ring-zinc-300 dark:ring-zinc-700' : ''}`}
+                className={`min-h-0 flex-1 space-y-2.5 overflow-y-auto rounded-2xl p-1 transition-all duration-200 ${isOver ? `ring-2 ring-offset-0 ${def.glow}` : dragging ? 'ring-1 ring-dashed ring-zinc-300 dark:ring-zinc-700' : ''}`}
             >
                 <AnimatePresence initial={false}>
                     {tasks.map(t => <TaskCard key={t.id} task={t} meId={meId} onMove={onMove} reduce={reduce} give={give} onDelete={onDelete} onLock={onLock} />)}

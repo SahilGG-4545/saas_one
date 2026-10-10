@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import TaskAssignmentDashboard from './TaskAssignmentDashboard';
+import DepartmentTasksTab from './DepartmentTasksTab';
 import { ConsoleNotifications, ConsoleTasksView, useConsoleTasks } from './ConsoleTasks';
 
 type SubTab = 'my' | 'assign' | 'notifications';
@@ -15,7 +16,7 @@ const TABS: ReadonlyArray<{ id: SubTab; label: string }> = [
 
 /**
  * Task Manager tab of the admin consoles. For a superuser it adds "My tasks" (all departments) and "Notifications"
- * beside the existing assign-and-monitor screen. Everyone else gets the existing screen, exactly as before.
+ * beside the existing assign-and-monitor screen. Everyone else gets the same Tasks tab Procurement has, for their own department.
  */
 export default function TaskManagerSuperuserDashboard({ orgId }: { orgId?: string }) {
     const c = useConsoleTasks();
@@ -24,7 +25,8 @@ export default function TaskManagerSuperuserDashboard({ orgId }: { orgId?: strin
     if (c.status === 'loading') {
         return <div className="flex items-center gap-2 p-6 text-sm text-zinc-500"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</div>;
     }
-    if (c.status !== 'ok' || !c.data) return <TaskAssignmentDashboard orgId={orgId} isSuperuserView={true} />;
+    // Not a superuser: the same Tasks tab Procurement has, for their own department
+    if (c.status !== 'ok' || !c.data) return <DepartmentTasksTab />;
 
     return (
         <div className="space-y-4">

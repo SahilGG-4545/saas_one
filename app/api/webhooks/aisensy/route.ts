@@ -10,6 +10,7 @@ import { TaskIdempotencyService } from '@/task-manager/TaskIdempotencyService';
 import { claimTaskImport } from '@/task-manager/TaskImportInbound';
 import { scheduleShadow } from '@/task-manager/brain/shadow';
 import { claimSmartChat } from '@/task-manager/brain/live';
+import { claimVoiceNote } from '@/task-manager/voice/VoiceIntake';
 import { isInterpreterPilot, lookupQuotedContext, getConversationRoutingState } from '@/backend/lib/whatsapp/interpreter/context';
 import { isExplicitTaskCommand, isDirectBookingRequest } from '@/backend/lib/whatsapp/interpreter/coordinator.mjs';
 
@@ -39,6 +40,14 @@ export async function POST(req: NextRequest) {
     let body: unknown;
     try { body = await req.json(); }
     catch { return NextResponse.json({ error: 'Invalid JSON payload' }, { status: 400 }); }
+    // Voice notes (switch VOICE_NOTES_ENABLED, OFF by default → returns at once, nothing loaded). A voice note is turned into
+    // tidy text in the background. A YES to "🎙️ I heard …" carries on below as that text, exactly as if it had been typed.
+    const voice = await claimVoiceNote(body);
+    if (voice.kind === 'handled') {
+        if (voice.background) after(async () => { await voice.background!(); });
+        return NextResponse.json({ success: true, routedTo: 'VOICE_NOTE' });
+    }
+    if (voice.kind === 'rewrite') body = voice.body;
     const input = normalizeInbound(body);
     console.info('[AiSensyWebhook] Payload inspected', JSON.stringify({
         assistantEnabled: enabled,

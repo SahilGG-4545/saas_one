@@ -82,11 +82,19 @@ export interface LiveIO {
 export interface LiveClaim { handled: boolean; background?: () => Promise<void> }
 const NOT_HANDLED: LiveClaim = { handled: false };
 
+/** Optional, for callers that feed the brain text from elsewhere (a voice note). Absent = exactly the old behaviour. */
+export interface LiveOptions {
+    /** Shown above every reply of this turn (e.g. 🎙️ I heard: "…"). Not remembered in the brain's short memory. */
+    replyPrefix?: string;
+    /** Where the text came from, recorded in the audit row (e.g. 'voice'). */
+    via?: string;
+}
+
 /**
  * Called first for every text message. Not ours → { handled:false } and the old bot answers exactly as before.
  * Ours → the decision is already made; the caller runs `background` AFTER answering the webhook.
  */
-export async function claimSmartChat(body: unknown, io?: LiveIO): Promise<LiveClaim> {
+export async function claimSmartChat(body: unknown, io?: LiveIO, opts: LiveOptions = {}): Promise<LiveClaim> {
     let cand: ReturnType<typeof extractCandidate>;
     try { cand = extractCandidate(body); } catch { return NOT_HANDLED; }
     if (!cand || cand.mediaClass !== 'text' || !cand.text.trim()) return NOT_HANDLED;
@@ -123,7 +131,7 @@ export async function claimSmartChat(body: unknown, io?: LiveIO): Promise<LiveCl
 
         if (cand.messageId) real.markSeen(cand.messageId);
         const phone = cand.phone, text = cand.text, messageId = cand.messageId;
-        return { handled: true, background: () => respond({ io: real, employee, phone, text, messageId, ctx, result, state, depth: 0, started, relay: ctx.pending?.kind === 'ping_reply', titles }) };
+        return { handled: true, background: () => respond({ io: real, employee, phone, text, messageId, ctx, result, state, depth: 0, started, relay: ctx.pending?.kind === 'ping_reply', titles, opts }) };
     } catch (err) {
         console.warn('[TaskBrainLive] not handled, the old bot answers instead:', err instanceof Error ? err.message : err);
         return NOT_HANDLED;
@@ -135,7 +143,10 @@ interface Turn {
     ctx: BrainContext; result: BrainResult; state: LiveState; depth: number; started: number;
     /** The message is a reply to a request: tell the people who gave those tasks. */
     relay: boolean; titles: Record<string, string>;
+    opts?: LiveOptions;
 }
+
+const prefixed = (t: Turn, text: string): string => (t.opts?.replyPrefix ? `${t.opts.replyPrefix}\n\n${text}` : text);
 
 /** The slow part. Never throws: a problem becomes one honest apology. */
 async function respond(t: Turn): Promise<void> {
@@ -158,8 +169,8 @@ async function handle(t: Turn): Promise<void> {
         const reply = await composeBrainReply({ text: t.text, ctx, interpretation: result.interpretation!, decision: result.decision!, deps: io.brain, result: exec ?? undefined });
         if (next === 'clear') await io.clearState(phone);
         else await io.setState(phone, { ...next, recent: remember(t.state.recent, result.interpretation!.summary || 'a message', reply?.text ?? null) });
-        if (reply) await io.reply(phone, reply.text);
-        await io.audit({ ...shadowDetails({ phone, messageId: t.messageId, messageChars: t.text.length, result: { ...result, reply }, ms: Date.now() - t.started }), live: true, executed: exec?.summary ?? null, ...extra }, employee);
+        if (reply) await io.reply(phone, prefixed(t, reply.text));
+        await io.audit({ ...shadowDetails({ phone, messageId: t.messageId, messageChars: t.text.length, result: { ...result, reply }, ms: Date.now() - t.started }), live: true, executed: exec?.summary ?? null, ...(t.opts?.via ? { via: t.opts.via } : {}), ...extra }, employee);
     };
 
     // ── an answer to a question the bot asked ───────────────────────────────
@@ -184,7 +195,7 @@ async function handle(t: Turn): Promise<void> {
             }
         }
         await io.clearState(phone);
-        await io.reply(phone, GENERIC_LOST);
+        await io.reply(phone, prefixed(t, GENERIC_LOST));
         return;
     }
 

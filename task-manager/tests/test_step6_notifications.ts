@@ -135,7 +135,7 @@ async function run() {
     const { GET } = await import('../../app/api/cron/task-manager/route');
     const { NextRequest } = await import('next/server');
     await GET(new NextRequest('http://localhost/api/cron/task-manager?action=auto&force=true'));
-    check('the original Tech rule still runs for the default (Tech) department', calls.some(c => c.rule === 'rule_morning_digest' && c.dept === '94a74961-2dd8-453d-9728-f6f2b9ade99b'), calls);
+    check('the original department-less Tech rule is retired: it no longer runs', !calls.some(c => c.rule === 'rule_morning_digest'), calls);
     check('the Procurement rule runs for Procurement', calls.some(c => c.rule === 'rule_proc_x' && c.dept === PROC), calls);
     check('nothing was sent during the run', sent.length === 0);
 
