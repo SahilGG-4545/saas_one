@@ -19,6 +19,8 @@ export interface ExecIO {
     handOver(actorId: string, taskId: string, toId: string): Promise<{ toName: string }>;
     /** Another person's tasks as text, or null when the actor may not see them. */
     readPerson(actorId: string, personId: string): Promise<string | null>;
+    /** Phase 4 "Team reports": today's progress of the people this person may give work to, as text (null = not available). */
+    readTeam?(actorId: string): Promise<string | null>;
     /** Superuser overviews (department / pending / whole company) as text. */
     readInsight(actorId: string, kind: 'department_progress' | 'pending_tasks' | 'org_overview', subject: string | null): Promise<string>;
     /** Tell each person who gave these tasks what the reply MEANT (a summary, never the exact words). Only used for replies to a request. */
@@ -117,6 +119,13 @@ export async function executeAction(action: Action, ctx: BrainContext, io: ExecI
                     return text === null
                         ? { summary: 'You are not allowed to see that.', values: {} }
                         : { summary: `${nameOf(action.personId)}'s tasks for today`, values: { data: text } };
+                }
+                if (action.scope === 'team') {
+                    // Phase 4 "Team reports": only the people this person may already give work to (re-checked by readTeam).
+                    const text = io.readTeam ? await io.readTeam(me) : null;
+                    return text === null
+                        ? { summary: 'Team reports are not available.', values: {} }
+                        : { summary: 'How your team is doing today', values: { data: text } };
                 }
                 const kind = action.scope === 'department' ? 'department_progress' : action.scope === 'pending_overview' ? 'pending_tasks' : 'org_overview';
                 const text = await io.readInsight(me, kind, action.department);

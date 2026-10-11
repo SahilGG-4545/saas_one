@@ -166,7 +166,7 @@ async function run() {
     console.log('\n6. Wiring');
     const sw = read('task-manager/BotSwitches.ts');
     check('"One front door" is a Task Access panel switch, OFF by default', /'frontDoor'/.test(sw) && /frontDoor: c\.frontDoorEnabled === true/.test(sw));
-    check('the panel and the admin API know it', /key: 'frontDoor'/.test(read('frontend/components/task-manager/TaskAccessPanel.tsx')) && /'frontDoor'\]\.includes\(body\.feature\)/.test(read('app/api/task-manager/access/route.ts')));
+    check('the panel and the admin API know it', /key: 'frontDoor'/.test(read('frontend/components/task-manager/TaskAccessPanel.tsx')) && /'frontDoor'[^\]]*\]\.includes\(body\.feature\)/.test(read('app/api/task-manager/access/route.ts')));
     check('the real undo uses the Tasks-tab functions (permissions re-checked)', /WorkspaceService\.setStatus\(actorId, \{ taskId, status \}\)/.test(read('task-manager/brain/live.ts')) && /WorkspaceService\.deleteTask\(actorId, \{ taskId \}\)/.test(read('task-manager/brain/live.ts')));
     check('the AI\'s instructions are unchanged (no new intent was added)', !/undo/i.test(read('task-manager/brain/prompt.ts')) && !/undo/i.test(read('task-manager/brain/tasksDomain.ts')));
 

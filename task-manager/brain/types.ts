@@ -25,7 +25,7 @@ export type FacilityIntent = typeof FACILITY_INTENTS[number];
 export type Intent = TaskIntent | FacilityIntent;
 
 export type ProgressState = 'working' | 'partly_done' | 'blocked' | 'done_all' | 'done_some' | 'other';
-export type ViewScope = 'self' | 'person' | 'department' | 'org' | 'pending_overview';
+export type ViewScope = 'self' | 'person' | 'team' | 'department' | 'org' | 'pending_overview';   // 'team' only while "Team reports" is ON
 
 /** Which of the sender's numbered tasks a message points at. Numbers come from the list the AI was shown. */
 export interface Which { all: boolean; numbers: number[]; hints: string[] }

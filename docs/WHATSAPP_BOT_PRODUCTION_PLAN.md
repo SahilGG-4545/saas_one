@@ -415,3 +415,44 @@ the only failure is the old, unrelated `SuperuserPanel.tsx` check. Type check cl
 
 **To switch on (sandbox first):** deploy → Task Access panel → "One front door" ON (no SQL needed). Needs Smart chat ON
 for the department. **Rollback:** switch OFF.
+
+### Phase 4 — team reports + Hinglish test set: built 2026-10-11, switch OFF (waiting for approval)
+
+**What existed:** "what is Vidya working on?" already worked (for people you may give work to); department / company /
+pending overviews were superuser-only. **The gap:** a normal manager asking "how is my team doing today?" was refused,
+and nothing covered "overdue".
+
+**Built** (switch **"Team reports"** in the Task Access panel; no SQL):
+- A read-only "team" view for anyone who can give work to others: per person *done / total, in progress, overdue*
+  (overdue = still open and carried over from an earlier day), people needing attention listed first, max 25 lines.
+  "My team" is recomputed by code with the same permission rule as assigning — the AI never decides who is in it.
+  Files: `brain/teamReport.ts` (wording), `brain/tasksDomain.ts` (`tasksDomainWithTeam`), `brain/execute.ts`
+  (`readTeam`), `brain/live.ts` (wiring).
+- **The AI's instructions change ONLY while the switch is ON** (a separate domain variant adds the "team" option; with
+  the switch OFF the original domain is used and rejects "team"). Tested line by line.
+- **Hinglish:** 39 realistic Hinglish test cases + 10 team cases in `brain/eval/cases_phase4.ts`, written BEFORE any
+  prompt change. `run_eval.ts --set hinglish|team` runs them (default `base` = the original English set, unchanged).
+
+**NOT done on purpose:** no prompt change for Hinglish yet — first measure. **Measuring needs the paid AI provider
+(~50 cases × 2 calls; cents, not dollars) — waiting for the owner's OK.** No separate "overdue" intent (overdue is part
+of the team report; your own list already shows what is open).
+
+**Tests (offline only):** `test_team_reports.ts` 32/32. Regression: all brain / task / voice / webhook tests pass
+(the Phase 3 test's API-list check was loosened to allow the new switch); the only failure is the old, unrelated
+`SuperuserPanel.tsx` check. Type check clean; new files lint-clean. `docs/TASK_BRAIN_SPEC.md` updated (doctrine).
+
+**To switch on (sandbox first):** deploy → Task Access panel → "Team reports" ON (needs Smart chat ON for the
+department). Best after running the team eval. **Rollback:** switch OFF.
+
+**Phase 4 measured 2026-10-11** (owner-approved paid run; live model mix: understand `glm-5.3-flash`, reply `qwen3.8-27b`;
+cost ≈ US$0.02 in total):
+
+| Set | Fully right | Unsafe | Acted when it should ask | Wrong proposal | Asked when it could act | Median |
+|---|---|---|---|---|---|---|
+| Hinglish (39) | **38/39 = 97.4 %** | **0** | 0 | 0 | 1 | 2.9 s |
+| Team (10) | **10/10 = 100 %** | **0** | 0 | 0 | 0 | 2.7 s |
+
+The only miss: "sab ho gaya" (all done) → the AI asked a question instead of proposing to mark all done — the safe
+direction. **Conclusion: Hinglish already works well without any prompt change, so none was made.** Possible later
+tweak (not done): add "sab ho gaya" to the front-door exact "done all" words. Caveat: these cases were written by us,
+not taken from real users — real messages may differ; watch them after switching on.

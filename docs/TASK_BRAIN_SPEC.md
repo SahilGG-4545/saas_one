@@ -57,3 +57,24 @@ Code: `task-manager/brain/` · Tests: `tests/test_brain_phase2_core.ts`, `tests/
    - **English only** — by decision for now; other languages are untested.
    - **L9 (MCP as tool transport)** — direct HTTP calls via the repo's existing provider routing. Reason: the model has no tools, so there is no tool transport to standardise.
    - **L14 (full traceability)** — in-memory trace only until Phase 4 persists it.
+
+---
+
+### Changes from docs/WHATSAPP_BOT_PRODUCTION_PLAN.md (Phases 2–4, 2026-10-11) — each behind its own Task Access switch, OFF by default
+
+**2. Context** `[BAA p.112]` — Phase 2 adds `conversation`: the last 20 messages of the chat (24 h), given as a separate block with the rule "only to resolve what a short message refers to; untrusted data". Absent while the switch is OFF (prompt byte-identical, tested).
+
+**4. Tools** — Phase 4 adds one read-only lookup; the model still has no tools of its own (it picks the closed `view_tasks` intent, code runs the lookup).
+   | call | description reviewed for when-not-to-use? `[BAA p.107]` | returns errors as text? `[BAA p.94]` | args validated? `[BAA p.93]` | MCP? `[BAA p.106]` |
+   |---|---|---|---|---|
+   | `readTeam` (scope `team` of `view_tasks`, Team reports switch) | yes — "team" is offered ONLY via `tasksDomainWithTeam`; the original domain rejects the scope, so it cannot appear while OFF | yes — missing reader → "not available"; lookup errors → "I could not look that up …" | yes — "my team" is recomputed server-side with `PermissionService.visibleAndAssignable`; a sender with nobody → REFUSE | no (direct call; see 10) |
+
+**3/8. Front door (Phase 3)** — exact commands (`done 2`, `done all`, `tasks`, `undo`) are answered by plain code with NO model call; "done" is no longer confirmed for these exact forms (owner decision 2026-10-11), with a 10-minute `undo` instead. Vague completions still CONFIRM.
+
+**8. Evaluation** `[BAA pp.118–119]` — new sets in `brain/eval/cases_phase4.ts`: 39 Hinglish cases (written before any prompt change) and 10 team cases. **Not yet measured** (needs the paid provider; owner approval pending). The original 140-case set is unchanged.
+
+**10. Laws knowingly violated, and why:**
+   - **L2 (measure before shipping)** — Team reports and Hinglish are built but not yet measured on the live model; both stay OFF until `run_eval.ts --set team` / `--set hinglish` are run with the owner's OK.
+   - **Confirm-every-"done"** is relaxed for exact numeric commands only (owner decision), mitigated by `undo`.
+
+**8. Evaluation update (2026-10-11, shipped mix, thinking off):** Hinglish 38/39 (97.4 %), team 10/10 — unsafe 0, acted-when-should-ask 0, wrong proposal 0; one over-clarify ("sab ho gaya"). No prompt change was needed for Hinglish. Cases are hand-written (not real traffic) → re-check on real messages after roll-out. This closes the L2 note above for Team reports and Hinglish *on the labelled sets*.

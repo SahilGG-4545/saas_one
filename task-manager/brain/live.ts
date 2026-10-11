@@ -9,6 +9,9 @@ import { clip } from './text';
 import type { Action, BrainContext, PendingState } from './types';
 import { AI_DOWN_HELP, ExactPlan, LastChange, UNDO_HINT, UndoIO, changeFromAction, normalizeChange, parseExactCommand, planExact, runUndo } from './frontDoor';
 import { isExplicitTaskCommand } from '@/backend/lib/whatsapp/interpreter/coordinator.mjs';
+import { tasksDomainWithTeam } from './tasksDomain';
+import { facilityDomain } from './facilityDomain';
+import { buildTeamReport } from './teamReport';
 
 /**
  * The language brain — Phase 4: SMART CHAT, live.
@@ -83,6 +86,8 @@ export interface LiveIO {
     readConversation?(phone: string): Promise<string[]>;
     /** Phase 3: the "One front door" switch (Task Access panel). Absent / false = exactly the old behaviour. */
     frontDoorOn?(): Promise<boolean>;
+    /** Phase 4: the "Team reports" switch (Task Access panel). Absent / false = the AI's instructions are exactly as before. */
+    teamReportsOn?(): Promise<boolean>;
     /** Phase 3: reversing a change for "undo" (the same permission-checked functions as the Tasks tab). */
     undo?: UndoIO;
     brain: BrainDeps;
@@ -155,7 +160,10 @@ export async function claimSmartChat(body: unknown, io?: LiveIO, opts: LiveOptio
             }
         }
 
-        const result = await runBrain(cand.text, ctx, { ...real.brain, skipReply: true });
+        // Phase 4 "Team reports" (switch OFF → the domains, and so the AI's instructions, are exactly as before).
+        const teamReports = real.teamReportsOn ? await real.teamReportsOn().catch(() => false) : false;
+        const brainIO = teamReports ? { ...real, brain: { ...real.brain, domains: [tasksDomainWithTeam, facilityDomain] } } : real;
+        const result = await runBrain(cand.text, ctx, { ...brainIO.brain, skipReply: true });
         if (result.status !== 'ok' || !result.decision || !result.interpretation) {
             // AI down. Front door ON: old exact commands still go to the old bot; anything else gets one short help line (no menu).
             if (!frontDoor || isExplicitTaskCommand(cand.text)) return NOT_HANDLED;
@@ -166,7 +174,7 @@ export async function claimSmartChat(body: unknown, io?: LiveIO, opts: LiveOptio
 
         if (cand.messageId) real.markSeen(cand.messageId);
         const phone = cand.phone, text = cand.text, messageId = cand.messageId;
-        return { handled: true, background: () => respond({ io: real, employee, phone, text, messageId, ctx, result, state, depth: 0, started, relay: ctx.pending?.kind === 'ping_reply', titles, opts, frontDoor }) };
+        return { handled: true, background: () => respond({ io: brainIO, employee, phone, text, messageId, ctx, result, state, depth: 0, started, relay: ctx.pending?.kind === 'ping_reply', titles, opts, frontDoor }) };
     } catch (err) {
         console.warn('[TaskBrainLive] not handled, the old bot answers instead:', err instanceof Error ? err.message : err);
         return NOT_HANDLED;
@@ -335,6 +343,17 @@ export async function defaultLiveIO(): Promise<LiveIO> {
             const rows = await TaskDatabaseService.getDailyAssignments({ employeeId: personId, date: todayIST() });
             return rows.length ? rows.map((r, i) => `${i + 1}. ${r.title} (${STATUS[r.status] ?? r.status})`).join('\n') : 'No tasks today.';
         },
+        async readTeam(actorId) {
+            // "My team" = the people this person may give work to — the same rule assigning uses, re-checked here.
+            const actor = await TaskDatabaseService.getEmployeeById(actorId);
+            if (!actor) return null;
+            const pool = await TaskDatabaseService.getAllEmployees();
+            const team = (await PermissionService.visibleAndAssignable(actor, pool)).filter(e => e.id !== actor.id && e.active !== false).slice(0, 40);
+            if (!team.length) return null;
+            const date = todayIST();
+            const members = await Promise.all(team.map(async e => ({ name: e.name, tasks: await TaskDatabaseService.getDailyAssignments({ employeeId: e.id, date }) })));
+            return buildTeamReport(members);
+        },
         async readInsight(actorId, kind, subject) {
             const actor = await TaskDatabaseService.getEmployeeById(actorId);
             if (!actor || actor.role !== 'superuser') throw new Error('Company-wide questions are only available to superusers.');
@@ -376,6 +395,7 @@ export async function defaultLiveIO(): Promise<LiveIO> {
         buildContext: (e, phone, opts) => buildBrainContext(e, phone, opts),
         readConversation: phone => readTranscript(phone),
         frontDoorOn: () => botSwitchOn('frontDoor'),
+        teamReportsOn: () => botSwitchOn('teamReports'),
         undo: {
             currentStatus: taskId => WorkspaceService.taskStatus(taskId),
             async setStatus(actorId, taskId, status) { await WorkspaceService.setStatus(actorId, { taskId, status }); },

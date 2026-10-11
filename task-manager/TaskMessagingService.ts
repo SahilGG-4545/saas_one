@@ -17,7 +17,7 @@ export interface SendControls {
     killSwitches: WhatsAppKillSwitches;
     pretendMode: boolean;
     /** The bot-upgrade switches, read from the SAME settings row (so a send never needs a second read). */
-    botFeatures?: { neverSilent: boolean; conversationMemory: boolean; frontDoor?: boolean };
+    botFeatures?: { neverSilent: boolean; conversationMemory: boolean; frontDoor?: boolean; teamReports?: boolean };
 }
 
 export interface GateOptions {

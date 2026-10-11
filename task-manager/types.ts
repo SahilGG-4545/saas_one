@@ -203,6 +203,7 @@ export interface TestingConfig {
     neverSilentEnabled?: boolean; // Bot plan Phase 1: note each message, apologise when no reply came (OFF unless switched on)
     conversationMemoryEnabled?: boolean; // Bot plan Phase 2: remember the last 20 messages of each chat for 24 hours (OFF unless switched on)
     frontDoorEnabled?: boolean; // Bot plan Phase 3: Smart chat exact commands without AI, "undo", no menu when the AI is down (OFF unless switched on)
+    teamReportsEnabled?: boolean; // Bot plan Phase 4: "how is my team doing today?" (OFF unless switched on)
 }
 
 
