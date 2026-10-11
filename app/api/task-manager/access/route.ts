@@ -26,7 +26,7 @@ export async function GET(request: NextRequest) {
         const config = await TaskDatabaseService.getTestingConfig();
         return NextResponse.json({
             success: true, ...overview, nlGatewayEnabled: config.nlGatewayEnabled === true,
-            botFeatures: { neverSilent: config.neverSilentEnabled === true, conversationMemory: config.conversationMemoryEnabled === true },
+            botFeatures: { neverSilent: config.neverSilentEnabled === true, conversationMemory: config.conversationMemoryEnabled === true, frontDoor: config.frontDoorEnabled === true },
         });
     } catch (err) {
         console.error('[TaskAccessAPI] GET error:', err);
@@ -100,14 +100,14 @@ export async function POST(request: NextRequest) {
         // Step 4: natural-language chat for unlocked people (OFF until switched on here)
         // WhatsApp bot upgrades (docs/WHATSAPP_BOT_PRODUCTION_PLAN.md): switched here, no redeploy. Takes effect within ~30 s.
         if (body.action === 'set_bot_feature') {
-            if ((body.feature !== 'neverSilent' && body.feature !== 'conversationMemory') || typeof body.enabled !== 'boolean') {
-                return NextResponse.json({ success: false, error: 'Missing feature (neverSilent | conversationMemory) or enabled (true/false)' }, { status: 400 });
+            if (!['neverSilent', 'conversationMemory', 'frontDoor'].includes(body.feature) || typeof body.enabled !== 'boolean') {
+                return NextResponse.json({ success: false, error: 'Missing feature (neverSilent | conversationMemory | frontDoor) or enabled (true/false)' }, { status: 400 });
             }
             await TaskDatabaseService.setBotFeature(body.feature, body.enabled, guard.label);
             resetBotSwitchCache();
             // Privacy: with memory OFF the 24-hour clean-up stops, so delete everything stored right away.
             const cleared = body.feature === 'conversationMemory' && !body.enabled ? await clearAllMemory() : null;
-            const name = body.feature === 'neverSilent' ? 'Never silent' : 'Conversation memory';
+            const name = body.feature === 'neverSilent' ? 'Never silent' : body.feature === 'frontDoor' ? 'One front door' : 'Conversation memory';
             return NextResponse.json({
                 success: true,
                 message: `${name} is ${body.enabled ? 'ON' : 'OFF'}. It takes effect within about 30 seconds.${cleared !== null ? ` Stored chat memories deleted: ${cleared}.` : ''}`,

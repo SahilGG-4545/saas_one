@@ -735,6 +735,7 @@ export class TaskDatabaseService {
             nlGatewayEnabled: raw.nlGatewayEnabled === true,
             neverSilentEnabled: raw.neverSilentEnabled === true,
             conversationMemoryEnabled: raw.conversationMemoryEnabled === true,
+            frontDoorEnabled: raw.frontDoorEnabled === true,
         };
     }
 
@@ -743,7 +744,7 @@ export class TaskDatabaseService {
      * Unlike getTestingConfig(), a database error is thrown (never swallowed), so the gate can fail closed.
      * Pretend Mode is ON unless it was explicitly switched off.
      */
-    static async getSendControls(): Promise<{ killSwitches: WhatsAppKillSwitches; pretendMode: boolean; botFeatures: { neverSilent: boolean; conversationMemory: boolean } }> {
+    static async getSendControls(): Promise<{ killSwitches: WhatsAppKillSwitches; pretendMode: boolean; botFeatures: { neverSilent: boolean; conversationMemory: boolean; frontDoor: boolean } }> {
         const { data, error } = await supabaseAdmin
             .from('conversation_context')
             .select('context_data')
@@ -769,13 +770,13 @@ export class TaskDatabaseService {
                 },
             },
             pretendMode: raw.whatsappPretendMode !== false,
-            botFeatures: { neverSilent: raw.neverSilentEnabled === true, conversationMemory: raw.conversationMemoryEnabled === true },
+            botFeatures: { neverSilent: raw.neverSilentEnabled === true, conversationMemory: raw.conversationMemoryEnabled === true, frontDoor: raw.frontDoorEnabled === true },
         };
     }
 
     /** WhatsApp bot upgrades (docs/WHATSAPP_BOT_PRODUCTION_PLAN.md): flipped from the Task Access panel, no redeploy needed. */
-    static async setBotFeature(feature: 'neverSilent' | 'conversationMemory', enabled: boolean, actor?: string): Promise<TestingConfig> {
-        const updated = await this.saveTestingConfig(feature === 'neverSilent' ? { neverSilentEnabled: enabled } : { conversationMemoryEnabled: enabled });
+    static async setBotFeature(feature: 'neverSilent' | 'conversationMemory' | 'frontDoor', enabled: boolean, actor?: string): Promise<TestingConfig> {
+        const updated = await this.saveTestingConfig(feature === 'neverSilent' ? { neverSilentEnabled: enabled } : feature === 'frontDoor' ? { frontDoorEnabled: enabled } : { conversationMemoryEnabled: enabled });
         await this.logAudit({
             event_type: 'bot_feature_updated',
             details: { feature, enabled, actor: actor || null },

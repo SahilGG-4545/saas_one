@@ -54,7 +54,7 @@ export default function TaskAccessPanel({ orgId }: { orgId?: string }) {
     const [notice, setNotice] = useState<string | null>(null);
     const [provisioned, setProvisioned] = useState(true);
     const [nlGateway, setNlGateway] = useState(false);
-    const [botFeatures, setBotFeatures] = useState<{ neverSilent: boolean; conversationMemory: boolean }>({ neverSilent: false, conversationMemory: false });
+    const [botFeatures, setBotFeatures] = useState<{ neverSilent: boolean; conversationMemory: boolean; frontDoor: boolean }>({ neverSilent: false, conversationMemory: false, frontDoor: false });
     const [taskImportColumnMissing, setTaskImportColumnMissing] = useState(false);
     const [smartChatColumnMissing, setSmartChatColumnMissing] = useState(false);
     const [collabColumnMissing, setCollabColumnMissing] = useState(false);
@@ -74,7 +74,7 @@ export default function TaskAccessPanel({ orgId }: { orgId?: string }) {
             if (!res.ok || !data.success) throw new Error(data.error || 'Failed to load access settings');
             setProvisioned(Boolean(data.provisioned));
             setNlGateway(Boolean(data.nlGatewayEnabled));
-            setBotFeatures({ neverSilent: data.botFeatures?.neverSilent === true, conversationMemory: data.botFeatures?.conversationMemory === true });
+            setBotFeatures({ neverSilent: data.botFeatures?.neverSilent === true, conversationMemory: data.botFeatures?.conversationMemory === true, frontDoor: data.botFeatures?.frontDoor === true });
             setTaskImportColumnMissing(Boolean(data.taskImportColumnMissing));
             setSmartChatColumnMissing(Boolean(data.smartChatColumnMissing));
             setCollabColumnMissing(Boolean(data.superuserCollabColumnMissing));
@@ -173,9 +173,13 @@ export default function TaskAccessPanel({ orgId }: { orgId?: string }) {
         post('nl-gateway', { action: 'set_nl_gateway', enabled: next });
     };
 
-    const toggleBotFeature = (feature: 'neverSilent' | 'conversationMemory') => {
+    const toggleBotFeature = (feature: 'neverSilent' | 'conversationMemory' | 'frontDoor') => {
         const next = !botFeatures[feature];
-        const text = feature === 'neverSilent'
+        const text = feature === 'frontDoor'
+            ? (next
+                ? 'Switch "One front door" ON?\n\nFor departments with Smart chat ON:\n• "done 2", "done all" and "tasks" are answered at once (no AI, no YES).\n• "undo" reverses your own last change within 10 minutes (not hand-overs).\n• When the AI is down, people get a short help line instead of the 1 / 2 menu.\n\nNo SQL file needed.'
+                : 'Switch "One front door" OFF? Smart chat goes back to asking YES for every completion, and "undo" stops working.')
+            : feature === 'neverSilent'
             ? (next
                 ? 'Switch "Never silent" ON?\n\nNeeds the SQL file supabase/migrations/20261011000001_whatsapp_inbound_ledger.sql run once first.\n\nEvery Task Manager WhatsApp message is noted (no message text). If the bot does not reply, the person gets one short apology at the next 15-minute check. While Pretend Mode is ON no apology is actually sent.'
                 : 'Switch "Never silent" OFF? Messages are no longer noted and no apologies are sent.')
@@ -317,7 +321,8 @@ Their files and images go back to being handled exactly as before.`;
 
             {([
                 { key: 'neverSilent', title: 'Never silent', body: 'If the bot does not reply to a Task Manager message, the person gets one short "Sorry, please try again" at the next 15-minute check. No message text is stored. Needs SQL file 20261011000001 run once.' },
-                { key: 'conversationMemory', title: 'Conversation memory', body: 'The AI remembers the last 20 messages of each chat for 24 hours, so "make it tomorrow" or "the second one" are understood. Nobody can see them in the app. Needs SQL file 20261011000002 run once.' },
+                { key: 'frontDoor', title: 'One front door', body: 'For Smart-chat departments: "done 2" / "done all" / "tasks" answered instantly without AI, "undo" within 10 minutes, and a short help line instead of the 1 / 2 menu when the AI is down. No SQL file needed.' },
+                { key: 'conversationMemory', title: 'Conversation memory', body:'The AI remembers the last 20 messages of each chat for 24 hours, so "make it tomorrow" or "the second one" are understood. Nobody can see them in the app. Needs SQL file 20261011000002 run once.' },
             ] as const).map(f => (
                 <div key={f.key} className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                     <div>

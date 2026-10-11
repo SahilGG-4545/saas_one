@@ -434,6 +434,24 @@ export class WorkspaceService {
      * Deletes a task for good. Allowed for whoever may change it (holder, someone above them, a superuser)
      * and for the person who assigned it. Not reversible, by request.
      */
+    /** Read-only, for WhatsApp "undo": a task's current status (null when it no longer exists). */
+    static async taskStatus(taskId: string): Promise<TaskStatus | null> {
+        const { data } = await supabaseAdmin.from('task_assignments').select('status').eq('id', taskId).maybeSingle();
+        return (data?.status as TaskStatus | undefined) ?? null;
+    }
+
+    /**
+     * Read-only, for WhatsApp "undo": the newest task this person created for `assigneeId` with this title and date since
+     * `since` (minus 10 s for clock differences) that has NOT been started. null when there is none.
+     */
+    static async findRecentlyCreated(actorUserId: string, assigneeId: string, title: string, date: string, since: string): Promise<string | null> {
+        const from = new Date(new Date(since).getTime() - 10_000).toISOString();
+        const { data } = await supabaseAdmin.from('task_assignments').select('id')
+            .eq('assigned_by', actorUserId).eq('employee_id', assigneeId).eq('title', title).eq('assigned_date', date)
+            .eq('status', 'pending').gte('created_at', from).order('created_at', { ascending: false }).limit(1);
+        return (data?.[0]?.id as string | undefined) ?? null;
+    }
+
     static async deleteTask(actorUserId: string, input: { taskId?: string }): Promise<{ id: string }> {
         if (!input.taskId) throw new WorkspaceError(400, 'Missing task.');
         const actor = await this.requireUnlockedActor(actorUserId);

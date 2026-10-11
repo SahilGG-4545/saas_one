@@ -202,6 +202,7 @@ export interface TestingConfig {
     whatsappPretendMode?: boolean; // Step 1: when not explicitly false, NO Task Manager WhatsApp message is sent (saved to history only)
     neverSilentEnabled?: boolean; // Bot plan Phase 1: note each message, apologise when no reply came (OFF unless switched on)
     conversationMemoryEnabled?: boolean; // Bot plan Phase 2: remember the last 20 messages of each chat for 24 hours (OFF unless switched on)
+    frontDoorEnabled?: boolean; // Bot plan Phase 3: Smart chat exact commands without AI, "undo", no menu when the AI is down (OFF unless switched on)
 }
 
 

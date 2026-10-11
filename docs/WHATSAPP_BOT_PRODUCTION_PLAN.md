@@ -385,3 +385,33 @@ Measure on the sandbox numbers after switching on.
   To go back to 2 minutes later, re-add `/api/cron/whatsapp-watchdog` with `* * * * *` to `vercel.json`.
 
 **To switch on now:** apply the migration(s) → deploy once → Task Access panel → "Never silent" / "Conversation memory" ON.
+
+### Phase 3 — one front door: built 2026-10-11, switch OFF (waiting for approval)
+
+**Owner decisions (2026-10-11):** exact "done 2" / "done all" happen at once (no YES) with "undo" for 10 minutes;
+undo does NOT reverse hand-overs (no permission change — the bot says who to ask); when the AI is down, a short help
+line instead of the 1 / 2 menu.
+
+**What was already true:** for Smart-chat departments the AI brain already answers first (before the old router), and
+voice notes already feed it (`claimSmartChat` with `replyPrefix`). Phase 3 builds on that rather than adding a new router.
+
+**Built** (`task-manager/brain/frontDoor.ts`, wired in `brain/live.ts`; switch **"One front door"** in the Task Access panel):
+- Exact commands answered by code, **no AI call**: `done 2`, `done 1 and 3`, `done all`, `tasks` (+ a few spellings).
+  Anything not exact, or invalid (`done 9` when there is no task 9), goes to the AI exactly as before. While the bot is
+  waiting on a question, the shortcut is skipped so the question is answered first.
+- **Undo** (`undo`, `undo that`, `wapas karo`, `galti se`): reverses the person's OWN last change within 10 minutes —
+  done / in-progress back to what it was (only if nobody changed it since), new tasks removed (only if not started).
+  Works for shortcut changes AND changes confirmed with YES through the AI. Uses the same permission-checked
+  `WorkspaceService` functions as the Tasks tab. One undo per change.
+- **AI down:** old exact commands (`team`, `assign …`, …) still go to the old bot; anything else → one short help line.
+- The AI's instructions (prompt and intent list) are **unchanged** — no new intent, so the measured accuracy cannot move.
+
+**Scope cut, on purpose:** the old router is kept as the fallback (not removed); facility still uses its own flow
+(Phase 6); `open_question` / `active_flow` stay in the brain's existing 15-minute state.
+
+**Tests (offline only):** `test_front_door.ts` 46/46 — command parsing, plans, undo rules, and the real Smart chat code
+with the switch OFF (unchanged) and ON. Regression: all brain / task / voice (4 files) / WhatsApp webhook tests pass;
+the only failure is the old, unrelated `SuperuserPanel.tsx` check. Type check clean; new files lint-clean.
+
+**To switch on (sandbox first):** deploy → Task Access panel → "One front door" ON (no SQL needed). Needs Smart chat ON
+for the department. **Rollback:** switch OFF.

@@ -7,6 +7,8 @@ import { BrainDeps, BrainResult, composeBrainReply, runBrain } from './index';
 import { shadowDetails } from './shadow';
 import { clip } from './text';
 import type { Action, BrainContext, PendingState } from './types';
+import { AI_DOWN_HELP, ExactPlan, LastChange, UNDO_HINT, UndoIO, changeFromAction, normalizeChange, parseExactCommand, planExact, runUndo } from './frontDoor';
+import { isExplicitTaskCommand } from '@/backend/lib/whatsapp/interpreter/coordinator.mjs';
 
 /**
  * The language brain — Phase 4: SMART CHAT, live.
@@ -38,6 +40,8 @@ export interface LiveState {
     relay: boolean;
     /** Titles of the tasks in that request (they are not on the person's own list). */
     titles: Record<string, string>;
+    /** Phase 3 "One front door": the person's last change, so "undo" can reverse it within 10 minutes. */
+    lastChange?: LastChange | null;
 }
 
 const EMPTY: LiveState = { recent: [], pending: null, action: null, originalSummary: null, pickOptions: [], relay: false, titles: {} };
@@ -52,8 +56,13 @@ export function normalizeState(data: any): LiveState {
         pickOptions: Array.isArray(data.pickOptions) ? data.pickOptions.filter((s: unknown) => typeof s === 'string') : [],
         relay: data.relay === true,
         titles: data.titles && typeof data.titles === 'object' && !Array.isArray(data.titles) ? Object.fromEntries(Object.entries(data.titles).filter(([, v]) => typeof v === 'string')) as Record<string, string> : {},
+        ...(normalizeChange(data.lastChange) ? { lastChange: normalizeChange(data.lastChange) } : {}),
     };
 }
+
+/** Keep the person's last change for "undo" when the state is rewritten (only while the front door is on). */
+const carry = (state: LiveState, change: LastChange | null | undefined): Partial<LiveState> =>
+    (change ?? state.lastChange) ? { lastChange: change ?? state.lastChange } : {};
 
 const remember = (recent: string[], understood: string, said: string | null): string[] =>
     [...recent, `Person: ${clip(understood, 200)}`, ...(said ? [`Assistant: ${clip(said, 200)}`] : [])].slice(-4);
@@ -72,6 +81,10 @@ export interface LiveIO {
     buildContext(employee: Employee, phone: string, opts: { pending: PendingState | null; recent: string[]; conversation?: string[] }): Promise<BrainContext>;
     /** Phase 2 conversation memory: the chat's last messages, oldest first ([] while the switch is OFF). */
     readConversation?(phone: string): Promise<string[]>;
+    /** Phase 3: the "One front door" switch (Task Access panel). Absent / false = exactly the old behaviour. */
+    frontDoorOn?(): Promise<boolean>;
+    /** Phase 3: reversing a change for "undo" (the same permission-checked functions as the Tasks tab). */
+    undo?: UndoIO;
     brain: BrainDeps;
     exec: ExecIO;
     /** One WhatsApp message through the safety gate (kill switches, Pretend Mode). */
@@ -129,13 +142,31 @@ export async function claimSmartChat(body: unknown, io?: LiveIO, opts: LiveOptio
         const conversation = real.readConversation ? await real.readConversation(cand.phone).catch(() => [] as string[]) : [];
         const ctx = await real.buildContext(employee, cand.phone, { pending, recent: state.recent, ...(conversation.length ? { conversation } : {}) });
         const started = Date.now();
+        const phone0 = cand.phone, messageId0 = cand.messageId;
+
+        // Phase 3 "One front door" (switch OFF → skipped entirely): exact commands are answered by code, no AI call.
+        const frontDoor = real.frontDoorOn ? await real.frontDoorOn().catch(() => false) : false;
+        if (frontDoor && !ctx.pending) {
+            const cmd = parseExactCommand(cand.text);
+            const plan = cmd ? planExact(cmd, ctx) : null;
+            if (plan) {
+                if (messageId0) real.markSeen(messageId0);
+                return { handled: true, background: () => respondExact({ io: real, employee, phone: phone0, messageId: messageId0, text: cand!.text, ctx, state, plan, started, opts }) };
+            }
+        }
+
         const result = await runBrain(cand.text, ctx, { ...real.brain, skipReply: true });
-        if (result.status !== 'ok' || !result.decision || !result.interpretation) return NOT_HANDLED; // AI down → old keyword bot
+        if (result.status !== 'ok' || !result.decision || !result.interpretation) {
+            // AI down. Front door ON: old exact commands still go to the old bot; anything else gets one short help line (no menu).
+            if (!frontDoor || isExplicitTaskCommand(cand.text)) return NOT_HANDLED;
+            if (messageId0) real.markSeen(messageId0);
+            return { handled: true, background: async () => { try { await real.reply(phone0, prefixedText(opts, AI_DOWN_HELP)); } catch { /* the watchdog covers silence */ } } };
+        }
         if (result.decision.outcome === 'HANDOFF') return NOT_HANDLED;                                 // rooms / tickets → facility assistant
 
         if (cand.messageId) real.markSeen(cand.messageId);
         const phone = cand.phone, text = cand.text, messageId = cand.messageId;
-        return { handled: true, background: () => respond({ io: real, employee, phone, text, messageId, ctx, result, state, depth: 0, started, relay: ctx.pending?.kind === 'ping_reply', titles, opts }) };
+        return { handled: true, background: () => respond({ io: real, employee, phone, text, messageId, ctx, result, state, depth: 0, started, relay: ctx.pending?.kind === 'ping_reply', titles, opts, frontDoor }) };
     } catch (err) {
         console.warn('[TaskBrainLive] not handled, the old bot answers instead:', err instanceof Error ? err.message : err);
         return NOT_HANDLED;
@@ -148,9 +179,49 @@ interface Turn {
     /** The message is a reply to a request: tell the people who gave those tasks. */
     relay: boolean; titles: Record<string, string>;
     opts?: LiveOptions;
+    /** Phase 3: remember executed changes so "undo" can reverse them (only while the front door is on). */
+    frontDoor?: boolean;
 }
 
-const prefixed = (t: Turn, text: string): string => (t.opts?.replyPrefix ? `${t.opts.replyPrefix}\n\n${text}` : text);
+const prefixedText = (opts: LiveOptions | undefined, text: string): string => (opts?.replyPrefix ? `${opts.replyPrefix}\n\n${text}` : text);
+const prefixed = (t: Turn, text: string): string => prefixedText(t.opts, text);
+
+/**
+ * Phase 3: carry out an exact command ("done 2", "done all", "tasks", "undo") — no AI call. Never throws: a problem becomes
+ * one honest apology. The change goes through the same permission-checked functions; "done" is remembered for "undo".
+ */
+async function respondExact(t: {
+    io: LiveIO; employee: Employee; phone: string; messageId: string | null | undefined; text: string;
+    ctx: BrainContext; state: LiveState; plan: ExactPlan; started: number; opts?: LiveOptions;
+}): Promise<void> {
+    const { io, employee, phone, ctx, state, plan } = t;
+    try {
+        let reply: string; let next: LiveState; let kind: string; let executed: string | null = null;
+        if (plan.kind === 'act') {
+            const change = changeFromAction(plan.action, ctx);
+            const exec = await executeAction(plan.action, ctx, io.exec);
+            executed = exec?.summary ?? null;
+            reply = [exec?.summary, exec?.values?.details, change ? UNDO_HINT : null].filter(Boolean).join('\n\n') || 'Done.';
+            next = { ...EMPTY, recent: state.recent, ...carry(state, change) };
+            kind = plan.action.type;
+        } else if (plan.kind === 'undo') {
+            const r = io.undo ? await runUndo(state.lastChange ?? null, employee.id, io.undo) : { text: "There's nothing to undo right now.", undone: 0 };
+            reply = r.text; executed = r.undone ? `Undid ${r.undone}` : null;
+            next = { ...EMPTY, recent: state.recent, lastChange: null };   // an undo is used up, whatever happened
+            kind = 'undo';
+        } else {
+            reply = plan.text;
+            next = { ...state };
+            kind = 'view';
+        }
+        await io.setState(phone, { ...next, recent: remember(next.recent, `exact command: ${clip(t.text, 40)}`, reply) });
+        await io.reply(phone, prefixedText(t.opts, reply));
+        await io.audit({ phoneMasked: phone.replace(/\d(?=\d{4})/g, '•'), messageId: t.messageId ?? null, live: true, exact: kind, executed, ms: Date.now() - t.started, ...(t.opts?.via ? { via: t.opts.via } : {}) }, employee);
+    } catch (err) {
+        console.warn('[TaskBrainLive] exact command failed:', err instanceof Error ? err.message : err);
+        try { await io.reply(phone, 'Sorry, something went wrong on my side. Please try that again in a moment.'); } catch { /* nothing more to do */ }
+    }
+}
 
 /** The slow part. Never throws: a problem becomes one honest apology. */
 async function respond(t: Turn): Promise<void> {
@@ -182,8 +253,9 @@ async function handle(t: Turn): Promise<void> {
         const a = decision.action;
         if (a.answer === 'no') return say(t.result, null, 'clear');
         if (a.answer === 'yes' && t.state.action) {
+            const change = t.frontDoor ? changeFromAction(t.state.action, ctx) : null;   // read BEFORE it changes
             const exec = await executeAction(t.state.action, ctx, io.exec, { relay: t.state.relay, titles: t.state.titles });
-            return say(t.result, exec, { ...EMPTY, recent: t.state.recent }, { confirmedAction: t.state.action.type });
+            return say(t.result, exec, { ...EMPTY, recent: t.state.recent, ...(t.frontDoor ? carry(t.state, change) : {}) }, { confirmedAction: t.state.action.type });
         }
         if ((a.answer === 'pick' || a.answer === 'edit') && t.depth === 0 && t.state.originalSummary) {
             const label = a.answer === 'pick' ? t.state.pickOptions[(a.pick ?? 0) - 1] : null;
@@ -205,9 +277,13 @@ async function handle(t: Turn): Promise<void> {
 
     // ── everything else: carry out if it is a read / a note, then reply and remember ────
     let exec: ExecutionResult | null = null;
-    if (decision.outcome === 'ACT' && needsExecution(decision.action)) exec = await executeAction(decision.action, ctx, io.exec, { relay: t.relay, titles: t.titles });
+    let change: LastChange | null = null;
+    if (decision.outcome === 'ACT' && needsExecution(decision.action)) {
+        if (t.frontDoor) change = changeFromAction(decision.action, ctx);              // read BEFORE it changes
+        exec = await executeAction(decision.action, ctx, io.exec, { relay: t.relay, titles: t.titles });
+    }
 
-    const next: LiveState = { ...EMPTY, recent: t.state.recent };
+    const next: LiveState = { ...EMPTY, recent: t.state.recent, ...(t.frontDoor ? carry(t.state, change) : {}) };
     if (decision.outcome === 'CONFIRM') {
         next.pending = { kind: 'confirm', summary: interp.summary || 'a change to your tasks' };
         next.action = decision.action;
@@ -240,6 +316,7 @@ export async function defaultLiveIO(): Promise<LiveIO> {
     const { SuperuserPingService } = await import('../SuperuserPingService');
     const { defaultRelayIO, relayToAssigners } = await import('./relay');
     const { readTranscript } = await import('../ConversationMemory');
+    const { botSwitchOn } = await import('../BotSwitches');
     const llm = engyBrainLlm();
     const relayIO = await defaultRelayIO();
 
@@ -298,6 +375,13 @@ export async function defaultLiveIO(): Promise<LiveIO> {
         },
         buildContext: (e, phone, opts) => buildBrainContext(e, phone, opts),
         readConversation: phone => readTranscript(phone),
+        frontDoorOn: () => botSwitchOn('frontDoor'),
+        undo: {
+            currentStatus: taskId => WorkspaceService.taskStatus(taskId),
+            async setStatus(actorId, taskId, status) { await WorkspaceService.setStatus(actorId, { taskId, status }); },
+            findCreated: (actorId, assigneeId, title, date, since) => WorkspaceService.findRecentlyCreated(actorId, assigneeId, title, date, since),
+            async deleteTask(actorId, taskId) { await WorkspaceService.deleteTask(actorId, { taskId }); },
+        },
         brain: { llm },
         exec,
         async reply(phone, text) { await TaskMessagingService.sendFreeformReply(phone, text); },
