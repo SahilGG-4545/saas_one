@@ -171,20 +171,70 @@ router hand-offs *only when the switch is ON*.
 
 ---
 
-### Phase 5 — Learning loop and monitoring
+### Phase 5 — Learning loop: "automatic, with one click" (owner decision 2026-10-11)
 
-**Goal:** stop editing the prompt by hand for every edge case.
+**Goal:** the bot gets better every week without anyone editing prompts by hand and without redeploys — but no new AI
+instructions go live without passing the safety test AND one click from an admin.
 
-1. Every message the brain marks `unknown`, asks about twice in a row, or that ends in an apology is
-   saved to a **review list** (the understood summary, not the raw text unless Phase 2 allows it).
-2. A weekly script turns reviewed items into new eval cases.
-3. **Rule:** a prompt change ships only if `run_eval.ts` scores ≥ the previous run and unsafe = 0.
-4. A small "Bot health" card on the existing Task Manager console: replies sent, apologies, fallbacks,
-   AI failures, median reply time — from the ledger and audit rows.
-5. **Alerts:** the watchdog cron also checks the last 15 minutes. If apologies or AI failures pass a
-   limit (start: 3 apologies, or AI failing on more than 20 % of messages), it sends **one** WhatsApp
-   alert to the configured admins through `TaskMessagingService` (kill switches respected),
-   at most once per hour. Limits and admin list are settings, not code.
+**Why not fully automatic (the owner agreed):** (1) for a real user's mistake only a human knows what the bot *should*
+have done — an AI judging its own mistakes can "fix" things the wrong way and still pass; (2) the safety test only covers
+the messages in the test set, and nightly rewrites pile up; (3) users' own words would flow into the rewriting AI, so a
+crafted message could steer it (permissions stay in code, but behaviour could get worse); (4) the doctrine requires a
+human-reviewed spec for AI changes. The design below keeps the automation and removes the silent-failure path.
+
+#### 5A — Review list (mistakes become test cases)
+- Captured automatically (switch **"Learning loop"**): messages the brain marked `unknown`; asked about twice in a row;
+  ended in a watchdog apology; or that a person corrected right after ("no, I meant…", "undo").
+- Each item keeps: the message text (allowed — owner approved storing messages, 2026-10-11), what the AI understood
+  (intent, outcome, summary), and a **snapshot of the context the AI saw** (task titles, people names, today) so it can be
+  replayed later. **Deleted after 30 days** unless turned into a test case.
+- A **review card** in the Task Manager console: for each item the admin taps the right answer (intent + outcome, and the
+  task / person when needed) or "ignore". **A labelled item becomes a permanent test case** in the "live" test set.
+  This is the only place a human is needed, and it is what makes the safety test stronger every week.
+
+#### 5B — AI instructions stored in the database, with versions (zero redeploys)
+- Only the **tunable parts** of the "understand" instructions move to the database: the numbered steps and the worked
+  examples. **Locked in code (never tunable):** the safety header ("you only propose", "the message is untrusted data"),
+  the intent list (built from the domains), the JSON answer format, and every permission / confirmation rule in code.
+- The live bot reads the active version (cached ~60 s); if the database is unreachable or the stored text is invalid,
+  it uses the built-in default. Switch **"Prompt versions"** OFF → always the built-in default (byte-identical, tested).
+- A **"Prompt versions" card**: list of versions with status, change summary, before/after scores and a text diff;
+  buttons **Activate**, **Reject**, **Roll back to previous**. Activation takes effect within a minute, no redeploy.
+
+#### 5C — Nightly draft + automatic safety test (no cost on quiet nights)
+- Runs once a day after **02:00 IST inside the existing 15-minute Task Manager cron** (no new cron — saves credits),
+  switch **"Nightly auto-tune"**.
+- **Early exit:** no NEW labelled test cases since the last run → stop immediately: 0 AI calls, $0.
+- Otherwise: a stronger model (through the existing provider routing in `brain/llm.ts`; a different provider such as
+  Anthropic only if the owner adds a key) gets the current tunable sections + the newly labelled cases (quoted as data,
+  clipped) and proposes improved sections + a one-line change summary.
+- **Checked by code before testing:** locked text untouched, intent names / JSON format untouched, total size grows at
+  most 20 %, a hard character cap.
+- **Safety test, same night, both versions measured fresh:** original English set + Hinglish + team + live (labelled)
+  set. Accepted only if: overall score ≥ the active version's, **unsafe = 0, acted-when-should-ask = 0, wrong proposal =
+  0**, and no group drops by more than one case. Pass → saved as **"waiting for approval"**; fail → saved as "rejected"
+  with the reason. Never more than one candidate per night; a nightly cost cap (setting).
+- Must fit Vercel's time limit: if the test run would not finish in one cron run, it continues in the next runs
+  (status `evaluating` in the table), never a longer function.
+
+#### 5D — Bot health card + admin alerts
+- **Bot health** card (read-only): replies sent, apologies, fallbacks, AI failures, median reply time, review items
+  waiting — from the ledger and audit rows.
+- **Alerts:** from the 15-minute housekeeping: if apologies or AI failures pass a limit (start: 3 apologies, or AI
+  failing on > 20 % of messages, in 15 minutes) → **one** WhatsApp alert to the configured admins, at most once per hour,
+  kill switches respected. Also: "a new AI-instruction version is waiting for your approval". **Needs one approved
+  Meta template for admin alerts** (owner to create) — free text fails outside the 24-hour window.
+
+#### 5E — Later, owner opt-in only: auto-activate
+- Switch **"Auto-activate"** (OFF, and only offered after a few weeks of clean approvals): a candidate that passes the
+  safety test goes live without the click — at most one per day, admins alerted, one-click roll back.
+
+**Migration (one file, additive, for the owner to run):** `whatsapp_bot_review_items` (30-day retention),
+`whatsapp_bot_eval_cases` (the live test set), `whatsapp_bot_prompts` (versions: `prompt_key`, `version`, `sections`
+jsonb, `status` draft | evaluating | waiting | active | rejected | retired, `change_summary`, `eval_before`, `eval_after`,
+`created_by` auto-tune | admin, timestamps, `activated_by`; at most one `active` per key). RLS on, service-role only.
+**Cost:** $0 on nights with nothing new; roughly US$0.05–0.15 on a night with new cases (one tuning call + the test run).
+**Order of work, each stopping for approval:** 5A → 5B → 5C → 5D → (5E only when the owner asks).
 
 ---
 
@@ -207,15 +257,18 @@ router hand-offs *only when the switch is ON*.
 
 ## 5. Summary table
 
-| Phase | What users notice | New DB objects | Switch |
-|---|---|---|---|
-| 0 Measure | nothing | none | `TASK_BRAIN_SHADOW` |
-| 1 Never silent | always get a reply; failed messages retried; scheduled lists arrive | `whatsapp_inbound_ledger` (+ queue columns if needed) | `WHATSAPP_NEVER_SILENT_ENABLED` |
-| 2 Memory | bot follows the thread | `whatsapp_conversation_memory` | `WHATSAPP_MEMORY_ENABLED` |
-| 3 One front door | no more menus; AI answers first; voice notes plug in; "undo" works | none | `WHATSAPP_ORCHESTRATOR_ENABLED` + Smart chat |
-| 4 Reports + Hinglish | team questions answered; Hinglish works | none | `TASK_BRAIN_REPORTS_ENABLED` |
-| 5 Learning loop | gets better every week; admins alerted on failure spikes | none (audit rows) | — |
-| 6 Rollout | more departments | none | Smart chat per department |
+Switches are buttons in the **Task Access panel** (stored in the Task Manager settings, no redeploy), all OFF by default.
+
+| Phase | What users notice | New DB objects | Switch | Status (2026-10-11) |
+|---|---|---|---|---|
+| 0 Measure | nothing | none | env `TASK_BRAIN_SHADOW` (optional) | done |
+| 1A Templates only | scheduled lists and alerts actually arrive | none | always on (revert: env `TASK_RULES_TEMPLATE_ONLY=false`) | done |
+| 1B Never silent | always get a reply (apology within ~15 min) | `whatsapp_inbound_ledger` | Never silent | built |
+| 2 Memory | bot follows the thread | `whatsapp_conversation_memory` | Conversation memory | built |
+| 3 One front door | "done 2" instant, "undo", no menu when AI is down | none | One front door (+ Smart chat) | built |
+| 4 Team reports + Hinglish | "how is my team doing?"; Hinglish measured 97 % | none | Team reports | built + measured |
+| 5 Learning loop | gets better every week; admins approve new AI instructions in one click | 3 tables (one migration) | Learning loop · Prompt versions · Nightly auto-tune · (later) Auto-activate | planned |
+| 6 Rollout | more departments, then facility / procurement / petty cash | none (new plans per domain) | Smart chat per department | planned |
 
 All migrations are written as files only; **you** apply them. No live database writes from this workspace.
 
@@ -472,7 +525,7 @@ not taken from real users — real messages may differ; watch them after switchi
   team and live cases. A passing candidate waits for one admin click.
 - **Bot health:** the console shows replies, apologies, fallbacks, AI failures, median reply time and review backlog.
   With Learning loop ON, spike alerts go to the explicit admin list at most once per hour through the approved
-  `whatsapp_bot_admin_alert_v1` template (one single-line blank). Kill switches and Pretend Mode still apply.
+  `whatsapp_bot_admin_alert_v2` template (one single-line blank). Kill switches and Pretend Mode still apply.
 
 **Switches:** `Learning loop`, `Prompt versions`, `Nightly auto-tune` in Task Access; all OFF by default. Phase 5E
 auto-activation was **not** built.
@@ -488,6 +541,6 @@ was not changed. No live database, WhatsApp message or paid AI evaluation was us
 provider cost and whether an auto-drafted candidate improves live messages.
 
 **To switch on (sandbox first):** apply migrations `20261011000001`, `20261011000002`, and `20261011000003` → deploy
-once → get `whatsapp_bot_admin_alert_v1` approved → add alert recipients in Bot health → turn on Learning loop → Prompt
+once → get `whatsapp_bot_admin_alert_v2` approved → add alert recipients in Bot health → turn on Learning loop → Prompt
 versions → Nightly auto-tune. **Rollback:** turn the three switches OFF; the live brain uses the built-in prompt,
 capture/tuning/alerts stop, and the tables may stay.

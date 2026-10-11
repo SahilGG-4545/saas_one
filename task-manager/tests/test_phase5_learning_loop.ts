@@ -34,7 +34,7 @@ async function run() {
     learning.learningTriggers({ apology: true }).includes('apology') &&
     learning.learningTriggers({ text: 'no, I meant Vidya' }).includes('correction') &&
     learning.learningTriggers({ exact: 'undo' }).includes('undo'));
-  const safe = learning.sanitizeReplayContext({ today: '2026-10-11', sender: { id: 'u1', name: 'A', phone: '999' }, people: [{ id: 'u2', name: 'B', phone: '888' }], tasks: [{ id: 't1', title: 'Quote', status: 'pending' }], pending: { kind: 'confirm', summary: 'Call +91 98765 43210' } });
+  const safe = learning.sanitizeReplayContext({ today: '2026-10-11', sender: { id: 'u1', name: 'A', phone: '999' } as any, people: [{ id: 'u2', name: 'B', phone: '888' }] as any, tasks: [{ id: 't1', title: 'Quote', status: 'pending' }] as any, pending: { kind: 'confirm', summary: 'Call +91 98765 43210' } });
   check('replay context keeps opaque ids and model facts but no phones', JSON.stringify(safe).includes('u1') && JSON.stringify(safe).includes('Quote') && !JSON.stringify(safe).includes('999') && !JSON.stringify(safe).includes('888') && !JSON.stringify(safe).includes('98765'));
   check('review labels are closed-list and structurally checked', learning.validateReviewLabel({ intent: 'view_tasks', outcome: 'ACT', expect: { scope: 'self' } }).ok && !learning.validateReviewLabel({ intent: 'invented', outcome: 'ACT', expect: {} } as any).ok);
   check('review labels reject invalid typed details', !learning.validateReviewLabel({ intent: 'view_tasks', outcome: 'ACT', expect: { scope: 'planet' } }).ok && !learning.validateReviewLabel({ intent: 'complete_tasks', outcome: 'CONFIRM', expect: { taskIds: [7] } }).ok);
@@ -57,7 +57,7 @@ async function run() {
   console.log('\n5. Wiring and SQL safety');
   const sw = read('task-manager/BotSwitches.ts'), types = read('task-manager/types.ts'), access = read('app/api/task-manager/access/route.ts');
   check('three switches are OFF by default and exposed through config/API', ['learningLoop', 'promptVersions', 'nightlyAutoTune'].every(k => sw.includes(k) && access.includes(k)) && /learningLoopEnabled\?: boolean/.test(types));
-  check('send controls expose validated explicit alert recipients', /getSendControls\(\): Promise<\{[^}]*botAlertAdmins/s.test(read('task-manager/TaskDatabaseService.ts')));
+  check('send controls expose validated explicit alert recipients', /getSendControls\(\): Promise<\{[\s\S]*?botAlertAdmins/.test(read('task-manager/TaskDatabaseService.ts')));
   const sql = read('supabase/migrations/20261011000003_whatsapp_bot_learning.sql');
   check('migration creates exactly the Phase 5 tables with RLS/service-role protection', ['whatsapp_bot_review_items', 'whatsapp_bot_eval_cases', 'whatsapp_bot_prompts'].every(t => sql.includes(`CREATE TABLE IF NOT EXISTS public.${t}`) && sql.includes(`ALTER TABLE public.${t} ENABLE ROW LEVEL SECURITY`)) && !/\b(DROP TABLE|TRUNCATE)\b/i.test(sql.replace(/^--.*$/gm, '')));
   check('activation and rollback are atomic service-role SQL functions', /FUNCTION public\.whatsapp_bot_activate_prompt/.test(sql) && /FUNCTION public\.whatsapp_bot_rollback_prompt/.test(sql) && /rpc\('whatsapp_bot_rollback_prompt'/.test(read('task-manager/BotLearningService.ts')));
