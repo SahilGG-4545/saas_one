@@ -3,7 +3,7 @@ import { TaskDatabaseService } from './TaskDatabaseService';
 import { TaskAccessService } from './TaskAccessService';
 import { PermissionService } from './PermissionService';
 import { HierarchyService } from './HierarchyService';
-import { TaskMessagingService } from './TaskMessagingService';
+import { personLabel, sendTaskAssigned, sendTaskUpdate } from './taskAlerts';
 import { Employee, TaskAssignment, TaskStatus } from './types';
 
 /**
@@ -298,7 +298,18 @@ export class WorkspaceService {
         return { actor: { userId: actor.id, name: actor.name }, departments, mine, given };
     }
 
-    static async assign(actorUserId: string, input: { targetUserId?: string; title?: string; description?: string; date?: string }): Promise<TaskAssignment> {
+    /**
+     * One "new task" alert for one or more tasks given to the same person (approved template, never your own list).
+     * Used after `assign(..., { notify: false })` when several tasks are created together, so the person gets ONE message.
+     */
+    static async alertAssigned(actorUserId: string, targetUserId: string, titles: string[], date: string): Promise<void> {
+        if (actorUserId === targetUserId || titles.length === 0) return;
+        const [actor, target] = await Promise.all([TaskDatabaseService.getEmployeeById(actorUserId), TaskDatabaseService.getEmployeeById(targetUserId)]);
+        if (!actor || !target) return;
+        await sendTaskAssigned(target.phone_number, { titles, fromLabel: personLabel(actor.name, actor.department_name), date, departmentId: target.department_id || undefined });
+    }
+
+    static async assign(actorUserId: string, input: { targetUserId?: string; title?: string; description?: string; date?: string; notify?: boolean }): Promise<TaskAssignment> {
         const title = (input.title || '').trim();
         if (title.length < 1 || title.length > 200) throw new WorkspaceError(400, 'Task title must be 1 to 200 characters.');
         const description = (input.description || '').trim();
@@ -332,14 +343,10 @@ export class WorkspaceService {
             details: { title: task.title, assignedDate: task.assigned_date, via: 'web_tasks_tab' },
         });
 
-        // Tell the assignee (never for your own list). Goes through the safety gate, so nothing is sent in Pretend Mode.
-        if (target.id !== actor.id && target.phone_number && target.phone_number.trim().length >= 10) {
-            const lines = [`🔔 *New Task Assigned!*`, ``, `*Task:* ${task.title}`];
-            if (task.description) lines.push(`*Details:* ${task.description}`);
-            lines.push(`*Assigned By:* ${actor.name}`, `*Date:* ${task.assigned_date}`, ``, `Reply *tasks* to view your full list, or *done <number>* once completed!`);
-            TaskMessagingService.sendMessage(target.phone_number, lines.join('\n')).catch(err => {
-                console.error('[WorkspaceService] Failed to send assignment alert:', err?.message);
-            });
+        // Tell the assignee (never for your own list) with the approved template. Goes through the safety gate, so nothing is
+        // sent in Pretend Mode. notify:false = the caller sends ONE grouped alert for several tasks (alertAssigned).
+        if (input.notify !== false && target.id !== actor.id) {
+            void sendTaskAssigned(target.phone_number, { titles: [task.title], fromLabel: personLabel(actor.name, actor.department_name), date: task.assigned_date, departmentId: target.department_id || undefined });
         }
 
         return task;
@@ -414,18 +421,11 @@ export class WorkspaceService {
         });
 
         // Tell the receiver who gave it (names only; gated, so nothing is sent in Pretend Mode). Never blocks the hand-over.
-        if (target.phone_number && target.phone_number.trim().length >= 10) {
-            const from = actor.department_name ? `${actor.name} (${actor.department_name})` : actor.name;
-            const lines = [`🔁 *A task was given to you*`, ``, `*Task:* ${row.title}`];
-            if (base) lines.push(`*Details:* ${base}`);
-            lines.push(`*Given by:* ${from}`, `*Date:* ${row.assigned_date}`, ``, `Reply *tasks* to see your full list.`);
-            TaskMessagingService.sendMessage(target.phone_number, lines.join('\n'), {
-                messageType: 'task_handover',
-                freeformOnly: true, // no template: only reaches people inside WhatsApp's 24-hour window
-            }).catch(err => {
-                console.error('[WorkspaceService] Failed to send hand-over alert:', err?.message);
-            });
-        }
+        // Approved template, so it reaches people outside WhatsApp's 24-hour window too.
+        void sendTaskAssigned(target.phone_number, {
+            titles: [row.title], fromLabel: `${personLabel(actor.name, actor.department_name)}, handed over`, date: row.assigned_date,
+            messageType: 'task_handover', departmentId: target.department_id || undefined,
+        });
 
         return { task: moved as TaskAssignment, toName: target.name };
     }
@@ -524,8 +524,8 @@ export class WorkspaceService {
 
     /**
      * A superuser finished a task someone else gave him: tell that person, in plain words.
-     * Goes through the same safety gate as every other message (kill switches, Pretend Mode, sandbox) and only reaches people
-     * inside WhatsApp's 24-hour window. Told at most once an hour per task (dragging it out of Done and back must not repeat it).
+     * Goes through the same safety gate as every other message (kill switches, Pretend Mode, sandbox) as the approved
+     * `task_update_v2` template, so it also reaches people outside WhatsApp's 24-hour window. Told at most once an hour per task (dragging it out of Done and back must not repeat it).
      * Never throws: a failed notice must not undo or fail the status change.
      */
     private static async notifyAssignerOfCompletion(row: any): Promise<void> {
@@ -547,11 +547,9 @@ export class WorkspaceService {
                 taskId: row.id,
                 details: { title: row.title, via: 'web_tasks_tab' },
             });
-            TaskMessagingService.sendMessage(assigner.phone_number, [`✅ *Task completed*`, ``, `${holder.name} has finished:`, `• ${row.title}`].join('\n'), {
-                messageType: 'task_completed_relay',
-                freeformOnly: true, // no template: only reaches people inside WhatsApp's 24-hour window
-            }).catch(err => {
-                console.error('[WorkspaceService] Failed to send completion notice:', err?.message);
+            void sendTaskUpdate(assigner.phone_number, {
+                titles: [row.title], assigneeLabel: personLabel(holder.name, holder.department_name), update: 'Finished ✅',
+                messageType: 'task_completed_relay', departmentId: assigner.department_id || undefined,
             });
         } catch (err: any) {
             console.error('[WorkspaceService] completion notice failed:', err?.message || err);

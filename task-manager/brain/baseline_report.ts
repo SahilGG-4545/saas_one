@@ -15,6 +15,8 @@ import path from 'node:path';
 
 export interface AuditRow { created_at: string; event_type: string; details: any }
 export interface QueueRow { created_at: string; updated_at: string | null; status: string; attempts: number | null }
+/** Phase 1 "never silent" ledger row (no message text). */
+export interface LedgerRow { route: string | null; received_at: string; replied_at: string | null; apology_sent_at: string | null }
 
 export const AUDIT_EVENTS = ['whatsapp_received', 'brain_live', 'brain_shadow', 'voice_note', 'whatsapp_sent', 'whatsapp_blocked_by_kill_switch'];
 
@@ -54,6 +56,8 @@ export interface Baseline {
     queue: Record<string, number>;
     queueStuck: number;
     queueRetried: number;
+    /** null = the ledger table is not there yet, or the switch has never been on. */
+    ledger: { routed: number; replied: number; apologised: number; silent: number } | null;
 }
 
 const emptyDay = (): DayStats => ({
@@ -62,7 +66,7 @@ const emptyDay = (): DayStats => ({
 });
 
 /** Pure: turns raw rows into per-day counts. No I/O. */
-export function summarize(audit: AuditRow[], queue: QueueRow[], now = new Date()): Baseline {
+export function summarize(audit: AuditRow[], queue: QueueRow[], now = new Date(), ledgerRows: LedgerRow[] | null = null): Baseline {
     const byDay: Record<string, DayStats> = {};
     const day = (iso: string) => (byDay[istDay(iso)] ||= emptyDay());
     const brainMs: number[] = [];
@@ -111,7 +115,19 @@ export function summarize(audit: AuditRow[], queue: QueueRow[], now = new Date()
             && now.getTime() - new Date(e.updated_at || e.created_at).getTime() > STUCK_MS) queueStuck++;
     }
 
-    return { days: Object.keys(byDay).sort(), byDay, brainMs, queue: q, queueStuck, queueRetried };
+    let ledger: Baseline['ledger'] = null;
+    if (ledgerRows) {
+        const routed = ledgerRows.filter(r => r.route);
+        ledger = {
+            routed: routed.length,
+            replied: routed.filter(r => r.replied_at).length,
+            apologised: routed.filter(r => !r.replied_at && r.apology_sent_at).length,
+            // no reply and no apology, and old enough that one was due (the watchdog waits 2 minutes)
+            silent: routed.filter(r => !r.replied_at && !r.apology_sent_at && now.getTime() - new Date(r.received_at).getTime() > 3 * 60_000).length,
+        };
+    }
+
+    return { days: Object.keys(byDay).sort(), byDay, brainMs, queue: q, queueStuck, queueRetried, ledger };
 }
 
 const fmt = (m: Record<string, number>) => Object.entries(m).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join(' · ') || '–';
@@ -148,7 +164,12 @@ export function render(b: Baseline, daysAsked: number): string {
     out.push(`  AI median time    ${ms === null ? '–' : `${ms} ms`}`);
     out.push(`  Scheduled sends   accepted by AiSensy ${tot.sentSched} · failed ${tot.failedSched}  (accepted ≠ delivered: Meta can still reject — the red "!")`);
     out.push(`  Facility AI queue ${fmt(b.queue)} · stuck >10 min ${b.queueStuck} · retried ${b.queueRetried}`);
-    out.push(`  No-reply count    NOT MEASURABLE YET — real replies are not logged. Phase 1 adds the inbound ledger.`);
+    if (b.ledger) {
+        const l = b.ledger;
+        out.push(`  No-reply count    ${l.silent} silent · ${l.apologised} got only an apology · ${l.replied} answered — of ${l.routed} Task Manager messages`);
+    } else {
+        out.push(`  No-reply count    NOT MEASURABLE YET — apply the Phase 1 ledger migration and set WHATSAPP_NEVER_SILENT_ENABLED=true.`);
+    }
     return out.join('\n');
 }
 
@@ -184,7 +205,13 @@ async function main() {
             .gte('created_at', since).order('created_at').range(a, b));
     } catch { console.warn('(facility AI queue not readable — skipped)\n'); }
 
-    console.log(render(summarize(audit, queue), days));
+    let ledger: LedgerRow[] | null = null;
+    try {
+        ledger = await fetchAll<LedgerRow>((a, b) => supabaseAdmin.from('whatsapp_inbound_ledger').select('route, received_at, replied_at, apology_sent_at')
+            .gte('received_at', since).order('received_at').range(a, b));
+    } catch { /* Phase 1 ledger not installed yet */ }
+
+    console.log(render(summarize(audit, queue, new Date(), ledger), days));
 }
 
 if (require.main === module) main().catch(e => { console.error('FAILED:', e?.message || e); process.exit(1); });

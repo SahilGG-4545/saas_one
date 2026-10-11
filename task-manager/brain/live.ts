@@ -69,7 +69,9 @@ export interface LiveIO {
     clearState(phone: string): Promise<void>;
     /** For a superuser: the reminders sent to them that are still waiting for a reply (null when none). */
     openPingPending(employee: Employee): Promise<{ pending: PendingState; titles: Record<string, string> } | null>;
-    buildContext(employee: Employee, phone: string, opts: { pending: PendingState | null; recent: string[] }): Promise<BrainContext>;
+    buildContext(employee: Employee, phone: string, opts: { pending: PendingState | null; recent: string[]; conversation?: string[] }): Promise<BrainContext>;
+    /** Phase 2 conversation memory: the chat's last messages, oldest first ([] while the switch is OFF). */
+    readConversation?(phone: string): Promise<string[]>;
     brain: BrainDeps;
     exec: ExecIO;
     /** One WhatsApp message through the safety gate (kill switches, Pretend Mode). */
@@ -123,7 +125,9 @@ export async function claimSmartChat(body: unknown, io?: LiveIO, opts: LiveOptio
             const waiting = await real.openPingPending(employee);
             if (waiting) { pending = waiting.pending; titles = waiting.titles; }
         }
-        const ctx = await real.buildContext(employee, cand.phone, { pending, recent: state.recent });
+        // Read BEFORE this message is stored, so the transcript holds only EARLIER messages (the new one is "message").
+        const conversation = real.readConversation ? await real.readConversation(cand.phone).catch(() => [] as string[]) : [];
+        const ctx = await real.buildContext(employee, cand.phone, { pending, recent: state.recent, ...(conversation.length ? { conversation } : {}) });
         const started = Date.now();
         const result = await runBrain(cand.text, ctx, { ...real.brain, skipReply: true });
         if (result.status !== 'ok' || !result.decision || !result.interpretation) return NOT_HANDLED; // AI down → old keyword bot
@@ -235,14 +239,16 @@ export async function defaultLiveIO(): Promise<LiveIO> {
     const { engyBrainLlm } = await import('./llm');
     const { SuperuserPingService } = await import('../SuperuserPingService');
     const { defaultRelayIO, relayToAssigners } = await import('./relay');
+    const { readTranscript } = await import('../ConversationMemory');
     const llm = engyBrainLlm();
-    const relayIO = await defaultRelayIO(llm);
+    const relayIO = await defaultRelayIO();
 
     const STATUS: Record<string, string> = { pending: 'To do', in_progress: 'In progress', completed: 'Done' };
 
     const exec: ExecIO = {
         async setStatus(actorId, taskId, status) { await WorkspaceService.setStatus(actorId, { taskId, status }); },
-        async assign(actorId, i) { await WorkspaceService.assign(actorId, { targetUserId: i.targetUserId, title: i.title, description: i.description, date: i.date }); },
+        async assign(actorId, i) { await WorkspaceService.assign(actorId, { targetUserId: i.targetUserId, title: i.title, description: i.description, date: i.date, notify: i.notify }); },
+        async alertAssigned(actorId, targetUserId, titles, date) { await WorkspaceService.alertAssigned(actorId, targetUserId, titles, date); },
         async handOver(actorId, taskId, toId) { const r = await WorkspaceService.handOver(actorId, { taskId, targetUserId: toId }); return { toName: r.toName }; },
         async readPerson(actorId, personId) {
             const [actor, target] = await Promise.all([TaskDatabaseService.getEmployeeById(actorId), TaskDatabaseService.getEmployeeById(personId)]);
@@ -291,6 +297,7 @@ export async function defaultLiveIO(): Promise<LiveIO> {
             return { pending: { kind: 'ping_reply', assigner: assigners.join(' and '), taskIds: tasks.map(x => x.id), taskTitles: tasks.map(x => titles[x.id]), assigners: many ? assigners : undefined }, titles };
         },
         buildContext: (e, phone, opts) => buildBrainContext(e, phone, opts),
+        readConversation: phone => readTranscript(phone),
         brain: { llm },
         exec,
         async reply(phone, text) { await TaskMessagingService.sendFreeformReply(phone, text); },

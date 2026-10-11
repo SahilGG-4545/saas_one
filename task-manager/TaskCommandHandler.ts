@@ -1,5 +1,6 @@
 import { TaskDatabaseService } from './TaskDatabaseService';
 import { TaskMessagingService } from './TaskMessagingService';
+import { personLabel, sendTaskAssigned } from './taskAlerts';
 import { TaskErrorHandler } from './TaskErrorHandler';
 import { TaskAccessService } from './TaskAccessService';
 import { PermissionService } from './PermissionService';
@@ -276,22 +277,11 @@ export class TaskCommandHandler {
             });
 
             // Notify assigned employee via WhatsApp if they have a phone number
-            if (targetEmployee.phone_number && targetEmployee.phone_number.trim().length >= 10) {
-                const managerDept = employee.department_name ? ` (${employee.department_name})` : '';
-                const empAlert = [
-                    `🔔 *New Task Assigned!*`,
-                    ``,
-                    `*Task:* ${taskTitle}`,
-                    `*Assigned By:* ${employee.name}${managerDept}`,
-                    `*Date:* ${targetDate}`,
-                    ``,
-                    `Reply *tasks* to view your full list, or *done <number>* once completed!`
-                ].join('\n');
-
-                TaskMessagingService.sendMessage(targetEmployee.phone_number, empAlert).catch(err => {
-                    console.error('[WhatsAppAssign] Failed to notify target employee:', err);
-                });
-            }
+            // Same approved template as the Tasks tab (task_assigned_v1), so it also reaches people outside the 24-hour window.
+            void sendTaskAssigned(targetEmployee.phone_number, {
+                titles: [taskTitle], fromLabel: personLabel(employee.name, employee.department_name), date: targetDate,
+                departmentId: targetEmployee.department_id || undefined,
+            });
 
             // Confirm back to the Manager
             const managerReply = [

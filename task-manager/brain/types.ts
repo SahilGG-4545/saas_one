@@ -79,6 +79,9 @@ export interface BrainContext {
     pending: PendingState | null;
     /** The last few turns, oldest first, as plain strings. Optional. */
     recent?: string[];
+    /** Conversation memory (Phase 2): the real last messages of the chat, oldest first ("Person: …" / "Assistant: …").
+     *  Only present while WHATSAPP_MEMORY_ENABLED is on; absent → the prompt is exactly as before. */
+    conversation?: string[];
 }
 
 export type Action =

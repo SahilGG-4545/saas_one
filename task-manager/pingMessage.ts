@@ -45,6 +45,12 @@ export function buildPingTemplateParams(i: PingMessageInput, recipientName = '')
     return [firstName(recipientName), oneLine(`${i.fromLabel} (${i.department})`, 100), oneLine(list, 600)];
 }
 
+/** The approved `task_user_mentioned_v1` body, filled in — what the person actually receives. Used for the live preview. */
+export function buildPingTemplatePreview(i: PingMessageInput, recipientName = ''): string {
+    const [who, from, list] = buildPingTemplateParams(i, recipientName);
+    return `Hi ${who},\n\n${from} tagged you regarding the following pending task in Autopilot Task Manager:\n\n${list}\n\nReply to update the task status.`;
+}
+
 export interface ReminderGroup { assigner: string; tasks: string[] }
 
 /** The regular reminder: his pending work from the team, grouped by who gave it to him. */

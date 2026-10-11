@@ -23,6 +23,7 @@ function setup({facilityActive=false,choice=false,testingConfig=null}={}){
     imports['./PermissionService']={PermissionService:{visibleAndAssignable:async(_actor,list)=>list}};
     imports['./TaskGateway']=load('task-manager/TaskGateway.ts',{});imports['./TaskGatewayExecutor']={TaskGatewayExecutor:{}};imports['./SuperuserAIInterpreter']={SuperuserAIInterpreter:{}}; // Step 4 gateway is OFF in this suite
     imports['./TaskErrorHandler']=load('task-manager/TaskErrorHandler.ts',{});
+    imports['./taskAlerts']={personLabel:(name,dept)=>dept?`${name} (${dept})`:name,sendTaskAssigned:async()=>true}; // event alerts: approved templates
     imports['./TaskCommandHandler']=load('task-manager/TaskCommandHandler.ts',imports);
     const router=load('task-manager/TaskMessageRouter.ts',imports);
     const route=load('app/api/webhooks/aisensy/route.ts',{
@@ -33,6 +34,7 @@ function setup({facilityActive=false,choice=false,testingConfig=null}={}){
         '@/whatsapp-test/freeformTest':{handleFreeformTest:async()=>false},
         '@/task-manager/TaskImportInbound':{claimTaskImport:async()=>({handled:false})},'@/task-manager/brain/shadow':{scheduleShadow:()=>undefined},'@/task-manager/brain/live':{claimSmartChat:async()=>({handled:false})},'@/task-manager/voice/VoiceIntake':{claimVoiceNote:async()=>({kind:'pass'})},'@/task-manager/TaskMessageRouter':router,
         '@/task-manager/TaskIdempotencyService':{TaskIdempotencyService:{isDuplicateWebhook:async()=>false,recordProcessedWebhook(){}}},
+        '@/task-manager/InboundLedger':{recordInbound:async()=>{},markRoute:async()=>{}},'@/task-manager/NeverSilentWatchdog':{apologiseAfterCrash:async()=>{}},'@/task-manager/ConversationMemory':{appendTurn:async()=>{}},
         '@/backend/lib/whatsapp/interpreter/coordinator.mjs':{isExplicitTaskCommand,isDirectBookingRequest},
         '@/backend/lib/whatsapp/interpreter/context':{isInterpreterPilot:async()=>true,lookupQuotedContext:async()=>({workflow:'task'}),
             getConversationRoutingState:async()=>({taskActive:contexts.has('TASK_MANAGER'),taskChoicePending:contexts.get('TASK_MANAGER')?.context_data?.state==='AWAITING_SYSTEM_CHOICE',facilityActive})},

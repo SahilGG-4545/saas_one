@@ -12,7 +12,10 @@ import type { Action, BrainContext, ProgressState } from './types';
 
 export interface ExecIO {
     setStatus(actorId: string, taskId: string, status: 'pending' | 'in_progress' | 'completed'): Promise<void>;
-    assign(actorId: string, input: { targetUserId: string; title: string; description?: string; date: string }): Promise<void>;
+    assign(actorId: string, input: { targetUserId: string; title: string; description?: string; date: string; notify?: boolean }): Promise<void>;
+    /** ONE "new task" WhatsApp alert for several tasks created together for the same person (optional: without it, each
+     *  assign sends its own alert). */
+    alertAssigned?(actorId: string, targetUserId: string, titles: string[], date: string): Promise<void>;
     handOver(actorId: string, taskId: string, toId: string): Promise<{ toName: string }>;
     /** Another person's tasks as text, or null when the actor may not see them. */
     readPerson(actorId: string, personId: string): Promise<string | null>;
@@ -90,7 +93,10 @@ export async function executeAction(action: Action, ctx: BrainContext, io: ExecI
 
         case 'create_tasks': {
             const who = nameOf(action.assigneeId);
-            const r = await each(action.tasks, t => io.assign(me, { targetUserId: action.assigneeId, title: t.title, description: t.details ?? undefined, date: action.date }), t => t.title);
+            // Several tasks for one person → create them quietly, then send ONE alert listing the ones that were really created.
+            const group = action.tasks.length > 1 && !!io.alertAssigned;
+            const r = await each(action.tasks, t => io.assign(me, { targetUserId: action.assigneeId, title: t.title, description: t.details ?? undefined, date: action.date, ...(group ? { notify: false } : {}) }), t => t.title);
+            if (group && r.done.length) { try { await io.alertAssigned!(me, action.assigneeId, r.done, action.date); } catch { /* the tasks exist; a failed alert must not fail them */ } }
             return outcome('Added', 'add', { one: 'task', many: 'tasks' }, r.done, r.failed, who === 'you' ? ' to your list' : ` for ${who}`);
         }
 

@@ -231,15 +231,11 @@ async function run() {
     check('a recipient who is not switched on for the Task Manager is not messaged', x.sent.length === 0);
 
     console.log('\n6. Telling the right people what his reply MEANT');
-    const facts = R.relayFacts({ assignerName: 'Priyanka Shah', actorName: 'Saniel Mehta', state: 'working', titles: ['Approve measurement sheet'], note: null })!;
-    check('the instruction asks for a summary in the AI\'s own words, never a quote, and never he/she', /own words as a summary of what was meant, never as a quote/.test(facts.describe) && /never he or she/.test(facts.describe));
-    check('the facts carry only titles and names — no message text exists at this point to leak', Object.keys(facts.values).join() === 'tasks' && facts.required.join() === 'tasks');
-    check('each state has its own meaning ("working", "progress", "stuck", "finished"); an unclear "other" produces nothing', /is working on/.test(facts.fallback)
-        && /has made progress on/.test(R.relayFacts({ assignerName: 'A', actorName: 'S', state: 'partly_done', titles: ['t'], note: null })!.fallback)
-        && /is stuck on/.test(R.relayFacts({ assignerName: 'A', actorName: 'S', state: 'blocked', titles: ['t'], note: null })!.fallback)
-        && /has finished/.test(R.relayFacts({ assignerName: 'A', actorName: 'S', state: 'done_all', titles: ['t'], note: null })!.fallback)
-        && R.relayFacts({ assignerName: 'A', actorName: 'S', state: 'other', titles: ['t'], note: null }) === null);
-    check('the fallback sentence carries a note in brackets, and uses names not pronouns', /\(needs two more days\)/.test(R.relayFacts({ assignerName: 'A', actorName: 'Saniel', state: 'working', titles: ['t'], note: 'needs two more days' })!.fallback) && !/\b(he|she|his|her)\b/i.test(facts.fallback));
+    check('each state has its own meaning ("working", "progress", "stuck", "finished"); an unclear "other" produces nothing',
+        R.relayUpdateLine('working', null) === 'Working on it' && R.relayUpdateLine('partly_done', null) === 'Made progress, not finished yet'
+        && R.relayUpdateLine('blocked', null) === 'Stuck' && R.relayUpdateLine('done_all', null) === 'Finished ✅' && R.relayUpdateLine('done_some', null) === 'Finished ✅'
+        && R.relayUpdateLine('other', null) === null);
+    check('the note (the brain summary, never his words) is added on one line, with no pronouns', R.relayUpdateLine('working', 'needs two\nmore days') === 'Working on it — needs two more days' && !/\b(he|she|his|her)\b/i.test(R.relayUpdateLine('working', null)!));
 
     const relayWorld = (over: any = {}) => {
         const rw: any = { composed: [] as any[], sent: [] as any[], audits: [] as any[], noPhone: new Set<string>(), sendFails: new Set<string>() };
@@ -249,8 +245,7 @@ async function run() {
                 { id: 'p3', title: 'Second for Priyanka', assigned_by: 'u1' }, { id: 'p4', title: 'He gave this one himself', assigned_by: 'u9' },
             ].filter(t => ids.includes(t.id)),
             getPerson: async (id: string) => (people[id] ? { id, name: people[id].name, phone_number: rw.noPhone.has(id) ? '' : people[id].phone_number, department_name: people[id].department_name, active: true } : null),
-            compose: async (f: any, known: Set<string>) => { rw.composed.push({ f, known }); return f.fallback; },
-            send: async (phone: string, text: string, from: string) => { rw.sent.push({ phone, text, from }); return ![...rw.sendFails].some(id => people[id].phone_number === phone); },
+            send: async (phone: string, update: string, from: string, titles: string[]) => { rw.sent.push({ phone, update, from, titles, text: titles.join(' | ') }); return ![...rw.sendFails].some(id => people[id].phone_number === phone); },
             audit: async (d: any) => { rw.audits.push(d); }, ...over,
         };
         return rw;
@@ -274,7 +269,8 @@ async function run() {
     rw = relayWorld(); rr = await R.relayToAssigners({ actor: saniel, taskIds: ['p1'], state: 'other', note: null }, rw.io);
     check('an unclear state relays nothing', rr.told.length === 0 && rw.sent.length === 0);
     rw = relayWorld(); await R.relayToAssigners({ actor: saniel, taskIds: ['p1', 'p2'], state: 'working', note: 'two more days needed', titles: { p1: 'Approve measurement sheet (from Priyanka Shah)' } }, rw.io);
-    check('the AI may only use words it was given (names, titles, the note) — and the original message is never passed in', rw.composed[0].known.has('priyanka') && rw.composed[0].known.has('measurement') && rw.composed[0].known.has('days') && rw.composed.every((c: any) => !('message' in c.f)));
+    check('the Update line is built from the meaning only (state + the brain note), no AI free text', rw.sent.every((x: any) => x.update === 'Working on it — two more days needed') && rw.sent.some((x: any) => x.titles.includes('Approve measurement sheet (from Priyanka Shah)')));
+    check('Update line per state', R.relayUpdateLine('done_all', null) === 'Finished ✅' && R.relayUpdateLine('blocked', 'vendor late') === 'Stuck — vendor late' && R.relayUpdateLine('other', null) === null);
 
     console.log('\n7. The executor: noting status, then telling people (and saying honestly who was reached)');
     const sCtx = { ...world('default'), sender: { id: 'u9', name: 'Saniel Mehta', department: 'Management', role: 'superuser' as const } };
@@ -408,7 +404,7 @@ async function run() {
     const sql = read('supabase/migrations/20261007000006_task_manager_superuser_pings.sql').split('\n').filter(l => !l.trim().startsWith('--')).join('\n');
     check('the migration is ADDITIVE: two new columns with safe defaults and one new table; nothing destructive', /ADD COLUMN IF NOT EXISTS superuser_collab_enabled BOOLEAN NOT NULL DEFAULT false/.test(sql) && /ADD COLUMN IF NOT EXISTS superuser_reminder JSONB/.test(sql) && /CREATE TABLE IF NOT EXISTS public\.task_pings/.test(sql) && !/\b(DROP|DELETE|UPDATE|INSERT|TRUNCATE)\b/i.test(sql.replace(/ON DELETE CASCADE/g, '')));
     const panelSrc = read('frontend/components/procurement/tasks/SuperuserPanel.tsx');
-    check('the live preview uses the SAME function the server sends with', /import \{ buildPingText \} from '@\/task-manager\/pingMessage'/.test(panelSrc) && /deliver/.test(read('task-manager/SuperuserPingService.ts')) && /buildPingText\(input\)/.test(read('task-manager/SuperuserPingService.ts')));
+    check('the live preview is built from the SAME template blanks the server sends (template only)', /import \{ buildPingTemplatePreview \} from '@\/task-manager\/pingMessage'/.test(panelSrc) && /deliver/.test(read('task-manager/SuperuserPingService.ts')) && /buildPingTemplateParams\(input, recipient\.name\)/.test(read('task-manager/SuperuserPingService.ts')) && /templateOnly: true/.test(read('task-manager/SuperuserPingService.ts')) && /buildPingTemplateParams\(i, recipientName\)/.test(read('task-manager/pingMessage.ts')));
     check('the view offers send now, schedule in 15-minute steps, cancel, and the shared regular reminder', /Send now/.test(panelSrc) && /step=\{900\}/.test(panelSrc) && /Cancel/.test(panelSrc) && /Regular reminders/.test(panelSrc));
     const tab = read('frontend/components/procurement/ProcurementTasksTab.tsx');
     check('the Tasks tab shows the view only for a team whose switch is ON and when there is someone to work with', /const collab = ok\.superuserCollab\?\.enabled && ok\.superuserCollab\.superusers\.length/.test(tab) && /\.\.\.\(collab \? \[\{ id: 'superuser' as View/.test(tab));

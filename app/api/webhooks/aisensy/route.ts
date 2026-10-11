@@ -11,6 +11,9 @@ import { claimTaskImport } from '@/task-manager/TaskImportInbound';
 import { scheduleShadow } from '@/task-manager/brain/shadow';
 import { claimSmartChat } from '@/task-manager/brain/live';
 import { claimVoiceNote } from '@/task-manager/voice/VoiceIntake';
+import { markRoute, recordInbound } from '@/task-manager/InboundLedger';
+import { apologiseAfterCrash } from '@/task-manager/NeverSilentWatchdog';
+import { appendTurn } from '@/task-manager/ConversationMemory';
 import { isInterpreterPilot, lookupQuotedContext, getConversationRoutingState } from '@/backend/lib/whatsapp/interpreter/context';
 import { isExplicitTaskCommand, isDirectBookingRequest } from '@/backend/lib/whatsapp/interpreter/coordinator.mjs';
 
@@ -36,6 +39,7 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+    const receivedAt = new Date().toISOString(); // conversation memory orders the person's message by when it ARRIVED
     const enabled = process.env.AISENSY_ASSISTANT_ENABLED === 'true';
     let body: unknown;
     try { body = await req.json(); }
@@ -57,11 +61,30 @@ export async function POST(req: NextRequest) {
         hasMedia: !!input?.mediaUrl,
         shape: payloadShape(body),
     }));
+    // "Never silent" (WHATSAPP_NEVER_SILENT_ENABLED, OFF by default → returns at once): note the message BEFORE any route
+    // runs, so a reply sent while routing is matched to it. No message text is stored. Never throws.
+    await recordInbound(input?.messageId, input?.phone);
+    // Conversation memory (WHATSAPP_MEMORY_ENABLED, OFF by default → returns at once): the person's message is stored only once a
+    // Task Manager route has taken it — for Smart chat AFTER the AI has read the memory, so it never sees this message twice.
+    const remember = () => appendTurn(input?.phone, 'person', input?.text, receivedAt);
+    // A Task Manager background job that crashes gets an immediate apology instead of silence (no-op while the switch is OFF).
+    const guarded = (job: () => Promise<void>) => async () => {
+        try { await job(); }
+        catch (error) {
+            console.error('[AiSensyWebhook] Task Manager background job failed', error instanceof Error ? error.message : error);
+            await apologiseAfterCrash(input?.messageId, input?.phone);
+        }
+    };
+
     // Task Import: a task list sent as an Excel file / image / text. Anything that is not an import (or while the
     // switch is OFF) comes back handled:false and the code below runs exactly as before.
     const taskImport = await claimTaskImport(body);
     if (taskImport.handled) {
-        if (taskImport.background) after(async () => { await taskImport.background!(); });
+        if (taskImport.background) {
+            await markRoute(input?.messageId, 'task_import');
+            await remember();
+            after(guarded(taskImport.background));
+        }
         return NextResponse.json({ success: true, routedTo: 'TASK_IMPORT' });
     }
 
@@ -70,7 +93,11 @@ export async function POST(req: NextRequest) {
     // bot answers exactly as before. The slow part (carrying out, replying) runs after this webhook has answered.
     const smartChat = await claimSmartChat(body);
     if (smartChat.handled) {
-        if (smartChat.background) after(async () => { await smartChat.background!(); });
+        if (smartChat.background) {
+            await markRoute(input?.messageId, 'smart_chat');
+            await remember();
+            after(guarded(smartChat.background));
+        }
         return NextResponse.json({ success: true, routedTo: 'SMART_CHAT' });
     }
 
@@ -155,6 +182,8 @@ export async function POST(req: NextRequest) {
             });
 
             if (routeResult.handledByTaskManager) {
+                await markRoute(input.messageId, 'task_router'); // "never silent": the reply (already sent above) is matched to it
+                await remember(); // ordered by arrival time, so it still sits BEFORE the reply that was already sent
                 if (interpreter && input.messageId) TaskIdempotencyService.recordProcessedWebhook(input.messageId);
                 console.info('[AiSensyWebhook] Inbound routed to TASK_MANAGER', {
                     phoneMasked: input.phone.replace(/(\d{4})\d+(\d{2})/, '$1****$2'),

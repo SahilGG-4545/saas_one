@@ -54,6 +54,7 @@ export default function TaskAccessPanel({ orgId }: { orgId?: string }) {
     const [notice, setNotice] = useState<string | null>(null);
     const [provisioned, setProvisioned] = useState(true);
     const [nlGateway, setNlGateway] = useState(false);
+    const [botFeatures, setBotFeatures] = useState<{ neverSilent: boolean; conversationMemory: boolean }>({ neverSilent: false, conversationMemory: false });
     const [taskImportColumnMissing, setTaskImportColumnMissing] = useState(false);
     const [smartChatColumnMissing, setSmartChatColumnMissing] = useState(false);
     const [collabColumnMissing, setCollabColumnMissing] = useState(false);
@@ -73,6 +74,7 @@ export default function TaskAccessPanel({ orgId }: { orgId?: string }) {
             if (!res.ok || !data.success) throw new Error(data.error || 'Failed to load access settings');
             setProvisioned(Boolean(data.provisioned));
             setNlGateway(Boolean(data.nlGatewayEnabled));
+            setBotFeatures({ neverSilent: data.botFeatures?.neverSilent === true, conversationMemory: data.botFeatures?.conversationMemory === true });
             setTaskImportColumnMissing(Boolean(data.taskImportColumnMissing));
             setSmartChatColumnMissing(Boolean(data.smartChatColumnMissing));
             setCollabColumnMissing(Boolean(data.superuserCollabColumnMissing));
@@ -169,6 +171,19 @@ export default function TaskAccessPanel({ orgId }: { orgId?: string }) {
             : 'Switch natural-language chat OFF? The bot goes back to the exact old behaviour.';
         if (!window.confirm(text)) return;
         post('nl-gateway', { action: 'set_nl_gateway', enabled: next });
+    };
+
+    const toggleBotFeature = (feature: 'neverSilent' | 'conversationMemory') => {
+        const next = !botFeatures[feature];
+        const text = feature === 'neverSilent'
+            ? (next
+                ? 'Switch "Never silent" ON?\n\nNeeds the SQL file supabase/migrations/20261011000001_whatsapp_inbound_ledger.sql run once first.\n\nEvery Task Manager WhatsApp message is noted (no message text). If the bot does not reply, the person gets one short apology at the next 15-minute check. While Pretend Mode is ON no apology is actually sent.'
+                : 'Switch "Never silent" OFF? Messages are no longer noted and no apologies are sent.')
+            : (next
+                ? 'Switch "Conversation memory" ON?\n\nNeeds the SQL file supabase/migrations/20261011000002_whatsapp_conversation_memory.sql run once first.\n\nThe last 20 messages of each person\'s chat with the bot are kept for 24 hours so the AI can follow the conversation, then deleted. Nobody can see them in the app.'
+                : 'Switch "Conversation memory" OFF?\n\nThe AI stops reading earlier messages and ALL stored chat memories are deleted now.');
+        if (!window.confirm(text)) return;
+        post(`bot-${feature}`, { action: 'set_bot_feature', feature, enabled: next });
     };
 
     const toggleTaskImport = (d: AccessDepartment) => {
@@ -299,6 +314,26 @@ Their files and images go back to being handled exactly as before.`;
                     {nlGateway ? 'ON' : 'OFF'}
                 </button>
             </div>
+
+            {([
+                { key: 'neverSilent', title: 'Never silent', body: 'If the bot does not reply to a Task Manager message, the person gets one short "Sorry, please try again" at the next 15-minute check. No message text is stored. Needs SQL file 20261011000001 run once.' },
+                { key: 'conversationMemory', title: 'Conversation memory', body: 'The AI remembers the last 20 messages of each chat for 24 hours, so "make it tomorrow" or "the second one" are understood. Nobody can see them in the app. Needs SQL file 20261011000002 run once.' },
+            ] as const).map(f => (
+                <div key={f.key} className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div>
+                        <p className="font-black text-slate-900">{f.title} <span className="text-[10px] font-black uppercase tracking-wider text-indigo-700">WhatsApp bot</span></p>
+                        <p className="text-slate-600">{f.body}</p>
+                    </div>
+                    <button
+                        type="button"
+                        disabled={busyKey === `bot-${f.key}`}
+                        onClick={() => toggleBotFeature(f.key)}
+                        className={`px-3.5 py-1.5 rounded-xl font-black text-xs uppercase tracking-wider cursor-pointer disabled:opacity-50 whitespace-nowrap ${botFeatures[f.key] ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'bg-slate-200 hover:bg-slate-300 text-slate-700'}`}
+                    >
+                        {botFeatures[f.key] ? 'ON' : 'OFF'}
+                    </button>
+                </div>
+            ))}
 
             <div className="p-3 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-950 text-xs">
                 While Pretend Mode is ON no kickoff is really sent. After you send a kickoff yourself, use

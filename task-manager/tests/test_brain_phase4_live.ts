@@ -272,7 +272,7 @@ async function run() {
     console.log('\n10. Wiring (source checks)');
     const route = read('app/api/webhooks/aisensy/route.ts');
     check('the webhook tries the import first, then Smart chat, then shadow mode, then everything else exactly as before', route.indexOf('claimTaskImport(body)') < route.indexOf('claimSmartChat(body)') && route.indexOf('claimSmartChat(body)') < route.indexOf('scheduleShadow('));
-    check('a handled message answers the webhook at once and does the slow part after it (after())', /if \(smartChat\.handled\) \{\s*if \(smartChat\.background\) after\(async \(\) => \{ await smartChat\.background!\(\); \}\);\s*return NextResponse\.json\(/.test(route));
+    check('a handled message answers the webhook at once and does the slow part after it (after())', /if \(smartChat\.handled\) \{\s*if \(smartChat\.background\) \{[^}]*after\(guarded\(smartChat\.background\)\);\s*\}\s*return NextResponse\.json\(/.test(route));
     const live = read('task-manager/brain/live.ts');
     check('every change goes through the existing checked task functions (WorkspaceService), never straight to the database', /WorkspaceService\.setStatus/.test(live) && /WorkspaceService\.assign/.test(live) && /WorkspaceService\.handOver/.test(live) && !/\.insert\(|\.update\(|\.upsert\(|supabase|createTaskAssignment|updateAssignmentStatus/.test(live + read('task-manager/brain/execute.ts')));
     check('replies go through the safety gate (kill switches + Pretend Mode)', /TaskMessagingService\.sendFreeformReply/.test(live));

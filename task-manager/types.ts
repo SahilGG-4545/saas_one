@@ -200,6 +200,8 @@ export interface TestingConfig {
     killSwitches?: WhatsAppKillSwitches; // Phase 2: Multi-level WhatsApp kill switches
     nlGatewayEnabled?: boolean; // Step 4: natural-language front door (OFF unless explicitly switched on)
     whatsappPretendMode?: boolean; // Step 1: when not explicitly false, NO Task Manager WhatsApp message is sent (saved to history only)
+    neverSilentEnabled?: boolean; // Bot plan Phase 1: note each message, apologise when no reply came (OFF unless switched on)
+    conversationMemoryEnabled?: boolean; // Bot plan Phase 2: remember the last 20 messages of each chat for 24 hours (OFF unless switched on)
 }
 
 

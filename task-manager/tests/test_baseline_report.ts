@@ -60,6 +60,18 @@ async function run() {
     const empty = R.render(R.summarize([], [], now), 7);
     check('no shadow rows → tells you how to switch it on', empty.includes('TASK_BRAIN_SHADOW=true'), empty);
 
+    const ledgerRows = [
+        { route: 'smart_chat', received_at: '2026-10-10T05:00:00.000Z', replied_at: '2026-10-10T05:00:05.000Z', apology_sent_at: null },
+        { route: 'task_router', received_at: '2026-10-10T05:10:00.000Z', replied_at: null, apology_sent_at: '2026-10-10T05:12:30.000Z' },
+        { route: 'smart_chat', received_at: '2026-10-10T05:20:00.000Z', replied_at: null, apology_sent_at: null },        // 40 min old → silent
+        { route: 'smart_chat', received_at: '2026-10-10T05:59:00.000Z', replied_at: null, apology_sent_at: null },        // 1 min old → not due yet
+        { route: null, received_at: '2026-10-10T05:30:00.000Z', replied_at: null, apology_sent_at: null },                // not a Task Manager message
+    ];
+    const withLedger = R.summarize([], [], now, ledgerRows);
+    check('ledger: answered / apology-only / silent counted; too-new and non-Task-Manager rows ignored',
+        JSON.stringify(withLedger.ledger) === JSON.stringify({ routed: 4, replied: 1, apologised: 1, silent: 1 }), withLedger.ledger);
+    check('with the ledger the report shows a real no-reply count', /No-reply count\s+1 silent · 1 got only an apology · 1 answered — of 4/.test(R.render(withLedger, 7)));
+
     check('no network used', net.length === 0, net);
 
     console.log(failures === 0 ? '\n🎉 BASELINE REPORT TESTS PASSED\n' : `\n❌ ${failures} FAILED\n`);

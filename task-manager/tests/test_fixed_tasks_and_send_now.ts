@@ -164,8 +164,8 @@ async function run() {
     ];
     const settle = () => new Promise(r => setTimeout(r, 10));
     await WorkspaceService.setStatus('saniel', { taskId: 's1', status: 'completed' }); await settle();
-    check('he finishes a task someone gave him: that person is told, by name, with the task', notes.length === 1 && /Saniel has finished/.test(notes[0].text) && /Carpet Installation PO/.test(notes[0].text) && notes[0].phone === people.a.phone_number, notes);
-    check('...as plain text that only reaches people inside the 24-hour window', notes[0].opts.freeformOnly === true);
+    check('he finishes a task someone gave him: that person is told, by name, with the task', notes.length === 1 && /Assigned to: Saniel/.test(notes[0].text) && /Update: Finished ✅/.test(notes[0].text) && /Carpet Installation PO/.test(notes[0].text) && notes[0].phone === people.a.phone_number, notes);
+    check('...ONLY as the approved task_update_v2 template, so it also reaches people outside the 24-hour window', notes[0].opts.templateOnly === true && notes[0].opts.campaignName === 'task_update_v2' && notes[0].opts.templateParams.length === 3);
     await WorkspaceService.setStatus('saniel', { taskId: 's1', status: 'pending' });
     await WorkspaceService.setStatus('saniel', { taskId: 's1', status: 'completed' }); await settle();
     check('dragged out of Done and back within the hour: not told twice', notes.length === 1, notes.length);
