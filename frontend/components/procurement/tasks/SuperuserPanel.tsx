@@ -2,7 +2,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { Bell, CalendarClock, Check, Clock, Loader2, Plus, Send, Trash2, X } from 'lucide-react';
-import { buildPingText } from '@/task-manager/pingMessage';
+import { buildPingTemplatePreview } from '@/task-manager/pingMessage';
 import { useSuperuserPings } from './useSuperuserPings';
 import TimeWheelPicker from './TimeWheelPicker';
 
@@ -61,7 +61,7 @@ export default function SuperuserPanel({ onAddTask, onDeleteTask, onChanged }: {
 
     const when = whenDate ? `${whenDate}T${whenTime}` : '';
     const chosen = useMemo(() => (panel?.tasks || []).filter(t => picked.has(t.id)), [panel, picked]);
-    const preview = panel ? buildPingText({ fromLabel: from || panel.me.name, department: panel.department, tasks: chosen.map(t => t.title), note }) : '';
+    const preview = panel ? buildPingTemplatePreview({ fromLabel: from || panel.me.name, department: panel.department, tasks: chosen.map(t => t.title), note }, panel.recipient?.name || '') : '';
 
     if (loading && !panel) return <div className="flex items-center gap-2 p-6 text-sm text-zinc-500"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</div>;
     if (error && !panel) return <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">{error}</div>;
@@ -169,7 +169,7 @@ export default function SuperuserPanel({ onAddTask, onDeleteTask, onChanged }: {
                         <input className={`${input} mt-1 opacity-70`} value={panel.department} readOnly />
                     </label>
                 </div>
-                <label className="mt-2 block text-[11px] font-bold text-zinc-500">Note (optional)
+                <label className="mt-2 block text-[11px] font-bold text-zinc-500">Note (optional, saved in the app, not sent on WhatsApp)
                     <textarea className={`${input} mt-1 h-16 resize-none`} value={note} onChange={e => setNote(e.target.value)} maxLength={300} placeholder="Anything the manager should know" />
                 </label>
 

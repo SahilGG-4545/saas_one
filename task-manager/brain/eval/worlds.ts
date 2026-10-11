@@ -37,7 +37,7 @@ export const PING: PendingState = { kind: 'ping_reply', assigner: 'Vidya Nair', 
 export const CONFIRM: PendingState = { kind: 'confirm', summary: 'Add 1 task for Lohit Kumar: review the RFID rollout' };
 export const PICK: PendingState = { kind: 'pick', options: ['Lohit Kumar (Tech)', 'Lohit Mehta (Procurement)'] };
 
-export type WorldName = 'default' | 'twoLohits' | 'superuser' | 'single' | 'empty';
+export type WorldName = 'default' | 'twoLohits' | 'superuser' | 'single' | 'empty' | 'noTeam';
 
 export function world(name: WorldName, pending: PendingState | null = null): BrainContext {
     const base: BrainContext = {
@@ -51,6 +51,8 @@ export function world(name: WorldName, pending: PendingState | null = null): Bra
             return { ...base, sender: SANIEL, people: PEOPLE, assignableIds: PEOPLE.filter(p => p.id !== 'u9').map(p => p.id), tasks: [{ n: 1, id: 's1', title: 'Approve annual budget', status: 'pending' }] };
         case 'single':
             return { ...base, tasks: [TASKS[0], TASKS[5]] };
+        case 'noTeam':   // Phase 4: someone who may not give work to anyone (no "team")
+            return { ...base, assignableIds: [] };
         case 'empty':
             return { ...base, tasks: [] };
         default:

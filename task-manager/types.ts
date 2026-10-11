@@ -200,6 +200,13 @@ export interface TestingConfig {
     killSwitches?: WhatsAppKillSwitches; // Phase 2: Multi-level WhatsApp kill switches
     nlGatewayEnabled?: boolean; // Step 4: natural-language front door (OFF unless explicitly switched on)
     whatsappPretendMode?: boolean; // Step 1: when not explicitly false, NO Task Manager WhatsApp message is sent (saved to history only)
+    neverSilentEnabled?: boolean; // Bot plan Phase 1: note each message, apologise when no reply came (OFF unless switched on)
+    conversationMemoryEnabled?: boolean; // Bot plan Phase 2: remember the last 20 messages of each chat for 24 hours (OFF unless switched on)
+    frontDoorEnabled?: boolean; // Bot plan Phase 3: Smart chat exact commands without AI, "undo", no menu when the AI is down (OFF unless switched on)
+    teamReportsEnabled?: boolean; // Bot plan Phase 4: "how is my team doing today?" (OFF unless switched on)
+    learningLoopEnabled?: boolean; // Bot plan Phase 5: capture likely mistakes for admin review
+    promptVersionsEnabled?: boolean; // Bot plan Phase 5: active database prompt sections
+    nightlyAutoTuneEnabled?: boolean; // Bot plan Phase 5: draft and evaluate prompt candidates after 02:00 IST
+    botAlertAdmins?: Array<{ name: string; phone: string }>;
 }
-
 

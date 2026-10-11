@@ -253,32 +253,35 @@ export class TaskNotificationService {
             return 'No tasks assigned for today.';
         }
 
+        // ONE line: Meta rejects line breaks, tabs and long runs of spaces inside a template variable.
+        const clean = (s: string) => String(s ?? '').replace(/\s+/g, ' ').trim();
+        const item = (task: TaskAssignment & { isCarriedForward?: boolean }, idx: number, status: string) =>
+            `${idx + 1}. ${task.isCarriedForward ? '🔄 ' : ''}${clean(task.title).slice(0, 120)} ${status}`;
+        // Keep the whole message well under WhatsApp's 1,024-character body limit.
+        const join = (items: string[], max = 700) => {
+            let out = '';
+            for (let i = 0; i < items.length; i++) {
+                const next = out ? `${out} | ${items[i]}` : items[i];
+                if (next.length > max) return `${out} | …and ${items.length - i} more`;
+                out = next;
+            }
+            return out;
+        };
+
         if (ruleType === 'eod_summary') {
             const completed = tasks.filter(t => t.status === 'completed');
-            const summaryLine = `Completed today: ${completed.length}/${tasks.length} tasks`;
-            const lines = tasks.map((task, idx) => {
-                const status = task.status === 'completed' ? 'Completed ✅' : 'Pending ⏳';
-                const carryPrefix = task.isCarriedForward ? '🔄 [Carried Forward] ' : '';
-                return `${idx + 1}. ${carryPrefix}${task.title} [${status}]`;
-            }).join('\n');
-            return `${summaryLine}\n${lines}`;
+            const items = tasks.map((task, idx) => item(task, idx, task.status === 'completed' ? '✅' : '⏳'));
+            return `Completed ${completed.length}/${tasks.length} — ${join(items)}`;
         }
 
         if (ruleType === 'pending_reminder') {
             const pending = tasks.filter(t => t.status !== 'completed');
             const targetTasks = pending.length > 0 ? pending : tasks;
-            return targetTasks.map((task, idx) => {
-                const carryPrefix = task.isCarriedForward ? '🔄 [Carried Forward] ' : '';
-                return `${idx + 1}. ${carryPrefix}${task.title} [Pending ⏳]`;
-            }).join('\n');
+            return join(targetTasks.map((task, idx) => item(task, idx, '⏳')));
         }
 
         // Default / morning_digest:
-        return tasks.map((task, idx) => {
-            const status = task.status === 'completed' ? 'Completed ✅' : 'Pending ⏳';
-            const carryPrefix = task.isCarriedForward ? '🔄 [Carried Forward] ' : '';
-            return `${idx + 1}. ${carryPrefix}${task.title} [${status}]`;
-        }).join('\n');
+        return join(tasks.map((task, idx) => item(task, idx, task.status === 'completed' ? '✅' : '⏳')));
     }
 
 
@@ -478,10 +481,12 @@ export class TaskNotificationService {
             // Dispatch message via TaskMessagingService with rule-specific campaign, departmentId, and clean {{1}} parameter
             try {
                 const templateTaskParam = this.buildTemplateTaskParam(options.rule?.ruleType, tasks);
+                // Scheduled rules use the approved template directly (set TASK_RULES_TEMPLATE_ONLY=false to go back to free text first).
                 const sent = await TaskMessagingService.sendMessage(phone, digest, {
                     departmentId: options.departmentId,
                     ruleType: options.rule?.ruleType,
                     templateParams: [templateTaskParam],
+                    templateOnly: process.env.TASK_RULES_TEMPLATE_ONLY !== 'false',
                 });
 
                 if (sent) {

@@ -2,6 +2,7 @@
  * Measures the language brain against real models on the labelled English cases.
  *
  *   npx tsx task-manager/brain/eval/run_eval.ts --models qwen3.8-27b,glm-5.3-flash --out <folder> [--concurrency 6] [--only group] [--limit 20]
+ *     [--set base|hinglish|team]   (Phase 4: base = the original English set, the default; team runs with the Team reports domain)
  *
  * MANUAL tool — it calls the AI provider (the key is read from .env and never printed), so it is NOT part of the normal
  * test run. It sends no WhatsApp message and touches no database: every case runs against a fake in-memory world.
@@ -40,16 +41,22 @@ async function main() {
     const replyModel = arg('reply-model'); // optional: a different model for writing the reply (default: same as understanding)
     fs.mkdirSync(outDir, { recursive: true });
 
+    const set = arg('set', 'base') as string;
     const { EVAL_CASES } = await import('./cases');
+    const { HINGLISH_CASES, TEAM_CASES } = await import('./cases_phase4');
+    const { tasksDomainWithTeam } = await import('../tasksDomain');
+    const { facilityDomain } = await import('../facilityDomain');
+    const source = set === 'hinglish' ? HINGLISH_CASES : set === 'team' ? TEAM_CASES : EVAL_CASES;
+    const domains = set === 'team' ? [tasksDomainWithTeam, facilityDomain] : undefined;
     const { world } = await import('./worlds');
     const { scoreCase, summarize } = await import('./score');
     const { runBrain } = await import('../index');
     const { engyBrainLlm } = await import('../llm');
 
-    let cases = EVAL_CASES.filter(c => !only || c.group === only);
+    let cases = source.filter(c => !only || c.group === only);
     if (limit) cases = cases.slice(0, limit);
     const llm = engyBrainLlm({ thinking });
-    console.log(`Running ${cases.length} cases × ${models.length} model(s), concurrency ${concurrency}, thinking ${thinking}\n`);
+    console.log(`Running ${cases.length} ${set} cases × ${models.length} model(s), concurrency ${concurrency}, thinking ${thinking}\n`);
 
     const all: Record<string, unknown> = {};
     for (const model of models) {
@@ -65,7 +72,7 @@ async function main() {
                 const started = Date.now();
                 const warn = console.warn; console.warn = () => undefined;
                 let result;
-                try { result = await runBrain(c.message, ctx, { llm, interpretModels: [model], replyModels: [replyModel || model] }); }
+                try { result = await runBrain(c.message, ctx, { llm, interpretModels: [model], replyModels: [replyModel || model], ...(domains ? { domains } : {}) }); }
                 catch (err) { result = { status: 'ai_unavailable' as const, interpretation: null, decision: null, reply: null, trace: { fastPath: false, interpretModel: null, replyModel: null, interpretMs: 0, replyMs: 0, tokensIn: 0, tokensOut: 0, failures: [String(err)] } }; }
                 console.warn = warn;
                 const score = scoreCase(c, result as any);
@@ -102,9 +109,9 @@ async function main() {
             wallSeconds: Math.round((Date.now() - t0) / 100) / 10, byGroup,
         };
         all[model] = { stats, rows };
-        fs.writeFileSync(path.join(outDir, `eval_${model.replace(/[^a-z0-9.-]/gi, '_')}${replyModel ? '__reply_' + replyModel.replace(/[^a-z0-9.-]/gi, '_') : ''}_${thinking}.json`), JSON.stringify({ stats, rows }, null, 2));
+        fs.writeFileSync(path.join(outDir, `eval_${set === "base" ? "" : set + "_"}${model.replace(/[^a-z0-9.-]/gi, '_')}${replyModel ? '__reply_' + replyModel.replace(/[^a-z0-9.-]/gi, '_') : ''}_${thinking}.json`), JSON.stringify({ stats, rows }, null, 2));
         console.log(JSON.stringify(stats));
     }
-    fs.writeFileSync(path.join(outDir, 'eval_all.json'), JSON.stringify(all, null, 2));
+    fs.writeFileSync(path.join(outDir, set === 'base' ? 'eval_all.json' : `eval_all_${set}.json`), JSON.stringify(all, null, 2));
 }
 main().catch(e => { console.error('FAILED:', e?.message || e); process.exit(1); });

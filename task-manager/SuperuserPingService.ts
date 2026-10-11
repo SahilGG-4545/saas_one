@@ -16,7 +16,8 @@ import type { Employee } from './types';
  *
  * All data access goes through `PingIO`, so the rules (who may remind whom about what, what counts as a duplicate, how the
  * scheduler claims a due reminder exactly once) are tested offline. Messages leave through TaskMessagingService, so kill
- * switches and Pretend Mode apply; outside the 24-hour window they use the approved `task_pending_for_you_v1` template.
+ * switches and Pretend Mode apply. They always use the approved `task_user_mentioned_v1` template (free text is rejected by
+ * WhatsApp outside the 24-hour window), so the optional note is kept in the app but not sent.
  */
 
 export class PingError extends Error {
@@ -282,7 +283,7 @@ export async function openPingTasksFor(recipientId: string, io: Pick<PingIO, 'li
 
 // ── the real wiring ──────────────────────────────────────────────────────────
 
-const PING_CAMPAIGN = process.env.AISENSY_TASK_PING_CAMPAIGN || 'task_pending_for_you_v1';
+const PING_CAMPAIGN = process.env.AISENSY_TASK_PING_CAMPAIGN || 'task_user_mentioned_v1';
 const COLS = 'id, department_id, created_by, recipient_id, from_label, note, task_ids, send_at, status, sent_at, error';
 const TASK_COLS = 'id, title, status, employee_id, assigned_by, assigned_date';
 
@@ -328,7 +329,7 @@ export function defaultPingIO(): PingIO {
             const { data, error } = await supabaseAdmin.from('task_pings').select(COLS).eq('recipient_id', recipientId).eq('status', 'sent').gte('sent_at', sinceIso).limit(50);
             if (error) throw error; return (data || []) as PingRow[];
         },
-        send: (phone, text, params) => TaskMessagingService.sendMessage(phone, text, { messageType: 'task_ping', campaignName: PING_CAMPAIGN, templateParams: params }),
+        send: (phone, text, params) => TaskMessagingService.sendMessage(phone, text, { messageType: 'task_ping', campaignName: PING_CAMPAIGN, templateParams: params, templateOnly: true }),
         audit: (event, actorId, details) => TaskDatabaseService.logAudit({ eventType: event, actorId, details }),
     };
 }

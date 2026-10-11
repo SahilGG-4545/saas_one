@@ -421,7 +421,7 @@ export default function NotificationsView({ departmentName = 'Procurement', pers
                     <h3 className="text-sm font-black text-zinc-900 dark:text-zinc-100">{personal ? 'Your own WhatsApp notifications' : `WhatsApp notifications for ${meta.departmentName}`}</h3>
                     <p className="text-xs leading-relaxed text-zinc-500">
                         {personal ? 'Choose when you get your own task messages. They go only to you, with the tasks assigned to you.' : 'Choose when your team gets its task messages.'} A message goes out within about 15 minutes of the time you pick.
-                        Your own wording is delivered as written to people who messaged the bot in the last 24 hours; everyone else gets the approved template.
+                        Messages are sent as WhatsApp's approved template (morning, midday or end-of-day), so they reach everyone; custom wording is not sent.
                     </p>
                 </div>
             </div>

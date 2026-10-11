@@ -16,6 +16,12 @@ import {
     WhatsAppKillSwitches,
 } from './types';
 
+const isBotAlertAdmin = (value: unknown): value is { name: string; phone: string } => {
+    if (!value || typeof value !== 'object') return false;
+    const recipient = value as Record<string, unknown>;
+    return typeof recipient.name === 'string' && /^\+?\d{10,15}$/.test(String(recipient.phone || '').replace(/[\s()-]/g, ''));
+};
+
 function mapProfileToEmployee(profile: any): Employee {
     const fullName = profile.first_name && profile.last_name
         ? `${profile.first_name} ${profile.last_name}`.trim()
@@ -733,6 +739,14 @@ export class TaskDatabaseService {
             killSwitches,
             whatsappPretendMode: raw.whatsappPretendMode !== false,
             nlGatewayEnabled: raw.nlGatewayEnabled === true,
+            neverSilentEnabled: raw.neverSilentEnabled === true,
+            conversationMemoryEnabled: raw.conversationMemoryEnabled === true,
+            frontDoorEnabled: raw.frontDoorEnabled === true,
+            teamReportsEnabled: raw.teamReportsEnabled === true,
+            learningLoopEnabled: raw.learningLoopEnabled === true,
+            promptVersionsEnabled: raw.promptVersionsEnabled === true,
+            nightlyAutoTuneEnabled: raw.nightlyAutoTuneEnabled === true,
+            botAlertAdmins: Array.isArray(raw.botAlertAdmins) ? raw.botAlertAdmins.filter(isBotAlertAdmin).slice(0, 10) : [],
         };
     }
 
@@ -741,7 +755,7 @@ export class TaskDatabaseService {
      * Unlike getTestingConfig(), a database error is thrown (never swallowed), so the gate can fail closed.
      * Pretend Mode is ON unless it was explicitly switched off.
      */
-    static async getSendControls(): Promise<{ killSwitches: WhatsAppKillSwitches; pretendMode: boolean }> {
+    static async getSendControls(): Promise<{ killSwitches: WhatsAppKillSwitches; pretendMode: boolean; botFeatures: Record<import('./BotSwitches').BotSwitch, boolean>; botAlertAdmins: Array<{ name: string; phone: string }> }> {
         const { data, error } = await supabaseAdmin
             .from('conversation_context')
             .select('context_data')
@@ -767,7 +781,20 @@ export class TaskDatabaseService {
                 },
             },
             pretendMode: raw.whatsappPretendMode !== false,
+            botFeatures: { neverSilent: raw.neverSilentEnabled === true, conversationMemory: raw.conversationMemoryEnabled === true, frontDoor: raw.frontDoorEnabled === true, teamReports: raw.teamReportsEnabled === true, learningLoop: raw.learningLoopEnabled === true, promptVersions: raw.promptVersionsEnabled === true, nightlyAutoTune: raw.nightlyAutoTuneEnabled === true },
+            botAlertAdmins: Array.isArray(raw.botAlertAdmins) ? raw.botAlertAdmins.filter(isBotAlertAdmin).slice(0, 10) : [],
         };
+    }
+
+    /** WhatsApp bot upgrades (docs/WHATSAPP_BOT_PRODUCTION_PLAN.md): flipped from the Task Access panel, no redeploy needed. */
+    static async setBotFeature(feature: import('./BotSwitches').BotSwitch, enabled: boolean, actor?: string): Promise<TestingConfig> {
+        const fields: Record<import('./BotSwitches').BotSwitch, keyof TestingConfig> = { neverSilent: 'neverSilentEnabled', conversationMemory: 'conversationMemoryEnabled', frontDoor: 'frontDoorEnabled', teamReports: 'teamReportsEnabled', learningLoop: 'learningLoopEnabled', promptVersions: 'promptVersionsEnabled', nightlyAutoTune: 'nightlyAutoTuneEnabled' };
+        const updated = await this.saveTestingConfig({ [fields[feature]]: enabled });
+        await this.logAudit({
+            event_type: 'bot_feature_updated',
+            details: { feature, enabled, actor: actor || null },
+        });
+        return updated;
     }
 
     static async setNaturalLanguageGateway(enabled: boolean, actor?: string): Promise<TestingConfig> {
@@ -1019,5 +1046,3 @@ export class TaskDatabaseService {
         return { success: true, employee: updatedEmp };
     }
 }
-
-

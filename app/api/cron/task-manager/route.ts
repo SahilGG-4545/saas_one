@@ -5,6 +5,7 @@ import { TaskDatabaseService } from '@/task-manager/TaskDatabaseService';
 import { TaskMessagingService } from '@/task-manager/TaskMessagingService';
 import { evaluateRuleSchedule } from '@/task-manager/NotificationSchedule';
 import { SuperuserPingService } from '@/task-manager/SuperuserPingService';
+import { runBotHousekeeping } from '@/task-manager/NeverSilentWatchdog';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -49,6 +50,9 @@ async function handleRequest(request: NextRequest) {
         // Working with a superuser: send scheduled reminders that are due and each team's regular reminder. This never throws and
         // never changes what the notification rules below do; with no team switched on it does nothing.
         if (action === 'auto' && !dryRun) await SuperuserPingService.runDue();
+        // WhatsApp bot housekeeping ("Never silent" watchdog, deleting 24-hour-old conversation memory). Each part checks its own
+        // switch in the Task Access panel and does nothing while it is OFF. Never throws; never changes the rules below.
+        if (action === 'auto' && !dryRun) await runBotHousekeeping();
 
         if (action === 'daily_tasks') {
             const result = await TaskDailyGeneratorService.generateDailyFixedTasks({
@@ -123,6 +127,13 @@ async function handleRequest(request: NextRequest) {
         let executedCount = 0;
 
         for (const rule of candidates) {
+            // The original department-less ("Tech") rules are retired: every team, Tech included, now owns its schedules.
+            // Only a rule that belongs to a department, or to one person (a superuser's personal rule), runs.
+            if ((!rule.departmentId || rule.departmentId === 'all') && !rule.ownerUserId) {
+                ruleResults.push({ ruleId: rule.id, ruleName: rule.name, status: 'disabled', message: `Rule '${rule.name}' is retired: teams now manage their own notifications.` });
+                continue;
+            }
+
             // Step 6: every rule runs for ITS OWN department. Rules without one (the original Tech rules) keep using the default.
             // A personal rule (ownerUserId) belongs to one person: it uses that person's department for the kill switches.
             let ruleDept = rule.departmentId && rule.departmentId !== 'all' ? rule.departmentId : deptId;

@@ -8,7 +8,7 @@ import type { BrainContext, BrainPerson, PendingState } from './types';
  * People are matched with the same rule assigning uses (PermissionService.visibleAndAssignable); the brain only ever gets
  * NAMES — never ids or phone numbers — and the ids it proposes are re-checked against this very list.
  */
-export async function buildBrainContext(emp: Employee, phone: string, opts: { pending: PendingState | null; recent?: string[] }): Promise<BrainContext> {
+export async function buildBrainContext(emp: Employee, phone: string, opts: { pending: PendingState | null; recent?: string[]; conversation?: string[] }): Promise<BrainContext> {
     const { TaskDatabaseService } = await import('../TaskDatabaseService');
     const { PermissionService } = await import('../PermissionService');
     const { todayInIndia } = await import('../TaskImportParser');
@@ -32,5 +32,6 @@ export async function buildBrainContext(emp: Employee, phone: string, opts: { pe
         departments: (await TaskDatabaseService.getDepartments()).map(d => d.name),
         pending: opts.pending,
         recent: opts.recent ?? [],
+        ...(opts.conversation?.length ? { conversation: opts.conversation } : {}),
     };
 }

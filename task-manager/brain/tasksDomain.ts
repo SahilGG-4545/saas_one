@@ -481,4 +481,33 @@ export const tasksDomain: DomainHandler = {
     replyFacts,
 };
 
+/**
+ * Phase 4 "Team reports" (docs/WHATSAPP_BOT_PRODUCTION_PLAN.md) — the SAME domain plus one read-only scope, "team":
+ * "how is my team doing?", "anything overdue in my team?". Used ONLY while the "Team reports" switch is ON, so with the
+ * switch OFF the AI's instructions are exactly as before. Who counts as "my team" is decided by code from
+ * ctx.assignableIds (the existing permission rule) and is checked again when the report is read.
+ */
+const TEAM_VIEW_SPEC: IntentSpec = {
+    name: 'view_tasks',
+    description: 'wants to SEE tasks or progress: their own ("what do I have today", "anything pending?"), another person\'s, their TEAM\'s ("how is my team doing", "what\'s pending in my team", "anything overdue in my team?"), a department\'s or the whole company\'s.',
+    slots: '{"scope":"self"|"person"|"team"|"department"|"org"|"pending_overview","person":string|null,"department":string|null}',
+};
+
+export const tasksDomainWithTeam: DomainHandler = {
+    ...tasksDomain,
+    intents: INTENT_SPECS.map(s => (s.name === 'view_tasks' ? TEAM_VIEW_SPEC : s)),
+    validateSlots(intent, raw, ctx) {
+        if (intent === 'view_tasks' && raw.scope === 'team') return { intent, scope: 'team', person: null, department: null };
+        return validateSlots(intent, raw, ctx);
+    },
+    decide(interp, ctx, policy) {
+        const s = interp.slots;
+        if (s.intent === 'view_tasks' && s.scope === 'team') {
+            if (!ctx.assignableIds.length) return { outcome: 'REFUSE', reason: 'not_allowed_to_view', detail: null };
+            return { outcome: 'ACT', action: { type: 'view_tasks', scope: 'team', personId: null, department: null } };
+        }
+        return decide(interp, ctx, policy);
+    },
+};
+
 export const TASK_INTENT_NAMES: readonly string[] = TASK_INTENTS;
