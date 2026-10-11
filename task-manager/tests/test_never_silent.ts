@@ -114,8 +114,8 @@ async function run() {
     const hook = read('app/api/webhooks/aisensy/route.ts');
     check('the webhook records the message BEFORE any Task Manager route runs', hook.indexOf('await recordInbound(') > 0 && hook.indexOf('await recordInbound(') < hook.indexOf('claimTaskImport(body)'));
     check('a route is only marked "expects a reply" when it really runs background work (repeat deliveries are not)',
-        /if \(taskImport\.background\) \{\s*await markRoute\(input\?\.messageId, 'task_import'\);/.test(hook) && /if \(smartChat\.background\) \{\s*await markRoute\(input\?\.messageId, 'smart_chat'\);/.test(hook));
-    check('the old task router is marked only when it handled the message', /if \(routeResult\.handledByTaskManager\) \{\s*await markRoute\(input\.messageId, 'task_router'\)/.test(hook));
+        /if \(taskImport\.background\) \{\s*await markRoute\(input\?\.messageId, 'task_import'[^;]*\);/.test(hook) && /if \(smartChat\.background\) \{\s*await markRoute\(input\?\.messageId, 'smart_chat'[^;]*\);/.test(hook));
+    check('the old task router is marked only when it handled the message', /if \(routeResult\.handledByTaskManager\) \{\s*await markRoute\(input\.messageId, 'task_router'[^)]*\)/.test(hook));
     check('background crashes go to the immediate apology', /after\(guarded\(taskImport\.background\)\)/.test(hook) && /after\(guarded\(smartChat\.background\)\)/.test(hook) && /apologiseAfterCrash\(/.test(hook));
     const out = read('task-manager/TaskMessagingService.ts');
     check('every real or pretend send stamps "replied" (free text, template, Pretend Mode)', (out.match(/void markReplied\(/g) || []).length === 3);

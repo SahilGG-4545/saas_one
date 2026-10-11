@@ -133,7 +133,7 @@ async function run() {
     const live = read('task-manager/brain/live.ts');
     check('"my team" = the same permission rule as assigning, re-checked when reading', /PermissionService\.visibleAndAssignable\(actor, pool\)/.test(live) && /buildTeamReport\(members\)/.test(live));
     check('"Team reports" is a Task Access panel switch, OFF by default', /teamReports: c\.teamReportsEnabled === true/.test(read('task-manager/BotSwitches.ts'))
-        && /key: 'teamReports'/.test(read('frontend/components/task-manager/TaskAccessPanel.tsx')) && /'teamReports'\]\.includes\(body\.feature\)/.test(read('app/api/task-manager/access/route.ts')));
+        && /key: 'teamReports'/.test(read('frontend/components/task-manager/TaskAccessPanel.tsx')) && /\[[^\]]*'teamReports'[^\]]*\]\.includes\(body\.feature\)/.test(read('app/api/task-manager/access/route.ts')));
     check('Smart chat still never touches the database directly', !/supabase|\.insert\(|\.update\(|\.upsert\(/.test(live));
 
     check('no network used', net.length === 0, net);

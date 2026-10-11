@@ -81,7 +81,7 @@ export async function POST(req: NextRequest) {
     const taskImport = await claimTaskImport(body);
     if (taskImport.handled) {
         if (taskImport.background) {
-            await markRoute(input?.messageId, 'task_import');
+            await markRoute(input?.messageId, 'task_import', input?.phone, input?.text);
             await remember();
             after(guarded(taskImport.background));
         }
@@ -94,7 +94,7 @@ export async function POST(req: NextRequest) {
     const smartChat = await claimSmartChat(body);
     if (smartChat.handled) {
         if (smartChat.background) {
-            await markRoute(input?.messageId, 'smart_chat');
+            await markRoute(input?.messageId, 'smart_chat', input?.phone, input?.text);
             await remember();
             after(guarded(smartChat.background));
         }
@@ -182,7 +182,7 @@ export async function POST(req: NextRequest) {
             });
 
             if (routeResult.handledByTaskManager) {
-                await markRoute(input.messageId, 'task_router'); // "never silent": the reply (already sent above) is matched to it
+                await markRoute(input.messageId, 'task_router', input.phone, input.text); // "never silent": the reply (already sent above) is matched to it
                 await remember(); // ordered by arrival time, so it still sits BEFORE the reply that was already sent
                 if (interpreter && input.messageId) TaskIdempotencyService.recordProcessedWebhook(input.messageId);
                 console.info('[AiSensyWebhook] Inbound routed to TASK_MANAGER', {

@@ -20,7 +20,7 @@ export const WINDOW_MS = 40 * 60_000;
 export const REPEAT_GAP_MS = 10 * 60_000;
 export const KEEP_DAYS = 14;
 
-export interface WatchdogRow { id: string; phone: string; phone_key: string; received_at: string }
+export interface WatchdogRow { id: string; message_id?: string; phone: string; phone_key: string; received_at: string }
 
 export interface WatchdogIO {
     /** Routed, unanswered, not yet apologised, received between `newerThan` and `olderThan`, oldest first. */
@@ -51,6 +51,7 @@ export async function runWatchdog(io: WatchdogIO, now = new Date()): Promise<Wat
         if (quiet.has(row.phone_key)) { out.skippedRecent++; continue; }
         quiet.add(row.phone_key);                            // one apology per person per run
         try {
+            if (row.message_id) { const { promoteApology } = await import('./BotLearningService'); await promoteApology(row.message_id); }
             if (await io.send(row.phone, APOLOGY_TEXT)) out.apologised++; else out.sendFailed++;
         } catch {
             out.sendFailed++;
@@ -83,7 +84,7 @@ export async function defaultWatchdogIO(): Promise<WatchdogIO> {
     const stamp = () => ({ apology_sent_at: new Date().toISOString() });
     return {
         async listOverdue(olderThan, newerThan) {
-            const { data, error } = await table().select('id, phone, phone_key, received_at')
+            const { data, error } = await table().select('id, message_id, phone, phone_key, received_at')
                 .not('route', 'is', null).is('replied_at', null).is('apology_sent_at', null)
                 .lt('received_at', olderThan).gte('received_at', newerThan)
                 .order('received_at', { ascending: true }).limit(200);
@@ -117,7 +118,7 @@ export async function defaultWatchdogIO(): Promise<WatchdogIO> {
 /** Called from the webhook when a Task Manager background job throws. No-op while the switch is OFF. */
 export async function apologiseAfterCrash(messageId: string | null | undefined, phone: string | null | undefined): Promise<void> {
     if (!(await neverSilentEnabled())) return;
-    try { await apologiseNow(await defaultWatchdogIO(), messageId, phone); } catch { /* never throws */ }
+    try { const sent = await apologiseNow(await defaultWatchdogIO(), messageId, phone); if (sent) { const { promoteApology } = await import('./BotLearningService'); await promoteApology(messageId); } } catch { /* never throws */ }
 }
 
 /**
@@ -126,8 +127,8 @@ export async function apologiseAfterCrash(messageId: string | null | undefined, 
  *   • "Conversation memory" ON → delete memories whose 24 hours are over.
  * Each part checks its own switch and does nothing while it is OFF. Never throws.
  */
-export async function runBotHousekeeping(): Promise<{ watchdog: WatchdogResult | null; memoryPurged: number | null }> {
-    const out: { watchdog: WatchdogResult | null; memoryPurged: number | null } = { watchdog: null, memoryPurged: null };
+export async function runBotHousekeeping(): Promise<{ watchdog: WatchdogResult | null; memoryPurged: number | null; phase5: unknown }> {
+    const out: { watchdog: WatchdogResult | null; memoryPurged: number | null; phase5: unknown } = { watchdog: null, memoryPurged: null, phase5: null };
     try {
         const { memoryEnabled, purgeExpiredMemory } = await import('./ConversationMemory');
         if (await memoryEnabled()) out.memoryPurged = await purgeExpiredMemory();
@@ -138,5 +139,7 @@ export async function runBotHousekeeping(): Promise<{ watchdog: WatchdogResult |
             if (out.watchdog.apologised || out.watchdog.sendFailed) console.info('[WhatsAppWatchdog]', JSON.stringify(out.watchdog));
         }
     } catch (err) { console.warn('[BotHousekeeping] watchdog skipped:', err instanceof Error ? err.message : err); }
+    try { const { runPhase5Housekeeping } = await import('./BotLearningHousekeeping'); out.phase5 = await runPhase5Housekeeping(); }
+    catch (err) { console.warn('[BotHousekeeping] Phase 5 skipped:', err instanceof Error ? err.message : err); }
     return out;
 }

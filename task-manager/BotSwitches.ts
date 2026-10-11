@@ -15,20 +15,23 @@ import { TaskDatabaseService } from './TaskDatabaseService';
  *   • Settings unreadable → OFF (fail closed).
  */
 
-export type BotSwitch = 'neverSilent' | 'conversationMemory' | 'frontDoor' | 'teamReports';
-export const BOT_SWITCHES: readonly BotSwitch[] = ['neverSilent', 'conversationMemory', 'frontDoor', 'teamReports'];
+export type BotSwitch = 'neverSilent' | 'conversationMemory' | 'frontDoor' | 'teamReports' | 'learningLoop' | 'promptVersions' | 'nightlyAutoTune';
+export const BOT_SWITCHES: readonly BotSwitch[] = ['neverSilent', 'conversationMemory', 'frontDoor', 'teamReports', 'learningLoop', 'promptVersions', 'nightlyAutoTune'];
 
 const ENV: Record<BotSwitch, string> = {
     neverSilent: 'WHATSAPP_NEVER_SILENT_ENABLED',
     conversationMemory: 'WHATSAPP_MEMORY_ENABLED',
     frontDoor: 'WHATSAPP_FRONT_DOOR_ENABLED',
     teamReports: 'WHATSAPP_TEAM_REPORTS_ENABLED',
+    learningLoop: 'WHATSAPP_LEARNING_LOOP_ENABLED',
+    promptVersions: 'WHATSAPP_PROMPT_VERSIONS_ENABLED',
+    nightlyAutoTune: 'WHATSAPP_NIGHTLY_AUTOTUNE_ENABLED',
 };
 
 const TTL_MS = 30_000;
 let cache: { at: number; value: Record<BotSwitch, boolean> } | null = null;
 
-const OFF: Record<BotSwitch, boolean> = { neverSilent: false, conversationMemory: false, frontDoor: false, teamReports: false };
+const OFF: Record<BotSwitch, boolean> = { neverSilent: false, conversationMemory: false, frontDoor: false, teamReports: false, learningLoop: false, promptVersions: false, nightlyAutoTune: false };
 
 export async function botSwitchOn(name: BotSwitch): Promise<boolean> {
     if (process.env[ENV[name]] === 'true') return true;
@@ -36,7 +39,7 @@ export async function botSwitchOn(name: BotSwitch): Promise<boolean> {
     if (!cache || now - cache.at > TTL_MS) {
         try {
             const c = await TaskDatabaseService.getTestingConfig();
-            cache = { at: now, value: { neverSilent: c.neverSilentEnabled === true, conversationMemory: c.conversationMemoryEnabled === true, frontDoor: c.frontDoorEnabled === true, teamReports: c.teamReportsEnabled === true } };
+            cache = { at: now, value: { neverSilent: c.neverSilentEnabled === true, conversationMemory: c.conversationMemoryEnabled === true, frontDoor: c.frontDoorEnabled === true, teamReports: c.teamReportsEnabled === true, learningLoop: c.learningLoopEnabled === true, promptVersions: c.promptVersionsEnabled === true, nightlyAutoTune: c.nightlyAutoTuneEnabled === true } };
         } catch {
             cache = { at: now, value: { ...OFF } };
         }
@@ -49,7 +52,7 @@ export async function botSwitchOn(name: BotSwitch): Promise<boolean> {
  * so stamping "replied" and storing memory after a send never costs a second read. Missing values → OFF.
  */
 export function primeBotSwitches(values?: Partial<Record<BotSwitch, boolean>> | null): void {
-    cache = { at: Date.now(), value: { neverSilent: values?.neverSilent === true, conversationMemory: values?.conversationMemory === true, frontDoor: values?.frontDoor === true, teamReports: values?.teamReports === true } };
+    cache = { at: Date.now(), value: { neverSilent: values?.neverSilent === true, conversationMemory: values?.conversationMemory === true, frontDoor: values?.frontDoor === true, teamReports: values?.teamReports === true, learningLoop: values?.learningLoop === true, promptVersions: values?.promptVersions === true, nightlyAutoTune: values?.nightlyAutoTune === true } };
 }
 
 /** Forget the cached values (after an admin flips a switch, and in tests). */

@@ -45,21 +45,27 @@ export interface LiveState {
     titles: Record<string, string>;
     /** Phase 3 "One front door": the person's last change, so "undo" can reverse it within 10 minutes. */
     lastChange?: LastChange | null;
+    /** Phase 5 only: detects a second clarification in a row. */
+    lastOutcome?: string | null;
 }
 
 const EMPTY: LiveState = { recent: [], pending: null, action: null, originalSummary: null, pickOptions: [], relay: false, titles: {} };
 
-export function normalizeState(data: any): LiveState {
+export function normalizeState(data: unknown): LiveState {
     if (!data || typeof data !== 'object') return { ...EMPTY };
+    const value = data as Record<string, unknown>;
+    const pending = value.pending as Record<string, unknown> | null;
+    const action = value.action as Record<string, unknown> | null;
     return {
-        recent: Array.isArray(data.recent) ? data.recent.filter((s: unknown) => typeof s === 'string').slice(-4) : [],
-        pending: data.pending && typeof data.pending === 'object' && ['confirm', 'pick', 'preview', 'ping_reply'].includes(data.pending.kind) ? data.pending : null,
-        action: data.action && typeof data.action === 'object' && typeof data.action.type === 'string' ? data.action : null,
-        originalSummary: typeof data.originalSummary === 'string' ? data.originalSummary : null,
-        pickOptions: Array.isArray(data.pickOptions) ? data.pickOptions.filter((s: unknown) => typeof s === 'string') : [],
-        relay: data.relay === true,
-        titles: data.titles && typeof data.titles === 'object' && !Array.isArray(data.titles) ? Object.fromEntries(Object.entries(data.titles).filter(([, v]) => typeof v === 'string')) as Record<string, string> : {},
-        ...(normalizeChange(data.lastChange) ? { lastChange: normalizeChange(data.lastChange) } : {}),
+        recent: Array.isArray(value.recent) ? value.recent.filter((s: unknown) => typeof s === 'string').slice(-4) : [],
+        pending: pending && ['confirm', 'pick', 'preview', 'ping_reply'].includes(String(pending.kind)) ? pending as unknown as PendingState : null,
+        action: action && typeof action.type === 'string' ? action as unknown as Action : null,
+        originalSummary: typeof value.originalSummary === 'string' ? value.originalSummary : null,
+        pickOptions: Array.isArray(value.pickOptions) ? value.pickOptions.filter((s: unknown) => typeof s === 'string') : [],
+        relay: value.relay === true,
+        titles: value.titles && typeof value.titles === 'object' && !Array.isArray(value.titles) ? Object.fromEntries(Object.entries(value.titles).filter(([, v]) => typeof v === 'string')) as Record<string, string> : {},
+        ...(normalizeChange(value.lastChange) ? { lastChange: normalizeChange(value.lastChange) } : {}),
+        ...(typeof value.lastOutcome === 'string' ? { lastOutcome: value.lastOutcome } : {}),
     };
 }
 
@@ -76,7 +82,7 @@ export interface LiveIO {
     getEmployee(phone: string): Promise<Employee | null>;
     checkAccess(employee: Employee): Promise<AccessDecision>;
     facilityActive(phone: string): Promise<boolean>;
-    getState(phone: string): Promise<{ type: string; data: any } | null>;
+    getState(phone: string): Promise<{ type: string; data: unknown } | null>;
     setState(phone: string, state: LiveState): Promise<void>;
     clearState(phone: string): Promise<void>;
     /** For a superuser: the reminders sent to them that are still waiting for a reply (null when none). */
@@ -88,6 +94,8 @@ export interface LiveIO {
     frontDoorOn?(): Promise<boolean>;
     /** Phase 4: the "Team reports" switch (Task Access panel). Absent / false = the AI's instructions are exactly as before. */
     teamReportsOn?(): Promise<boolean>;
+    beginLearning?(input: { messageId?: string | null; phone?: string | null; text?: string | null; context?: BrainContext | null }): Promise<void>;
+    observeLearning?(input: { messageId?: string | null; phone?: string | null; text: string; context: BrainContext; intent?: string | null; outcome?: string | null; previousOutcome?: string | null; exact?: string | null; apology?: boolean; interpretation?: unknown }): Promise<void>;
     /** Phase 3: reversing a change for "undo" (the same permission-checked functions as the Tasks tab). */
     undo?: UndoIO;
     brain: BrainDeps;
@@ -146,6 +154,7 @@ export async function claimSmartChat(body: unknown, io?: LiveIO, opts: LiveOptio
         // Read BEFORE this message is stored, so the transcript holds only EARLIER messages (the new one is "message").
         const conversation = real.readConversation ? await real.readConversation(cand.phone).catch(() => [] as string[]) : [];
         const ctx = await real.buildContext(employee, cand.phone, { pending, recent: state.recent, ...(conversation.length ? { conversation } : {}) });
+        if (real.beginLearning) await real.beginLearning({ messageId: cand.messageId, phone: cand.phone, text: cand.text, context: ctx }).catch(() => undefined);
         const started = Date.now();
         const phone0 = cand.phone, messageId0 = cand.messageId;
 
@@ -165,6 +174,7 @@ export async function claimSmartChat(body: unknown, io?: LiveIO, opts: LiveOptio
         const brainIO = teamReports ? { ...real, brain: { ...real.brain, domains: [tasksDomainWithTeam, facilityDomain] } } : real;
         const result = await runBrain(cand.text, ctx, { ...brainIO.brain, skipReply: true });
         if (result.status !== 'ok' || !result.decision || !result.interpretation) {
+            await real.audit({ phoneMasked: cand.phone.replace(/\d(?=\d{4})/g, '•'), messageId: cand.messageId ?? null, live: true, status: 'ai_unavailable', fallback: !frontDoor || isExplicitTaskCommand(cand.text), ms: Date.now() - started }, employee).catch(() => undefined);
             // AI down. Front door ON: old exact commands still go to the old bot; anything else gets one short help line (no menu).
             if (!frontDoor || isExplicitTaskCommand(cand.text)) return NOT_HANDLED;
             if (messageId0) real.markSeen(messageId0);
@@ -222,11 +232,13 @@ async function respondExact(t: {
             next = { ...state };
             kind = 'view';
         }
+        if (io.observeLearning) await io.observeLearning({ messageId: t.messageId, phone, text: t.text, context: ctx, exact: kind, outcome: plan.kind === 'undo' ? 'ACT' : null }).catch(() => undefined);
         await io.setState(phone, { ...next, recent: remember(next.recent, `exact command: ${clip(t.text, 40)}`, reply) });
         await io.reply(phone, prefixedText(t.opts, reply));
         await io.audit({ phoneMasked: phone.replace(/\d(?=\d{4})/g, '•'), messageId: t.messageId ?? null, live: true, exact: kind, executed, ms: Date.now() - t.started, ...(t.opts?.via ? { via: t.opts.via } : {}) }, employee);
     } catch (err) {
         console.warn('[TaskBrainLive] exact command failed:', err instanceof Error ? err.message : err);
+        if (io.observeLearning) await io.observeLearning({ messageId: t.messageId, phone, text: t.text, context: ctx, apology: true }).catch(() => undefined);
         try { await io.reply(phone, 'Sorry, something went wrong on my side. Please try that again in a moment.'); } catch { /* nothing more to do */ }
     }
 }
@@ -237,6 +249,7 @@ async function respond(t: Turn): Promise<void> {
         await handle(t);
     } catch (err) {
         console.warn('[TaskBrainLive] failed while answering:', err instanceof Error ? err.message : err);
+        if (t.io.observeLearning) await t.io.observeLearning({ messageId: t.messageId, phone: t.phone, text: t.text, context: t.ctx, apology: true }).catch(() => undefined);
         try { await t.io.reply(t.phone, 'Sorry, something went wrong on my side. Please try that again in a moment.'); } catch { /* nothing more to do */ }
     }
 }
@@ -250,8 +263,9 @@ async function handle(t: Turn): Promise<void> {
 
     const say = async (result: BrainResult, exec: ExecutionResult | null, next: LiveState | 'clear', extra: Record<string, unknown> = {}) => {
         const reply = await composeBrainReply({ text: t.text, ctx, interpretation: result.interpretation!, decision: result.decision!, deps: io.brain, result: exec ?? undefined });
+        if (io.observeLearning) await io.observeLearning({ messageId: t.messageId, phone, text: t.text, context: ctx, intent: result.interpretation!.intent, outcome: result.decision!.outcome, previousOutcome: t.state.lastOutcome ?? null, interpretation: { intent: result.interpretation!.intent, outcome: result.decision!.outcome, summary: result.interpretation!.summary } }).catch(() => undefined);
         if (next === 'clear') await io.clearState(phone);
-        else await io.setState(phone, { ...next, recent: remember(t.state.recent, result.interpretation!.summary || 'a message', reply?.text ?? null) });
+        else await io.setState(phone, { ...next, lastOutcome: result.decision!.outcome, recent: remember(t.state.recent, result.interpretation!.summary || 'a message', reply?.text ?? null) });
         if (reply) await io.reply(phone, prefixed(t, reply.text));
         await io.audit({ ...shadowDetails({ phone, messageId: t.messageId, messageChars: t.text.length, result: { ...result, reply }, ms: Date.now() - t.started }), live: true, executed: exec?.summary ?? null, ...(t.opts?.via ? { via: t.opts.via } : {}), ...extra }, employee);
     };
@@ -325,6 +339,7 @@ export async function defaultLiveIO(): Promise<LiveIO> {
     const { defaultRelayIO, relayToAssigners } = await import('./relay');
     const { readTranscript } = await import('../ConversationMemory');
     const { botSwitchOn } = await import('../BotSwitches');
+    const { activePromptSections, beginObservation, observeTurn } = await import('../BotLearningService');
     const llm = engyBrainLlm();
     const relayIO = await defaultRelayIO();
 
@@ -377,7 +392,7 @@ export async function defaultLiveIO(): Promise<LiveIO> {
             return c ? { type: c.context_type, data: c.context_data } : null;
         },
         async setState(phone, state) {
-            await TaskDatabaseService.setConversationContext({ phone, system: 'TASK_MANAGER', contextType: LIVE_STATE_TYPE, contextData: state as unknown as Record<string, any>, ttlMinutes: STATE_TTL_MIN });
+            await TaskDatabaseService.setConversationContext({ phone, system: 'TASK_MANAGER', contextType: LIVE_STATE_TYPE, contextData: state as unknown as Record<string, unknown>, ttlMinutes: STATE_TTL_MIN });
         },
         async clearState(phone) {
             // Only ever clear OUR state, never another conversation's.
@@ -402,7 +417,9 @@ export async function defaultLiveIO(): Promise<LiveIO> {
             findCreated: (actorId, assigneeId, title, date, since) => WorkspaceService.findRecentlyCreated(actorId, assigneeId, title, date, since),
             async deleteTask(actorId, taskId) { await WorkspaceService.deleteTask(actorId, { taskId }); },
         },
-        brain: { llm },
+        brain: { llm, promptSections: await activePromptSections() },
+        beginLearning: beginObservation,
+        observeLearning: observeTurn,
         exec,
         async reply(phone, text) { await TaskMessagingService.sendFreeformReply(phone, text); },
         async audit(details, employee) { await TaskDatabaseService.logAudit({ eventType: 'brain_live', actorId: employee.id, details }); },

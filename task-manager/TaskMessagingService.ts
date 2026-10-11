@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { markReplied } from './InboundLedger';
 import { appendTurn } from './ConversationMemory';
 import { primeBotSwitches } from './BotSwitches';
+import { clearAnsweredObservations } from './BotLearningService';
 
 const PROJECT_API_BASE = 'https://apis.aisensy.com/project-apis/v1/project';
 
@@ -17,7 +18,7 @@ export interface SendControls {
     killSwitches: WhatsAppKillSwitches;
     pretendMode: boolean;
     /** The bot-upgrade switches, read from the SAME settings row (so a send never needs a second read). */
-    botFeatures?: { neverSilent: boolean; conversationMemory: boolean; frontDoor?: boolean; teamReports?: boolean };
+    botFeatures?: Partial<Record<import('./BotSwitches').BotSwitch, boolean>> & { neverSilent: boolean; conversationMemory: boolean };
 }
 
 export interface GateOptions {
@@ -116,6 +117,7 @@ export class TaskMessagingService {
     }): Promise<void> {
         const type = params.options?.ruleType || params.options?.messageType || 'bot_reply';
         void markReplied(params.phone); // Pretend Mode counts as answered, so the watchdog does not log pointless apologies
+        void clearAnsweredObservations(params.phone);
         void appendTurn(params.phone, 'bot', params.preview); // conversation memory: in Pretend Mode the chat still "happened"
         await TaskDatabaseService.logAudit({
             eventType: 'whatsapp_sent',
@@ -189,6 +191,7 @@ export class TaskMessagingService {
                 return false;
             }
             void markReplied(phone); // "never silent" ledger: this person got an answer (no-op while the switch is OFF)
+            void clearAnsweredObservations(phone);
             void appendTurn(phone, 'bot', text); // conversation memory (no-op while the switch is OFF)
 
             if (process.env.WHATSAPP_LLM_INTERPRETER_ENABLED === 'true') {
@@ -215,7 +218,7 @@ export class TaskMessagingService {
             campaignName,
             templateParams: params.templateParams,
         });
-        if (res.success) void markReplied(params.phone); // "never silent" ledger (no-op while the switch is OFF)
+        if (res.success) { void markReplied(params.phone); void clearAnsweredObservations(params.phone); } // bot ledgers (no-op while switches are OFF)
         if (res.success && res.messageIds?.length) await recordOutgoingContext(this.formatPhone(params.phone),res.messageIds,{workflow:'task',conversationId:randomUUID()})
             .catch(() => console.warn('[TaskMessagingService] Template reply context could not be saved'));
         return res.success;

@@ -204,6 +204,9 @@ export interface TestingConfig {
     conversationMemoryEnabled?: boolean; // Bot plan Phase 2: remember the last 20 messages of each chat for 24 hours (OFF unless switched on)
     frontDoorEnabled?: boolean; // Bot plan Phase 3: Smart chat exact commands without AI, "undo", no menu when the AI is down (OFF unless switched on)
     teamReportsEnabled?: boolean; // Bot plan Phase 4: "how is my team doing today?" (OFF unless switched on)
+    learningLoopEnabled?: boolean; // Bot plan Phase 5: capture likely mistakes for admin review
+    promptVersionsEnabled?: boolean; // Bot plan Phase 5: active database prompt sections
+    nightlyAutoTuneEnabled?: boolean; // Bot plan Phase 5: draft and evaluate prompt candidates after 02:00 IST
+    botAlertAdmins?: Array<{ name: string; phone: string }>;
 }
-
 

@@ -151,7 +151,7 @@ async function run() {
     const hook = read('app/api/webhooks/aisensy/route.ts');
     check('the arrival time is taken first thing', hook.indexOf('const receivedAt = new Date().toISOString()') > 0 && hook.indexOf('const receivedAt') < hook.indexOf('claimVoiceNote(body)'));
     check('the person\'s message is stored only when a Task Manager route takes it (3 places), after the AI read the memory',
-        (hook.match(/await remember\(\);/g) || []).length === 3 && hook.indexOf('claimSmartChat(body)') < hook.lastIndexOf("markRoute(input?.messageId, 'smart_chat');"));
+        (hook.match(/await remember\(\);/g) || []).length === 3 && hook.indexOf('claimSmartChat(body)') < hook.lastIndexOf("markRoute(input?.messageId, 'smart_chat'"));
     const out = read('task-manager/TaskMessagingService.ts');
     check('every message the bot sends is stored (free text, template, Pretend Mode)', (out.match(/void appendTurn\(/g) || []).length === 3);
     check('Smart chat reads the memory BEFORE building the AI context', /readConversation\(cand\.phone\)[\s\S]{0,300}buildContext\(employee, cand\.phone, \{ pending, recent: state\.recent, \.\.\.\(conversation\.length/.test(read('task-manager/brain/live.ts')));

@@ -6,6 +6,7 @@ import { BRAIN_INTERPRET_MODELS, BRAIN_REPLY_MODELS, BrainLlm } from './llm';
 import { composeReply, ComposedReply, knownWordsFrom } from './respond';
 import { tasksDomain } from './tasksDomain';
 import { BrainContext, ConfirmPolicy, DEFAULT_CONFIRM_POLICY, Decision, Interpretation } from './types';
+import type { PromptSections } from './prompt';
 
 /**
  * The language brain — the six fixed steps, in one call:
@@ -27,6 +28,8 @@ export interface BrainDeps {
     result?: ExecutionResult;
     /** Decide only: do not write the reply yet (the caller does it later with composeBrainReply). */
     skipReply?: boolean;
+    /** Phase 5: resolved tunable understand sections. Safety/intent/schema text remains locked in prompt.ts. */
+    promptSections?: PromptSections;
 }
 
 export interface BrainTrace {
@@ -81,7 +84,7 @@ export async function runBrain(message: string, ctx: BrainContext, deps: BrainDe
         trace.fastPath = true;
     } else {
         try {
-            const r = await interpretMessage({ llm: deps.llm, models: deps.interpretModels ?? BRAIN_INTERPRET_MODELS, message: text, ctx, domains });
+            const r = await interpretMessage({ llm: deps.llm, models: deps.interpretModels ?? BRAIN_INTERPRET_MODELS, message: text, ctx, domains, promptSections: deps.promptSections });
             interpretation = r.interpretation;
             trace.interpretModel = r.trace.model; trace.interpretMs = r.ms; trace.tokensIn += r.tokensIn; trace.tokensOut += r.tokensOut;
             trace.failures.push(...r.trace.failures.map(f => `understand ${f.model}: ${f.error}`));

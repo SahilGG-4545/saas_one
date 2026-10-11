@@ -25,7 +25,8 @@ const warn = (what: string, err: unknown) =>
 
 /** A message arrived. Call BEFORE any route runs, so a reply sent during routing finds the row. Duplicates are ignored. */
 export async function recordInbound(messageId: string | null | undefined, phone: string | null | undefined): Promise<void> {
-    if (!messageId || !phone || phoneKey(phone).length < 10 || !(await neverSilentEnabled())) return;
+    if (!messageId || !phone || phoneKey(phone).length < 10) return;
+    if (!(await neverSilentEnabled())) return;
     try {
         const { error } = await supabaseAdmin.from(LEDGER_TABLE)
             .upsert({ message_id: messageId, phone, phone_key: phoneKey(phone) }, { onConflict: 'message_id', ignoreDuplicates: true });
@@ -33,9 +34,13 @@ export async function recordInbound(messageId: string | null | undefined, phone:
     } catch (err) { warn('record', err); }
 }
 
-/** A Task Manager route took the message: from now on the watchdog expects a reply to it. */
-export async function markRoute(messageId: string | null | undefined, route: LedgerRoute): Promise<void> {
-    if (!messageId || !(await neverSilentEnabled())) return;
+/** A Task Manager route took the message: observe eligible Smart-chat turns and let the watchdog expect a reply. */
+export async function markRoute(messageId: string | null | undefined, route: LedgerRoute, phone?: string | null, text?: string | null): Promise<void> {
+    if (!messageId) return;
+    if (route === 'smart_chat') {
+        try { const { beginObservation } = await import('./BotLearningService'); await beginObservation({ messageId, phone, text }); } catch { /* learning must never break routing */ }
+    }
+    if (!(await neverSilentEnabled())) return;
     try {
         const { error } = await supabaseAdmin.from(LEDGER_TABLE).update({ route }).eq('message_id', messageId).is('route', null);
         if (error) warn('route', error);

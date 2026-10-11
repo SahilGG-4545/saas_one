@@ -78,3 +78,47 @@ Code: `task-manager/brain/` · Tests: `tests/test_brain_phase2_core.ts`, `tests/
    - **Confirm-every-"done"** is relaxed for exact numeric commands only (owner decision), mitigated by `undo`.
 
 **8. Evaluation update (2026-10-11, shipped mix, thinking off):** Hinglish 38/39 (97.4 %), team 10/10 — unsafe 0, acted-when-should-ask 0, wrong proposal 0; one over-clarify ("sab ho gaya"). No prompt change was needed for Hinglish. Cases are hand-written (not real traffic) → re-check on real messages after roll-out. This closes the L2 note above for Team reports and Hinglish *on the labelled sets*.
+
+### Phase 5 prompt versions and learning loop (2026-10-11)
+
+Only the Task Brain's numbered understand steps and worked examples may come from an approved database version. The
+safety header, intent list, JSON contract, validation, permissions and confirmation rules remain locked in code. With
+Prompt versions OFF, the Phase 4 prompt remains byte-identical. Invalid or unavailable stored sections fall back to the
+built-in prompt. Admin-labelled real mistakes become permanent evaluation cases; a nightly workflow can draft a
+candidate, but code gates and an admin activation are required before it becomes live.
+
+## Agent Spec — Task Brain Prompt Auto-Tuner
+
+**1. Workflow or agent?** **workflow** — load new labelled cases → draft tunable sections once → validate in code →
+evaluate active and candidate versions → wait for admin approval. `[BAA p.104]` Justification `[BAA p.115]`: the path
+and terminal states are fixed; the model only proposes wording. Head-to-head against manual prompt editing: not measured.
+
+**2. Context** `[BAA p.112]` Current tunable steps/examples and newly admin-labelled, clipped replay cases. User
+messages are explicitly untrusted data. It receives no credentials, phone numbers, permissions or database access.
+
+**3. Cost of a false positive** `[BAA p.112]` **high** → `glm-5.3-flash`, structural validation, the full safety
+evaluation, and mandatory human activation. A failed candidate is rejected and never reaches live traffic.
+
+**4. Tools** No tools are exposed to the model. Provider errors become workflow errors; JSON is parsed and validated
+by code. Arguments are bounded and the existing direct provider transport is reused. `[BAA pp.93–94, 106–107]`
+
+**5. Prompt** `[BAA pp.105, 114]` Numbered ordered steps: **yes (5)**; explicit no-skip clause: **yes**; single-shot
+output example: **yes**; terminal state written to data: **yes** (`evaluating`, `waiting`, or `rejected`).
+
+**6. Memory** `[BAA pp.100–103]` Repeats only when new labelled cases exist. Progress is scoped to
+`task_brain_understand` and persisted as an evaluation checkpoint; the model has no memory/write tool.
+
+**7. Multi-agent?** `[BAA p.116]` Single workflow. The model proposes; the existing deterministic scorer judges both
+versions. Voting agents would add cost without adding authority.
+
+**8. Evaluation — all four axes** `[BAA pp.118–119]` System: resumable batches, three attempts per unavailable case,
+US$0.25 nightly cap. Quality: base English + Hinglish + team + live cases; no lower overall score, at most one lost case
+per group, and zero unsafe/missed-clarify/wrong-proposal results. Human audit: **100% of activations** require an admin
+click. Tool interaction: N/A. Efficiency: zero provider calls on quiet nights; cost and checkpoints are persisted.
+
+**9. Trace** `[BAA pp.119–120]` Version, source-label timestamp, case-level before/after scores, retries, cost, status,
+rejection reason, activation actor and alert audits are persisted. Offline fake-model tests precede live use.
+
+**10. Laws knowingly violated, and why:** L6's independent-family rubric grader is not used; the safety gate is the
+hand-written answer key plus deterministic scorer and required human activation. No paid auto-tune run has been made,
+so real cost and improvement quality remain unmeasured until the owner explicitly approves provider use.

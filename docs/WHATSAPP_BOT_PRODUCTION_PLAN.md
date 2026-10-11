@@ -456,3 +456,38 @@ The only miss: "sab ho gaya" (all done) → the AI asked a question instead of p
 direction. **Conclusion: Hinglish already works well without any prompt change, so none was made.** Possible later
 tweak (not done): add "sab ho gaya" to the front-door exact "done all" words. Caveat: these cases were written by us,
 not taken from real users — real messages may differ; watch them after switching on.
+
+### Phase 5 — learning loop + monitoring: built 2026-10-11, switches OFF
+
+**Built:**
+- **Learning loop:** likely mistakes are saved for admin review (`unknown`, a second clarification, apologies,
+  corrections and undo). The review card labels or ignores them; a label becomes a permanent live test case. Ordinary
+  provisional rows are removed after a successful reply, and unreviewed rows expire.
+- **Prompt versions:** only the numbered understand steps and examples are tunable. Safety text, intents, JSON shape,
+  permissions and confirmations stay locked in code. Active versions are cached for 60 seconds; invalid or unavailable
+  data falls back to the byte-identical built-in prompt. The console shows scores and a text diff, with Activate, Reject
+  and Roll back buttons. Nothing activates itself.
+- **Nightly auto-tune:** runs in the existing 15-minute housekeeping after 02:00 IST only when a new labelled case exists.
+  It uses the existing GLM route, resumes in small batches, stops at the US$0.25 cap, and tests base English, Hinglish,
+  team and live cases. A passing candidate waits for one admin click.
+- **Bot health:** the console shows replies, apologies, fallbacks, AI failures, median reply time and review backlog.
+  With Learning loop ON, spike alerts go to the explicit admin list at most once per hour through the approved
+  `whatsapp_bot_admin_alert_v1` template (one single-line blank). Kill switches and Pretend Mode still apply.
+
+**Switches:** `Learning loop`, `Prompt versions`, `Nightly auto-tune` in Task Access; all OFF by default. Phase 5E
+auto-activation was **not** built.
+
+**Migration:** `20261011000003_whatsapp_bot_learning.sql` — three additive, RLS-on, service-role-only tables plus atomic
+label/activation functions. Written, **not applied**; the owner applies it.
+
+**Tests (offline only):** Phase 5 contract 35/35; 23 approved TypeScript test files green; webhook suites 23/23 and 7/7;
+TypeScript clean and new files lint-clean. The one known old `test_superuser_phase5` UI-source assertion still fails and
+was not changed. No live database, WhatsApp message or paid AI evaluation was used.
+
+**Not measured:** real-user review volume, live prompt-cache behaviour, alert delivery through Meta, nightly wall time,
+provider cost and whether an auto-drafted candidate improves live messages.
+
+**To switch on (sandbox first):** apply migrations `20261011000001`, `20261011000002`, and `20261011000003` → deploy
+once → get `whatsapp_bot_admin_alert_v1` approved → add alert recipients in Bot health → turn on Learning loop → Prompt
+versions → Nightly auto-tune. **Rollback:** turn the three switches OFF; the live brain uses the built-in prompt,
+capture/tuning/alerts stop, and the tables may stay.

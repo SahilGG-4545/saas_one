@@ -48,6 +48,7 @@ import {
 } from 'lucide-react';
 import OrgHierarchyPanel from '@/frontend/components/task-manager/OrgHierarchyPanel';
 import TaskAccessPanel from '@/frontend/components/task-manager/TaskAccessPanel';
+import BotLearningPanel from '@/frontend/components/task-manager/BotLearningPanel';
 import type {
     NotificationRule,
     NotificationRuleType,
@@ -3192,6 +3193,7 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
 
             {/* Step 3: Who is unlocked for the Task Manager (department switch + kickoff status) */}
             <TaskAccessPanel orgId={orgId} />
+            <BotLearningPanel orgId={orgId} />
 
             {/* Step 2: Read-only reporting chain preview (from reporting_manager_id) */}
             <OrgHierarchyPanel orgId={orgId} />

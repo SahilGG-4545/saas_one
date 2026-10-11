@@ -1,6 +1,6 @@
 import type { DomainHandler } from './domain';
 import { BrainLlm, FallbackTrace, extractJson, withModelFallback } from './llm';
-import { interpretSystemPrompt, interpretUserPrompt } from './prompt';
+import { interpretSystemPromptWithSections, interpretUserPrompt, type PromptSections, BUILTIN_PROMPT_SECTIONS } from './prompt';
 import { BrainContext, Intent, Interpretation } from './types';
 import { clip } from './text';
 
@@ -51,9 +51,9 @@ export interface InterpretResult {
 }
 
 export async function interpretMessage(p: {
-    llm: BrainLlm; models: readonly string[]; message: string; ctx: BrainContext; domains: DomainHandler[];
+    llm: BrainLlm; models: readonly string[]; message: string; ctx: BrainContext; domains: DomainHandler[]; promptSections?: PromptSections;
 }): Promise<InterpretResult> {
-    const system = interpretSystemPrompt(p.domains);
+    const system = interpretSystemPromptWithSections(p.domains, p.promptSections ?? BUILTIN_PROMPT_SECTIONS);
     const user = interpretUserPrompt(p.message, p.ctx);
     const started = Date.now();
     let tokensIn = 0, tokensOut = 0;

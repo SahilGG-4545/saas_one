@@ -54,7 +54,8 @@ export default function TaskAccessPanel({ orgId }: { orgId?: string }) {
     const [notice, setNotice] = useState<string | null>(null);
     const [provisioned, setProvisioned] = useState(true);
     const [nlGateway, setNlGateway] = useState(false);
-    const [botFeatures, setBotFeatures] = useState<{ neverSilent: boolean; conversationMemory: boolean; frontDoor: boolean; teamReports: boolean }>({ neverSilent: false, conversationMemory: false, frontDoor: false, teamReports: false });
+    type BotFeature = 'neverSilent' | 'conversationMemory' | 'frontDoor' | 'teamReports' | 'learningLoop' | 'promptVersions' | 'nightlyAutoTune';
+    const [botFeatures, setBotFeatures] = useState<Record<BotFeature, boolean>>({ neverSilent: false, conversationMemory: false, frontDoor: false, teamReports: false, learningLoop: false, promptVersions: false, nightlyAutoTune: false });
     const [taskImportColumnMissing, setTaskImportColumnMissing] = useState(false);
     const [smartChatColumnMissing, setSmartChatColumnMissing] = useState(false);
     const [collabColumnMissing, setCollabColumnMissing] = useState(false);
@@ -74,7 +75,7 @@ export default function TaskAccessPanel({ orgId }: { orgId?: string }) {
             if (!res.ok || !data.success) throw new Error(data.error || 'Failed to load access settings');
             setProvisioned(Boolean(data.provisioned));
             setNlGateway(Boolean(data.nlGatewayEnabled));
-            setBotFeatures({ neverSilent: data.botFeatures?.neverSilent === true, conversationMemory: data.botFeatures?.conversationMemory === true, frontDoor: data.botFeatures?.frontDoor === true, teamReports: data.botFeatures?.teamReports === true });
+            setBotFeatures({ neverSilent: data.botFeatures?.neverSilent === true, conversationMemory: data.botFeatures?.conversationMemory === true, frontDoor: data.botFeatures?.frontDoor === true, teamReports: data.botFeatures?.teamReports === true, learningLoop: data.botFeatures?.learningLoop === true, promptVersions: data.botFeatures?.promptVersions === true, nightlyAutoTune: data.botFeatures?.nightlyAutoTune === true });
             setTaskImportColumnMissing(Boolean(data.taskImportColumnMissing));
             setSmartChatColumnMissing(Boolean(data.smartChatColumnMissing));
             setCollabColumnMissing(Boolean(data.superuserCollabColumnMissing));
@@ -173,9 +174,10 @@ export default function TaskAccessPanel({ orgId }: { orgId?: string }) {
         post('nl-gateway', { action: 'set_nl_gateway', enabled: next });
     };
 
-    const toggleBotFeature = (feature: 'neverSilent' | 'conversationMemory' | 'frontDoor' | 'teamReports') => {
+    const toggleBotFeature = (feature: BotFeature) => {
         const next = !botFeatures[feature];
-        const text = feature === 'teamReports'
+        const phase5 = feature === 'learningLoop' ? 'Capture likely mistakes for admin review? Requires Phase 5 SQL.' : feature === 'promptVersions' ? 'Use approved database prompt versions? Invalid or unavailable versions fall back to built-in instructions.' : feature === 'nightlyAutoTune' ? 'Draft and safety-test at most one candidate per night after 02:00 IST? Nothing activates automatically.' : null;
+        const text = phase5 ? `Switch "${feature}" ${next ? 'ON' : 'OFF'}?\n\n${phase5}` : feature === 'teamReports'
             ? (next
                 ? 'Switch "Team reports" ON?\n\nIn Smart chat, anyone who can give work to others can ask "how is my team doing today?" or "anything overdue in my team?". The answer only includes people they are already allowed to see. Read-only: nothing is changed.\n\nNo SQL file needed.'
                 : 'Switch "Team reports" OFF? Team questions stop working; the AI goes back to exactly its previous instructions.')
@@ -328,6 +330,9 @@ Their files and images go back to being handled exactly as before.`;
                 { key: 'frontDoor', title: 'One front door', body: 'For Smart-chat departments: "done 2" / "done all" / "tasks" answered instantly without AI, "undo" within 10 minutes, and a short help line instead of the 1 / 2 menu when the AI is down. No SQL file needed.' },
                 { key: 'teamReports', title: 'Team reports', body: 'In Smart chat, managers (anyone who can give work to others) can ask "how is my team doing today?" — done / in progress / overdue for the people they may already see. Read-only. No SQL file needed.' },
                 { key: 'conversationMemory', title: 'Conversation memory', body:'The AI remembers the last 20 messages of each chat for 24 hours, so "make it tomorrow" or "the second one" are understood. Nobody can see them in the app. Needs SQL file 20261011000002 run once.' },
+                { key: 'learningLoop', title: 'Learning loop', body: 'Capture likely mistakes for admin review and permanent live test cases. Needs SQL file 20261011000003 run once.' },
+                { key: 'promptVersions', title: 'Prompt versions', body: 'Use approved tunable instruction versions without redeploying. Locked safety rules remain in code.' },
+                { key: 'nightlyAutoTune', title: 'Nightly auto-tune', body: 'After 02:00 IST, draft and safety-test one candidate only when new labelled cases exist. Never auto-activates.' },
             ] as const).map(f => (
                 <div key={f.key} className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                     <div>
