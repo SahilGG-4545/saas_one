@@ -83,5 +83,10 @@ BEGIN
   RETURN previous_id;
 END $$;
 
-REVOKE ALL ON FUNCTION public.whatsapp_bot_label_review(uuid,jsonb,text), FUNCTION public.whatsapp_bot_activate_prompt(uuid,text), FUNCTION public.whatsapp_bot_rollback_prompt(text,text) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.whatsapp_bot_label_review(uuid,jsonb,text), FUNCTION public.whatsapp_bot_activate_prompt(uuid,text), FUNCTION public.whatsapp_bot_rollback_prompt(text,text) TO service_role;
+REVOKE ALL ON FUNCTION public.whatsapp_bot_label_review(uuid,jsonb,text) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.whatsapp_bot_activate_prompt(uuid,text) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.whatsapp_bot_rollback_prompt(text,text) FROM PUBLIC, anon, authenticated;
+
+GRANT EXECUTE ON FUNCTION public.whatsapp_bot_label_review(uuid,jsonb,text) TO service_role;
+GRANT EXECUTE ON FUNCTION public.whatsapp_bot_activate_prompt(uuid,text) TO service_role;
+GRANT EXECUTE ON FUNCTION public.whatsapp_bot_rollback_prompt(text,text) TO service_role;
