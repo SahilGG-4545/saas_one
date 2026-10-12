@@ -208,6 +208,8 @@ export default function HRTicketDetailModal({ isOpen, ticketId, initialTicket, o
     const [activeTab, setActiveTab] = useState<'discussion' | 'audit'>('discussion');
     const [resolutionNoteInput, setResolutionNoteInput] = useState('');
     const [showResolutionForm, setShowResolutionForm] = useState(false);
+    const [updatingStatus, setUpdatingStatus] = useState<string | null>(null);
+    const [resolutionError, setResolutionError] = useState('');
 
     const [replyAttachments, setReplyAttachments] = useState<string[]>([]);
     const [uploadingReplyFile, setUploadingReplyFile] = useState(false);
@@ -322,6 +324,29 @@ export default function HRTicketDetailModal({ isOpen, ticketId, initialTicket, o
     };
 
     const handleUpdateStatus = async (newStatus: string, escalate: boolean = false, resolutionNote?: string, action?: string) => {
+        setResolutionError('');
+
+        // MANDATORY RESOLUTION NOTE CHECK: Cannot resolve or close without a note
+        if (newStatus === 'pending_acknowledgement' || newStatus === 'resolved' || action === 'resolve' || newStatus === 'closed') {
+            const finalNote = (resolutionNote !== undefined ? resolutionNote : resolutionNoteInput)?.trim();
+            if (!finalNote) {
+                setResolutionError('A resolution note is strictly mandatory before resolving or closing this ticket.');
+                return;
+            }
+        }
+
+        setUpdatingStatus(newStatus || action || 'loading');
+
+        // Optimistic UI state update so user sees instant feedback
+        setTicket((prev: any) => {
+            if (!prev) return prev;
+            return {
+                ...prev,
+                status: (newStatus === 'resolved' || action === 'resolve') ? 'pending_acknowledgement' : newStatus,
+                resolution_note: resolutionNote || prev.resolution_note
+            };
+        });
+
         try {
             const res = await fetch(`/api/hr/tickets/${ticketId}`, {
                 method: 'PATCH',
@@ -341,15 +366,23 @@ export default function HRTicketDetailModal({ isOpen, ticketId, initialTicket, o
             if (data.success) {
                 setShowResolutionForm(false);
                 setResolutionNoteInput('');
+                setResolutionError('');
                 fetchTicketDetail();
                 onRefresh();
                 if (typeof window !== 'undefined') {
                     window.dispatchEvent(new CustomEvent('hr-ticket-updated', { detail: { ticketId, status: newStatus, action } }));
                     window.dispatchEvent(new CustomEvent('app-pending-actions-refresh'));
                 }
+            } else {
+                setResolutionError(data.error || 'Failed to update ticket status');
+                fetchTicketDetail(); // Rollback to authoritative state
             }
-        } catch (err) {
+        } catch (err: any) {
             console.error('Error updating status:', err);
+            setResolutionError(err.message || 'Error updating status');
+            fetchTicketDetail();
+        } finally {
+            setUpdatingStatus(null);
         }
     };
 
@@ -655,9 +688,9 @@ export default function HRTicketDetailModal({ isOpen, ticketId, initialTicket, o
                         Failed to load ticket information.
                     </div>
                 ) : (
-                    <div className="flex-1 flex flex-col md:flex-row overflow-hidden min-h-0">
+                    <div className="flex-1 flex flex-col md:flex-row overflow-y-auto md:overflow-hidden min-h-0">
                         {/* Left Main Section: Context, Attachments & Discussion Thread */}
-                        <div className="flex-1 flex flex-col gap-4 p-4 sm:p-6 overflow-y-auto min-h-0 border-r border-slate-100 dark:border-slate-800">
+                        <div className="flex-1 flex flex-col gap-4 p-3.5 sm:p-6 md:overflow-y-auto min-h-0 border-b md:border-b-0 md:border-r border-slate-100 dark:border-slate-800">
                             {/* Badges & Meta Bar */}
                             <div className="flex flex-wrap items-center gap-2">
                                 <span className="px-2.5 py-1 bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-500/20 text-[11px] font-black rounded-lg uppercase tracking-wider">
@@ -869,12 +902,12 @@ export default function HRTicketDetailModal({ isOpen, ticketId, initialTicket, o
                                 </div>
 
                                 {activeTab === 'discussion' ? (
-                                    <div className="flex-1 flex flex-col justify-between gap-3 min-h-[250px]">
+                                    <div className="flex-1 flex flex-col justify-between gap-3 min-h-[220px]">
                                         {/* WhatsApp Chat Area */}
-                                        <div className="space-y-3 max-h-[340px] overflow-y-auto pr-1.5 p-3 rounded-2xl bg-[#efeae2]/60 dark:bg-[#0b141a] border border-slate-200/80 dark:border-slate-800/90 shadow-inner">
+                                        <div className={`space-y-3 p-3 rounded-2xl bg-[#efeae2]/60 dark:bg-[#0b141a] border border-slate-200/80 dark:border-slate-800/90 shadow-inner ${(ticket.comments?.length || 0) > 0 ? 'max-h-[340px] overflow-y-auto pr-1.5' : ''}`}>
                                             {ticket.comments?.length === 0 ? (
-                                                <div className="text-center py-8 space-y-1">
-                                                    <MessageSquare className="w-8 h-8 text-slate-300 dark:text-slate-600 mx-auto" />
+                                                <div className="text-center py-7 space-y-1.5">
+                                                    <MessageSquare className="w-7 h-7 text-slate-300 dark:text-slate-600 mx-auto" />
                                                     <p className="text-xs text-slate-400 font-medium">No messages yet in this conversation.</p>
                                                 </div>
                                             ) : (
@@ -1194,8 +1227,8 @@ export default function HRTicketDetailModal({ isOpen, ticketId, initialTicket, o
                         </div>
 
                         {/* Right Sidebar Section: SLA Timer, Assigned Handler Circle Profile, Employee Snapshot & Lifecycle Actions */}
-                        <div className="w-full md:w-[350px] p-4 sm:p-5 bg-slate-50/50 dark:bg-slate-800/30 flex flex-col justify-between gap-5 overflow-y-auto shrink-0">
-                            <div className="space-y-5">
+                        <div className="w-full md:w-[350px] p-3.5 sm:p-5 bg-slate-50/50 dark:bg-slate-800/30 flex flex-col gap-4 md:overflow-y-auto shrink-0">
+                            <div className="space-y-4">
                                 {/* SLA / TAT Timer */}
                                 <div className="p-3.5 bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-2 shadow-xs">
                                     <div className="flex items-center justify-between">
@@ -1265,14 +1298,9 @@ export default function HRTicketDetailModal({ isOpen, ticketId, initialTicket, o
                                                 <div className="font-extrabold text-xs text-slate-900 dark:text-white leading-snug break-words" title={ticket.assigned_to_details?.full_name || ticket.assigned_to?.full_name || ticket.current_level_owner || 'Assigned Authority'}>
                                                     {ticket.assigned_to_details?.full_name || ticket.assigned_to?.full_name || ticket.current_level_owner || 'Assigned Authority'}
                                                 </div>
-                                                {ticket.assigned_to_details?.app_role && (
+                                                {(ticket.assigned_to_details?.designation || ticket.assigned_to_details?.employee_role) && (
                                                     <div className="text-[10px] font-bold text-[#587e85] dark:text-[#6c9a9e] leading-tight break-words">
-                                                        {ticket.assigned_to_details.app_role}
-                                                    </div>
-                                                )}
-                                                {ticket.assigned_to_details?.employee_role && ticket.assigned_to_details.employee_role.toLowerCase().trim() !== ticket.assigned_to_details?.app_role?.toLowerCase()?.trim() && (
-                                                    <div className="text-[10px] text-slate-500 dark:text-slate-400 font-medium leading-tight break-words">
-                                                        {ticket.assigned_to_details.employee_role}
+                                                        {ticket.assigned_to_details.designation || ticket.assigned_to_details.employee_role}
                                                     </div>
                                                 )}
                                             </div>
@@ -1301,9 +1329,9 @@ export default function HRTicketDetailModal({ isOpen, ticketId, initialTicket, o
                                                 </span>
                                             </div>
                                             <div className="p-2 bg-slate-50 dark:bg-slate-900/50 rounded-xl min-w-0">
-                                                <span className="text-[9px] font-bold text-slate-400 block uppercase tracking-wider mb-0.5">App Role</span>
-                                                <span className="font-semibold text-indigo-600 dark:text-indigo-400 block break-words leading-snug" title={ticket.assigned_to_details?.app_role || 'HR Admin'}>
-                                                    {ticket.assigned_to_details?.app_role || 'HR Admin'}
+                                                <span className="text-[9px] font-bold text-slate-400 block uppercase tracking-wider mb-0.5">Designation</span>
+                                                <span className="font-semibold text-indigo-600 dark:text-indigo-400 block break-words leading-snug" title={ticket.assigned_to_details?.designation || ticket.assigned_to_details?.employee_role || 'N/A'}>
+                                                    {ticket.assigned_to_details?.designation || ticket.assigned_to_details?.employee_role || 'N/A'}
                                                 </span>
                                             </div>
                                         </div>
@@ -1364,9 +1392,6 @@ export default function HRTicketDetailModal({ isOpen, ticketId, initialTicket, o
                                                 </div>
                                                 <div className="text-[10px] font-bold text-[#587e85] dark:text-[#6c9a9e] leading-tight break-words">
                                                     {ticket.is_anonymous ? 'Confidential Identity' : (ticket.submitter_details?.designation || ticket.employee_snapshot?.designation || 'Staff')}
-                                                </div>
-                                                <div className="text-[10px] text-slate-500 dark:text-slate-400 font-medium leading-tight break-words">
-                                                    {ticket.is_anonymous ? 'Identity Masked' : `Manager: ${ticket.submitter_details?.manager_name || ticket.employee_snapshot?.manager_name || ticket.employee_snapshot?.reporting_manager_name || 'N/A'}`}
                                                 </div>
                                             </div>
                                         </div>
@@ -1523,39 +1548,60 @@ export default function HRTicketDetailModal({ isOpen, ticketId, initialTicket, o
                                             )}
 
                                             {/* 2. Resolve Ticket Button & Resolution Form */}
-                                            <button
-                                                type="button"
-                                                onClick={() => setShowResolutionForm(!showResolutionForm)}
-                                                className="w-full py-2.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl text-xs font-bold transition-all shadow-md shadow-emerald-600/20 flex items-center justify-center gap-1.5 active:scale-95 cursor-pointer"
-                                            >
-                                                <CheckCircle className="w-4 h-4" />
-                                                {showResolutionForm ? 'Hide Resolution Form' : 'Resolve Ticket'}
-                                            </button>
+                                            {!showResolutionForm && (
+                                                <button
+                                                    type="button"
+                                                    disabled={updatingStatus !== null}
+                                                    onClick={() => { setShowResolutionForm(true); setResolutionError(''); }}
+                                                    className="w-full py-2.5 px-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-2xl text-xs font-bold transition-all shadow-md shadow-emerald-600/20 flex items-center justify-center gap-1.5 active:scale-95 cursor-pointer"
+                                                >
+                                                    <CheckCircle className="w-4 h-4" />
+                                                    Resolve Ticket
+                                                </button>
+                                            )}
 
                                             {showResolutionForm && (
                                                 <div className="p-3.5 bg-emerald-50/80 dark:bg-emerald-950/50 rounded-2xl border border-emerald-200 dark:border-emerald-800 space-y-2.5 animate-in fade-in duration-200">
-                                                    <label className="block text-[10px] font-black text-emerald-800 dark:text-emerald-300 uppercase tracking-wider">
-                                                        Resolution Note / Action Taken
+                                                    <label className="block text-[10px] font-black text-emerald-800 dark:text-emerald-300 uppercase tracking-wider flex items-center justify-between">
+                                                        <span>Resolution Note / Action Taken *</span>
+                                                        <span className="text-[9px] text-emerald-600 font-bold lowercase">mandatory</span>
                                                     </label>
                                                     <textarea
-                                                        rows={2}
+                                                        rows={3}
                                                         value={resolutionNoteInput}
-                                                        onChange={(e) => setResolutionNoteInput(e.target.value)}
-                                                        placeholder="Summarize resolution action taken at Level 1 / Level 2..."
+                                                        onChange={(e) => {
+                                                            setResolutionNoteInput(e.target.value);
+                                                            if (e.target.value.trim()) setResolutionError('');
+                                                        }}
+                                                        placeholder="Summarize resolution action taken at Level 1 / Level 2 (Mandatory before closing)..."
                                                         className="w-full p-2.5 text-xs rounded-xl border border-emerald-300 dark:border-emerald-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-emerald-500 resize-none font-medium"
                                                     />
+                                                    {resolutionError && (
+                                                        <div className="p-2 rounded-lg bg-red-100 dark:bg-red-950/60 border border-red-300 dark:border-red-800 text-[11px] font-bold text-red-700 dark:text-red-300 flex items-center gap-1.5">
+                                                            <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                                                            <span>{resolutionError}</span>
+                                                        </div>
+                                                    )}
                                                     <div className="flex gap-2">
                                                         <button
                                                             type="button"
+                                                            disabled={updatingStatus === 'pending_acknowledgement'}
                                                             onClick={() => handleUpdateStatus('pending_acknowledgement', false, resolutionNoteInput, 'resolve')}
-                                                            className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-sm cursor-pointer"
+                                                            className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-sm cursor-pointer flex items-center justify-center gap-1.5"
                                                         >
-                                                            Confirm Resolution (Request Acknowledgment)
+                                                            {updatingStatus === 'pending_acknowledgement' ? (
+                                                                <>
+                                                                    <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                                                    <span>Resolving...</span>
+                                                                </>
+                                                            ) : (
+                                                                <span>Confirm Resolution (Request Acknowledgment)</span>
+                                                            )}
                                                         </button>
                                                         <button
                                                             type="button"
-                                                            onClick={() => setShowResolutionForm(false)}
-                                                            className="px-3 py-2 bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold cursor-pointer"
+                                                            onClick={() => { setShowResolutionForm(false); setResolutionError(''); }}
+                                                            className="px-3 py-2.5 bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold hover:bg-slate-300 dark:hover:bg-slate-600 transition-colors cursor-pointer"
                                                         >
                                                             Cancel
                                                         </button>

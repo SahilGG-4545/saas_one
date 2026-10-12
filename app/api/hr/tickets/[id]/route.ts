@@ -97,9 +97,35 @@ export async function GET(
         );
         const isSubmitter = Boolean(reqUserId && ticket.raised_by_user_id === reqUserId);
 
+        let isDesignatedAdminConfigAssignee = false;
+        try {
+            const { data: orgSettings } = await supabaseAdmin
+                .from('organization_settings')
+                .select('hr_escalation_config, notification_matrix')
+                .eq('organization_id', ticket.organization_id)
+                .maybeSingle();
+
+            const configObj = orgSettings?.notification_matrix?.hr_escalation_config || orgSettings?.hr_escalation_config || {};
+            let flowAssigneesConfig = configObj.flow_assignees || {};
+            while (flowAssigneesConfig && flowAssigneesConfig.flow_assignees) {
+                flowAssigneesConfig = flowAssigneesConfig.flow_assignees;
+            }
+            const tType = ticket.ticket_type || ticket.category?.ticket_type || '';
+            const configAssigneesForType = new Set<string>();
+            const flowObj = flowAssigneesConfig[tType] || {};
+            Object.values(flowObj).forEach((val: any) => {
+                if (Array.isArray(val)) val.forEach((id: string) => configAssigneesForType.add(id));
+            });
+            if (reqUserId && configAssigneesForType.has(reqUserId)) {
+                isDesignatedAdminConfigAssignee = true;
+            }
+        } catch (e) {
+            console.warn('Could not read escalation config for ticket authorization:', e);
+        }
+
         if (ticket.is_anonymous) {
-            // Anonymous feedback tickets are strictly accessible to Org Super Admin, the assigned handler, or the submitter
-            if (!isSuperAdmin && !isAssigned && !isSubmitter) {
+            // Anonymous feedback tickets are strictly accessible to Org Super Admin, the assigned handler, designated Admin Config assignees, or the submitter
+            if (!isSuperAdmin && !isAssigned && !isSubmitter && !isDesignatedAdminConfigAssignee) {
                 return NextResponse.json({ success: false, error: 'Anonymous feedback tickets are restricted to Org Super Admin, assigned users, and the submitter.' }, { status: 403 });
             }
             if (!isSubmitter) {
@@ -114,8 +140,8 @@ export async function GET(
                 };
             }
         } else if (isConfidential) {
-            // Confidential tickets are strictly restricted to Org Super Admin, the explicitly assigned user, or the submitter
-            if (!isSuperAdmin && !isAssigned && !isSubmitter) {
+            // Confidential tickets are strictly restricted to Org Super Admin, the explicitly assigned user, designated Admin Config assignees, or the submitter
+            if (!isSuperAdmin && !isAssigned && !isSubmitter && !isDesignatedAdminConfigAssignee) {
                 return NextResponse.json({ success: false, error: 'Confidential tickets are not accessible to unauthorized roles and are restricted to Org Super Admin, Director, and assigned users.' }, { status: 403 });
             }
         }
@@ -270,11 +296,11 @@ export async function GET(
                     .or(filterOr);
                 
                 if (targetProfs && targetProfs.length > 0) {
-                    const names = targetProfs.map(tp => {
+                    const uniqueNames = Array.from(new Set(targetProfs.map(tp => {
                         return (tp.user as any)?.full_name || (tp.user as any)?.email || `${tp.first_name || ''} ${tp.last_name || ''}`.trim();
-                    }).filter(Boolean);
-                    if (names.length > 0) {
-                        assigneeName = names.join(' & ');
+                    }).filter(Boolean)));
+                    if (uniqueNames.length > 0) {
+                        assigneeName = uniqueNames.join(' & ');
                     }
                 }
             }
@@ -291,21 +317,21 @@ export async function GET(
                         .from('employee_profiles')
                         .select('user:users!employee_profiles_user_id_fkey(full_name, email), first_name, last_name')
                         .or('designation.eq.Designated HR Manager,is_hr_manager_authority.eq.true');
-                    const names = (hrMgrs || []).map(p => (p.user as any)?.full_name || (p.user as any)?.email || `${p.first_name || ''} ${p.last_name || ''}`.trim()).filter(Boolean);
+                    const names = Array.from(new Set((hrMgrs || []).map(p => (p.user as any)?.full_name || (p.user as any)?.email || `${p.first_name || ''} ${p.last_name || ''}`.trim()).filter(Boolean)));
                     assigneeName = names.length > 0 ? names.join(' & ') : l2Name;
                 } else if (ownerType === 'hr_head' || (!ownerType && i === 3)) {
                     const { data: hrHeads } = await supabaseAdmin
                         .from('employee_profiles')
                         .select('user:users!employee_profiles_user_id_fkey(full_name, email), first_name, last_name')
                         .eq('is_hr_authority', true);
-                    const names = (hrHeads || []).map(p => (p.user as any)?.full_name || (p.user as any)?.email || `${p.first_name || ''} ${p.last_name || ''}`.trim()).filter(Boolean);
+                    const names = Array.from(new Set((hrHeads || []).map(p => (p.user as any)?.full_name || (p.user as any)?.email || `${p.first_name || ''} ${p.last_name || ''}`.trim()).filter(Boolean)));
                     assigneeName = names.length > 0 ? names.join(' & ') : l3Name;
                 } else if (ownerType === 'director' || ownerType === 'super_admin' || (!ownerType && i === 4)) {
                     const { data: dirs } = await supabaseAdmin
                         .from('employee_profiles')
                         .select('user:users!employee_profiles_user_id_fkey(full_name, email), first_name, last_name')
                         .eq('is_director_authority', true);
-                    const names = (dirs || []).map(p => (p.user as any)?.full_name || (p.user as any)?.email || `${p.first_name || ''} ${p.last_name || ''}`.trim()).filter(Boolean);
+                    const names = Array.from(new Set((dirs || []).map(p => (p.user as any)?.full_name || (p.user as any)?.email || `${p.first_name || ''} ${p.last_name || ''}`.trim()).filter(Boolean)));
                     assigneeName = names.length > 0 ? names.join(' & ') : l4Name;
                 } else {
                     assigneeName = `Level ${i} Authority`;
@@ -394,6 +420,7 @@ export async function GET(
                     avatar_url: photoUrl,
                     location: handlerLocation,
                     department: assignedProfile?.department || 'Operations',
+                    designation: assignedProfile?.designation || (assignedProfile as any)?.job_title || 'Level Owner',
                     employee_role: assignedProfile?.designation || 'Level Owner',
                     app_role: appRole,
                     employee_code: handlerEmpCode
@@ -635,6 +662,18 @@ export async function PATCH(
             if (!isSuperOrHr) {
                 return NextResponse.json({ success: false, error: 'This ticket has been escalated. Only the current level assignee (or HR authority) can resolve or advance it.' }, { status: 403 });
             }
+        }
+
+        // MANDATORY RESOLUTION NOTE: A ticket cannot be resolved or closed without a non-empty resolution note
+        if (status === 'resolved' || status === 'pending_acknowledgement' || action === 'resolve' || status === 'closed') {
+            const effectiveResolutionNote = (resolution_note !== undefined ? resolution_note : existing.resolution_note)?.trim();
+            if (!effectiveResolutionNote) {
+                return NextResponse.json({
+                    success: false,
+                    error: 'A resolution note is strictly mandatory before resolving or closing this ticket.'
+                }, { status: 400 });
+            }
+            updates.resolution_note = effectiveResolutionNote;
         }
 
         if (status === 'resolved' || status === 'pending_acknowledgement' || action === 'resolve') {

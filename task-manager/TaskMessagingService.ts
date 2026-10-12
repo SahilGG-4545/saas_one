@@ -263,6 +263,13 @@ export class TaskMessagingService {
     }
 
     /**
+     * Alias for sendFreeformReply for backwards and caller compatibility.
+     */
+    static async sendFreeformMessage(phone: string, text: string): Promise<boolean> {
+        return this.sendMessage(phone, text);
+    }
+
+    /**
      * Sends an outbound notification via pre-approved template.
      * Gated: honours kill switches and Pretend Mode.
      */
@@ -380,9 +387,5 @@ export class TaskMessagingService {
         });
         if (delivered) void appendTurn(phone, 'bot', text); // conversation memory (no-op while the switch is OFF)
         return delivered;
-    }
-
-    static async sendFreeformMessage(phone: string, text: string): Promise<boolean> {
-        return this.sendMessage(phone, text);
     }
 }

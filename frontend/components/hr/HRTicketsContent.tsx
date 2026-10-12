@@ -21,16 +21,22 @@ import SLALiveTimer from '@/frontend/components/hr/SLALiveTimer';
 import HROrgChartTree from '@/frontend/components/hr/HROrgChartTree';
 import EmployeeQuickProfileModal, { EmployeeProfileModalData } from '@/frontend/components/hr/EmployeeQuickProfileModal';
 import HRNotesTrackerTab from '@/frontend/components/hr/HRNotesTrackerTab';
+import { hrDataCache } from '@/frontend/components/hr/hrDataCache';
 
 export function HRTicketsContent({ orgId }: { orgId: string }) {
     const { user, membership } = useAuth();
     const searchParams = useSearchParams();
 
     const [activeTab, setActiveTab] = useState<'tickets' | 'notes' | 'tree' | 'directory' | 'reconciliation' | 'config' | 'analytics'>('tickets');
+    const [visitedTabs, setVisitedTabs] = useState<Set<string>>(new Set(['tickets']));
     const [viewMode, setViewMode] = useState<'kanban' | 'table' | 'properties'>('table');
 
-    const [tickets, setTickets] = useState<any[]>([]);
-    const [properties, setProperties] = useState<any[]>([]);
+    const [tickets, setTickets] = useState<any[]>(() => {
+        return hrDataCache.getTickets(`${orgId}_initial`).data || [];
+    });
+    const [properties, setProperties] = useState<any[]>(() => {
+        return hrDataCache.getProperties(orgId).data || [];
+    });
     const [selectedPropertyId, setSelectedPropertyId] = useState<string>('all');
     const [scopeFilter, setScopeFilter] = useState<'all' | 'my_raised' | 'assigned_to_me' | 'department' | 'my_team_assigned'>('all');
     const [departmentSubView, setDepartmentSubView] = useState<'tree' | 'table'>('tree');
@@ -39,8 +45,19 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
     const [ticketTypeFilter, setTicketTypeFilter] = useState<string>('all');
     const [statusFilter, setStatusFilter] = useState<string>('all');
     const [searchQuery, setSearchQuery] = useState<string>('');
-    const [loading, setLoading] = useState(true);
-    const [employeesList, setEmployeesList] = useState<any[]>([]);
+    const [loading, setLoading] = useState(false);
+    const [employeesList, setEmployeesList] = useState<any[]>(() => {
+        return hrDataCache.getEmployees(orgId).data || [];
+    });
+
+    useEffect(() => {
+        setVisitedTabs(prev => {
+            if (prev.has(activeTab)) return prev;
+            const next = new Set(prev);
+            next.add(activeTab);
+            return next;
+        });
+    }, [activeTab]);
 
     // Tree View State
     const [treeViewMode, setTreeViewMode] = useState<'chart' | 'list'>('chart');
@@ -80,16 +97,22 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
     }, [orgId]);
 
     const fetchEmployeesList = async () => {
+        const cached = hrDataCache.getEmployees(orgId);
+        if (cached.data && cached.data.length > 0) {
+            setEmployeesList(cached.data);
+        }
         try {
             const res = await fetch(`/api/hr/admin/employees?orgId=${orgId}`);
             const data = await res.json();
             if (data.success && data.data) {
                 setEmployeesList(data.data || []);
+                hrDataCache.setEmployees(orgId, data.data || []);
             } else {
                 const fallbackRes = await fetch(`/api/hr/admin/escalation-config?orgId=${orgId}`);
                 const fallbackData = await fallbackRes.json();
                 if (fallbackData.success && fallbackData.data?.employees) {
                     setEmployeesList(fallbackData.data.employees || []);
+                    hrDataCache.setEmployees(orgId, fallbackData.data.employees || []);
                 }
             }
         } catch (e) {
@@ -114,6 +137,76 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
         if (s.includes('kiran') && (s.includes('kumar') || s === 'kiran')) return 'kiran kumar';
         return s;
     };
+
+    // Helper to format relative time for mobile card headers (e.g. "2h ago", "1d ago")
+    const formatRelativeTime = (isoString?: string): string => {
+        if (!isoString) return '';
+        try {
+            const date = new Date(isoString);
+            const now = new Date();
+            const diffMs = now.getTime() - date.getTime();
+            const diffSec = Math.floor(diffMs / 1000);
+            if (diffSec < 60) return 'just now';
+            const diffMin = Math.floor(diffSec / 60);
+            if (diffMin < 60) return `${diffMin}m ago`;
+            const diffHr = Math.floor(diffMin / 60);
+            if (diffHr < 24) return `${diffHr}h ago`;
+            const diffDays = Math.floor(diffHr / 24);
+            if (diffDays < 7) return `${diffDays}d ago`;
+            return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+        } catch {
+            return '';
+        }
+    };
+
+    // Helper for sleek live dot status badge
+    const getStatusDotBadge = (status: string) => {
+        switch (status) {
+            case 'closed':
+                return {
+                    label: 'Closed',
+                    dotClass: 'bg-emerald-500',
+                    badgeClass: 'bg-emerald-50 text-emerald-700 border-emerald-200/80 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800/60',
+                };
+            case 'pending_acknowledgement':
+                return {
+                    label: 'Pending Ack',
+                    dotClass: 'bg-amber-500 animate-pulse',
+                    badgeClass: 'bg-amber-50 text-amber-800 border-amber-200/80 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800/60',
+                };
+            case 'resolved':
+                return {
+                    label: 'Resolved',
+                    dotClass: 'bg-teal-500',
+                    badgeClass: 'bg-teal-50 text-teal-800 border-teal-200/80 dark:bg-teal-950/40 dark:text-teal-300 dark:border-teal-800/60',
+                };
+            case 'in_progress':
+                return {
+                    label: 'In Progress',
+                    dotClass: 'bg-blue-500',
+                    badgeClass: 'bg-blue-50 text-blue-700 border-blue-200/80 dark:bg-blue-950/40 dark:text-blue-300 dark:border-blue-800/60',
+                };
+            case 'escalated':
+                return {
+                    label: 'Escalated',
+                    dotClass: 'bg-purple-500 animate-pulse',
+                    badgeClass: 'bg-purple-50 text-purple-700 border-purple-200/80 dark:bg-purple-950/40 dark:text-purple-300 dark:border-purple-800/60',
+                };
+            case 'overdue':
+                return {
+                    label: 'Overdue',
+                    dotClass: 'bg-rose-500 animate-ping',
+                    badgeClass: 'bg-rose-50 text-rose-700 border-rose-200/80 dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-800/60',
+                };
+            default:
+                return {
+                    label: (status || 'Open').replace(/_/g, ' '),
+                    dotClass: 'bg-indigo-500',
+                    badgeClass: 'bg-indigo-50 text-indigo-700 border-indigo-200/80 dark:bg-indigo-950/40 dark:text-indigo-300 dark:border-indigo-800/60',
+                };
+        }
+    };
+
 
     /**
      * Robust recursive reportees finder for a manager object.
@@ -256,23 +349,37 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
         fetchTickets();
     }, [orgId, user?.id, userRole, selectedPropertyId]);
 
-    // Real-time automatic background data refresh (every 10s & on window focus)
+    // Real-time automatic background data refresh (every 30s, on window focus, and on ticket events)
     useEffect(() => {
         if (!user?.id) return;
         const interval = setInterval(() => {
             fetchTickets(true);
-        }, 10000);
+        }, 30000);
 
         const handleFocus = () => fetchTickets(true);
+        const handleTicketUpdated = (e: any) => {
+            const { ticketId, status } = e?.detail || {};
+            if (ticketId && status) {
+                setTickets(prev => prev.map(t => t.id === ticketId ? { ...t, status } : t));
+            }
+            fetchTickets(true);
+        };
+
         window.addEventListener('focus', handleFocus);
+        window.addEventListener('hr-ticket-updated', handleTicketUpdated);
 
         return () => {
             clearInterval(interval);
             window.removeEventListener('focus', handleFocus);
+            window.removeEventListener('hr-ticket-updated', handleTicketUpdated);
         };
     }, [orgId, user?.id, userRole, selectedPropertyId]);
 
     const fetchProperties = async () => {
+        const cached = hrDataCache.getProperties(orgId);
+        if (cached.data && cached.data.length > 0) {
+            setProperties(cached.data);
+        }
         try {
             let res = await fetch(`/api/properties?organizationId=${orgId}`);
             let text = await res.text();
@@ -303,6 +410,9 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
             }
 
             setProperties(propsList);
+            if (propsList.length > 0) {
+                hrDataCache.setProperties(orgId, propsList);
+            }
         } catch (err) {
             console.error('Error fetching properties:', err);
         }
@@ -313,7 +423,16 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
             setLoading(false);
             return;
         }
-        if (!isBackground && tickets.length === 0) setLoading(true);
+        const cacheKey = `${orgId}_${user.id}_${selectedPropertyId}_${userRole}`;
+        const cached = hrDataCache.getTickets(cacheKey);
+        if (cached.data && cached.data.length > 0) {
+            if (tickets.length === 0) {
+                setTickets(cached.data);
+            }
+            setLoading(false);
+        } else if (!isBackground && tickets.length === 0) {
+            setLoading(true);
+        }
         try {
             const url = new URL('/api/hr/tickets', window.location.origin);
             url.searchParams.append('orgId', orgId);
@@ -328,16 +447,21 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
             let data: any = {};
             try { data = text ? JSON.parse(text) : {}; } catch {}
             if (data.success) {
-                setTickets(data.data || []);
+                const list = data.data || [];
+                setTickets(list);
+                hrDataCache.setTickets(cacheKey, list);
             }
         } catch (err) {
             console.error('Error fetching tickets:', err);
         } finally {
-            if (!isBackground) setLoading(false);
+            setLoading(false);
         }
     };
 
     const handleUpdateStatus = async (ticketId: string, newStatus: string) => {
+        // Optimistic UI update
+        setTickets(prev => prev.map(t => t.id === ticketId ? { ...t, status: newStatus } : t));
+        hrDataCache.updateTicketStatus(ticketId, newStatus);
         try {
             const res = await fetch(`/api/hr/tickets/${ticketId}`, {
                 method: 'PATCH',
@@ -352,9 +476,12 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
             try { data = text ? JSON.parse(text) : {}; } catch {}
             if (data.success) {
                 fetchTickets(true);
+            } else {
+                fetchTickets(true);
             }
         } catch (err) {
             console.error('Error updating status:', err);
+            fetchTickets(true);
         }
     };
 
@@ -475,9 +602,13 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
         const overdue = tickets.filter(t => t.sla_due_at && new Date(t.sla_due_at) < new Date() && !['resolved', 'closed'].includes(t.status)).length;
 
         const myRaised = tickets.filter(t => 
-            t.raised_by_user_id === user?.id || 
-            t.raised_by?.email === user?.email ||
-            (userEmpProfile && (t.raised_by_user_id === userEmpProfile.id || (userEmpProfile.employee_code && t.employee_snapshot?.code === userEmpProfile.employee_code)))
+            Boolean(
+                (user?.id && t.raised_by_user_id === user.id) || 
+                (user?.email && t.raised_by?.email && t.raised_by.email.toLowerCase() === user.email.toLowerCase()) ||
+                (userEmpProfile?.id && t.raised_by_user_id === userEmpProfile.id) ||
+                (userEmpProfile?.employee_code && t.employee_snapshot?.code === userEmpProfile.employee_code) ||
+                (user?.email && t.employee_snapshot?.email && t.employee_snapshot.email.toLowerCase() === user.email.toLowerCase())
+            )
         ).length;
 
         const teamTickets = tickets.filter(t => 
@@ -512,9 +643,13 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
     // Filter tickets based on UI search, scope, type, and status filters
     const filteredTickets = tickets.filter(t => {
         if (scopeFilter === 'my_raised') {
-            const isMyRaised = t.raised_by_user_id === user?.id || 
-                               t.raised_by?.email === user?.email ||
-                               (userEmpProfile && (t.raised_by_user_id === userEmpProfile.id || (userEmpProfile.employee_code && t.employee_snapshot?.code === userEmpProfile.employee_code)));
+            const isMyRaised = Boolean(
+                (user?.id && t.raised_by_user_id === user.id) || 
+                (user?.email && t.raised_by?.email && t.raised_by.email.toLowerCase() === user.email.toLowerCase()) ||
+                (userEmpProfile?.id && t.raised_by_user_id === userEmpProfile.id) ||
+                (userEmpProfile?.employee_code && t.employee_snapshot?.code === userEmpProfile.employee_code) ||
+                (user?.email && t.employee_snapshot?.email && t.employee_snapshot.email.toLowerCase() === user.email.toLowerCase())
+            );
             if (!isMyRaised) return false;
         }
         if (scopeFilter === 'assigned_to_me' && !isDirectlyAssignedToMe(t)) return false;
@@ -1175,8 +1310,9 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
             )}
 
             {/* TAB 1: ORGANIZATION REPORTING TREE & WORKLOAD INSPECTOR */}
-            {activeTab === 'tree' && (
-                <div className="space-y-5">
+            {visitedTabs.has('tree') && (
+                <div className={activeTab === 'tree' ? 'space-y-5' : 'hidden'}>
+                    <div className="space-y-5">
                     {/* View Mode Toggle Bar */}
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white dark:bg-slate-900 p-3 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xs">
                         <div className="flex items-center gap-2">
@@ -1530,10 +1666,13 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
                         </div>
                     ) : null}
                 </div>
+                </div>
             )}
 
-            {/* TAB 2: HR ADMIN, OPS SUPER ADMIN & PROPERTY ADMIN KPI STAT CARDS */}
-            {activeTab === 'tickets' && (canViewOrgWide || isManager || isScopedRole) && (() => {
+            {/* TAB 2: HR ADMIN, OPS SUPER ADMIN & PROPERTY ADMIN KPI STAT CARDS & TICKETS */}
+            {visitedTabs.has('tickets') && (
+                <div className={activeTab === 'tickets' ? 'space-y-4' : 'hidden'}>
+                    {(canViewOrgWide || isManager || isScopedRole) && (() => {
                 const isStrictOrgSuperAdmin = ['org_super_admin', 'master_admin', 'super_admin'].includes(userRole);
                 const showHrQueries = isStrictOrgSuperAdmin || isHrRole || hrQueriesCount > 0;
                 const showConfidential = isStrictOrgSuperAdmin || confidentialCount > 0;
@@ -1541,133 +1680,255 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
                 const gridColsClass = totalKpiCards === 6 ? 'lg:grid-cols-6' : totalKpiCards === 5 ? 'lg:grid-cols-5' : 'lg:grid-cols-4';
 
                 return (
-                    <div className={`grid grid-cols-2 sm:grid-cols-3 ${gridColsClass} gap-3 sm:gap-4`}>
-                        <div
-                            onClick={() => { setActiveTab('tickets'); setScopeFilter('assigned_to_me'); setTicketTypeFilter('all'); setStatusFilter('all'); }}
-                            className={`p-4 bg-white dark:bg-slate-900 rounded-2xl border transition-all cursor-pointer group shadow-2xs hover:shadow-md ${
-                                scopeFilter === 'assigned_to_me'
-                                    ? 'border-l-4 border-l-amber-500 border-slate-200 dark:border-slate-800 bg-amber-50/20 dark:bg-amber-950/10'
-                                    : 'border-slate-200 dark:border-slate-800 hover:border-amber-400'
-                            }`}
-                        >
-                            <div className="flex items-center justify-between gap-2">
-                                <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">Assigned To You</span>
-                                <div className="w-8 h-8 rounded-xl bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 border border-amber-200/60 dark:border-amber-900/60 flex items-center justify-center shrink-0">
-                                    <ShieldCheck className="w-4 h-4" />
+                    <div className="space-y-2.5">
+                        {/* Mobile Swipeable KPI Pills (< sm) */}
+                        <div className="flex sm:hidden overflow-x-auto gap-2 pb-1 -mx-3 px-3 no-scrollbar scroll-smooth">
+                            <button
+                                type="button"
+                                onClick={() => { setActiveTab('tickets'); setScopeFilter('assigned_to_me'); setTicketTypeFilter('all'); setStatusFilter('all'); }}
+                                className={`px-3 py-2 rounded-xl border text-left shrink-0 transition-all flex items-center gap-2.5 active:scale-95 ${
+                                    scopeFilter === 'assigned_to_me'
+                                        ? 'bg-amber-500/10 border-amber-400 text-amber-900 dark:text-amber-200'
+                                        : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800'
+                                }`}
+                            >
+                                <div className="w-7 h-7 rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0">
+                                    <ShieldCheck className="w-3.5 h-3.5" />
                                 </div>
-                            </div>
-                            <p className="text-2xl font-black text-slate-900 dark:text-white mt-2 tracking-tight">{assignedToYouCount}</p>
-                            <p className="text-[11px] font-medium text-amber-600 dark:text-amber-400 mt-0.5">
-                                {assignedPendingCount > 0 ? `${assignedPendingCount} pending action` : '0 pending action'}
-                            </p>
+                                <div className="leading-tight">
+                                    <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Assigned</div>
+                                    <div className="flex items-center gap-1">
+                                        <span className="text-base font-black text-slate-900 dark:text-white">{assignedToYouCount}</span>
+                                        {assignedPendingCount > 0 && (
+                                            <span className="text-[9px] font-bold text-amber-600 dark:text-amber-400">({assignedPendingCount})</span>
+                                        )}
+                                    </div>
+                                </div>
+                            </button>
+
+                            <button
+                                type="button"
+                                onClick={() => { setActiveTab('tickets'); setScopeFilter('all'); setTicketTypeFilter('all'); setStatusFilter('all'); }}
+                                className={`px-3 py-2 rounded-xl border text-left shrink-0 transition-all flex items-center gap-2.5 active:scale-95 ${
+                                    (scopeFilter === 'all' || (!canViewOrgWide && scopeFilter === 'assigned_to_me')) && ticketTypeFilter === 'all' && statusFilter === 'all'
+                                        ? 'bg-indigo-500/10 border-indigo-400 text-indigo-900 dark:text-indigo-200'
+                                        : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800'
+                                }`}
+                            >
+                                <div className="w-7 h-7 rounded-lg bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0">
+                                    <Ticket className="w-3.5 h-3.5" />
+                                </div>
+                                <div className="leading-tight">
+                                    <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Total</div>
+                                    <span className="text-base font-black text-slate-900 dark:text-white">{totalCount}</span>
+                                </div>
+                            </button>
+
+                            <button
+                                type="button"
+                                onClick={() => { setActiveTab('tickets'); setTicketTypeFilter('grievance'); setStatusFilter('all'); }}
+                                className={`px-3 py-2 rounded-xl border text-left shrink-0 transition-all flex items-center gap-2.5 active:scale-95 ${
+                                    ticketTypeFilter === 'grievance'
+                                        ? 'bg-amber-500/10 border-amber-400 text-amber-900 dark:text-amber-200'
+                                        : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800'
+                                }`}
+                            >
+                                <div className="w-7 h-7 rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0">
+                                    <ShieldCheck className="w-3.5 h-3.5" />
+                                </div>
+                                <div className="leading-tight">
+                                    <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Grievances</div>
+                                    <span className="text-base font-black text-slate-900 dark:text-white">{openGrievancesCount}</span>
+                                </div>
+                            </button>
+
+                            {showHrQueries && (
+                                <button
+                                    type="button"
+                                    onClick={() => { setActiveTab('tickets'); setTicketTypeFilter('hr_query'); setStatusFilter('all'); }}
+                                    className={`px-3 py-2 rounded-xl border text-left shrink-0 transition-all flex items-center gap-2.5 active:scale-95 ${
+                                        ticketTypeFilter === 'hr_query'
+                                            ? 'bg-blue-500/10 border-blue-400 text-blue-900 dark:text-blue-200'
+                                            : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800'
+                                    }`}
+                                >
+                                    <div className="w-7 h-7 rounded-lg bg-blue-500/10 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0">
+                                        <HelpCircle className="w-3.5 h-3.5" />
+                                    </div>
+                                    <div className="leading-tight">
+                                        <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">HR Queries</div>
+                                        <span className="text-base font-black text-slate-900 dark:text-white">{hrQueriesCount}</span>
+                                    </div>
+                                </button>
+                            )}
+
+                            {showConfidential && (
+                                <button
+                                    type="button"
+                                    onClick={() => { setActiveTab('tickets'); setTicketTypeFilter('confidential'); setStatusFilter('all'); }}
+                                    className={`px-3 py-2 rounded-xl border text-left shrink-0 transition-all flex items-center gap-2.5 active:scale-95 ${
+                                        ticketTypeFilter === 'confidential'
+                                            ? 'bg-purple-500/10 border-purple-400 text-purple-900 dark:text-purple-200'
+                                            : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800'
+                                    }`}
+                                >
+                                    <div className="w-7 h-7 rounded-lg bg-purple-500/10 text-purple-600 dark:text-purple-400 flex items-center justify-center shrink-0">
+                                        <Lock className="w-3.5 h-3.5" />
+                                    </div>
+                                    <div className="leading-tight">
+                                        <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Confidential</div>
+                                        <span className="text-base font-black text-slate-900 dark:text-white">{confidentialCount}</span>
+                                    </div>
+                                </button>
+                            )}
+
+                            <button
+                                type="button"
+                                onClick={() => { setActiveTab('tickets'); setStatusFilter('overdue'); }}
+                                className={`px-3 py-2 rounded-xl border text-left shrink-0 transition-all flex items-center gap-2.5 active:scale-95 ${
+                                    statusFilter === 'overdue'
+                                        ? 'bg-rose-500/10 border-rose-400 text-rose-900 dark:text-rose-200'
+                                        : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800'
+                                }`}
+                            >
+                                <div className="w-7 h-7 rounded-lg bg-rose-500/10 text-rose-600 dark:text-rose-400 flex items-center justify-center shrink-0">
+                                    <AlertTriangle className="w-3.5 h-3.5" />
+                                </div>
+                                <div className="leading-tight">
+                                    <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Overdue</div>
+                                    <span className="text-base font-black text-rose-600 dark:text-rose-400">{overdueCount}</span>
+                                </div>
+                            </button>
                         </div>
 
-                        <div
-                            onClick={() => { setActiveTab('tickets'); setScopeFilter('all'); setTicketTypeFilter('all'); setStatusFilter('all'); }}
-                            className={`p-4 bg-white dark:bg-slate-900 rounded-2xl border transition-all cursor-pointer group shadow-2xs hover:shadow-md ${
-                                (scopeFilter === 'all' || (!canViewOrgWide && scopeFilter === 'assigned_to_me')) && ticketTypeFilter === 'all' && statusFilter === 'all'
-                                    ? 'border-l-4 border-l-[#587e85] border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/20'
-                                    : 'border-slate-200 dark:border-slate-800 hover:border-[#587e85]'
-                            }`}
-                        >
-                            <div className="flex items-center justify-between gap-2">
-                                <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">Total Requests</span>
-                                <div className="w-8 h-8 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 border border-indigo-200/60 dark:border-indigo-900/60 flex items-center justify-center shrink-0">
-                                    <Ticket className="w-4 h-4" />
-                                </div>
-                            </div>
-                            <p className="text-2xl font-black text-slate-900 dark:text-white mt-2 tracking-tight">{totalCount}</p>
-                            <p className="text-[11px] font-medium text-slate-400 mt-0.5">{canViewOrgWide ? 'Across organization' : 'Team & Assigned Workload'}</p>
-                        </div>
-
-                        <div
-                            onClick={() => { setActiveTab('tickets'); setTicketTypeFilter('grievance'); setStatusFilter('all'); }}
-                            className={`p-4 bg-white dark:bg-slate-900 rounded-2xl border transition-all cursor-pointer group shadow-2xs hover:shadow-md ${
-                                ticketTypeFilter === 'grievance'
-                                    ? 'border-l-4 border-l-amber-500 border-slate-200 dark:border-slate-800 bg-amber-50/20 dark:bg-amber-950/10'
-                                    : 'border-slate-200 dark:border-slate-800 hover:border-amber-400'
-                            }`}
-                        >
-                            <div className="flex items-center justify-between gap-2">
-                                <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">Grievances</span>
-                                <div className="w-8 h-8 rounded-xl bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 border border-amber-200/60 dark:border-amber-900/60 flex items-center justify-center shrink-0">
-                                    <ShieldCheck className="w-4 h-4" />
-                                </div>
-                            </div>
-                            <p className="text-2xl font-black text-slate-900 dark:text-white mt-2 tracking-tight">{openGrievancesCount}</p>
-                            <p className="text-[11px] font-medium text-amber-600 dark:text-amber-400 mt-0.5">
-                                {pendingGrievancesCount > 0 ? `${pendingGrievancesCount} pending` : 'All resolved'}
-                            </p>
-                        </div>
-
-                        {showHrQueries && (
+                        {/* Desktop / Tablet Grid (sm:grid) */}
+                        <div className={`hidden sm:grid sm:grid-cols-3 ${gridColsClass} gap-3 sm:gap-4`}>
                             <div
-                                onClick={() => { setActiveTab('tickets'); setTicketTypeFilter('hr_query'); setStatusFilter('all'); }}
+                                onClick={() => { setActiveTab('tickets'); setScopeFilter('assigned_to_me'); setTicketTypeFilter('all'); setStatusFilter('all'); }}
                                 className={`p-4 bg-white dark:bg-slate-900 rounded-2xl border transition-all cursor-pointer group shadow-2xs hover:shadow-md ${
-                                    ticketTypeFilter === 'hr_query'
-                                        ? 'border-l-4 border-l-blue-500 border-slate-200 dark:border-slate-800 bg-blue-50/20 dark:bg-blue-950/10'
-                                        : 'border-slate-200 dark:border-slate-800 hover:border-blue-400'
+                                    scopeFilter === 'assigned_to_me'
+                                        ? 'border-l-4 border-l-amber-500 border-slate-200 dark:border-slate-800 bg-amber-50/20 dark:bg-amber-950/10'
+                                        : 'border-slate-200 dark:border-slate-800 hover:border-amber-400'
                                 }`}
                             >
                                 <div className="flex items-center justify-between gap-2">
-                                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">HR Queries</span>
-                                    <div className="w-8 h-8 rounded-xl bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 border border-blue-200/60 dark:border-blue-900/60 flex items-center justify-center shrink-0">
-                                        <HelpCircle className="w-4 h-4" />
+                                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">Assigned To You</span>
+                                    <div className="w-8 h-8 rounded-xl bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 border border-amber-200/60 dark:border-amber-900/60 flex items-center justify-center shrink-0">
+                                        <ShieldCheck className="w-4 h-4" />
                                     </div>
                                 </div>
-                                <p className="text-2xl font-black text-slate-900 dark:text-white mt-2 tracking-tight">{hrQueriesCount}</p>
-                                <p className="text-[11px] font-medium text-blue-600 dark:text-blue-400 mt-0.5">Direct HR Support</p>
-                            </div>
-                        )}
-
-                        {showConfidential && (
-                            <div
-                                onClick={() => { setActiveTab('tickets'); setTicketTypeFilter('confidential'); setStatusFilter('all'); }}
-                                className={`p-4 bg-white dark:bg-slate-900 rounded-2xl border transition-all cursor-pointer group shadow-2xs hover:shadow-md ${
-                                    ticketTypeFilter === 'confidential'
-                                        ? 'border-l-4 border-l-purple-500 border-slate-200 dark:border-slate-800 bg-purple-50/20 dark:bg-purple-950/10'
-                                        : 'border-slate-200 dark:border-slate-800 hover:border-purple-400'
-                                }`}
-                            >
-                                <div className="flex items-center justify-between gap-2">
-                                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                                        {isStrictOrgSuperAdmin ? 'Confidential & Anon' : 'Confidential'}
-                                    </span>
-                                    <div className="w-8 h-8 rounded-xl bg-purple-50 dark:bg-purple-950/60 text-purple-600 dark:text-purple-400 border border-purple-200/60 dark:border-purple-900/60 flex items-center justify-center shrink-0">
-                                        <Lock className="w-4 h-4" />
-                                    </div>
-                                </div>
-                                <p className="text-2xl font-black text-slate-900 dark:text-white mt-2 tracking-tight">{confidentialCount}</p>
-                                <p className="text-[11px] font-medium text-purple-600 dark:text-purple-400 mt-0.5">
-                                    {isStrictOrgSuperAdmin ? 'Director / Anonymous' : 'Assigned to You'}
+                                <p className="text-2xl font-black text-slate-900 dark:text-white mt-2 tracking-tight">{assignedToYouCount}</p>
+                                <p className="text-[11px] font-medium text-amber-600 dark:text-amber-400 mt-0.5">
+                                    {assignedPendingCount > 0 ? `${assignedPendingCount} pending action` : '0 pending action'}
                                 </p>
                             </div>
-                        )}
 
-                        <div
-                            onClick={() => { setActiveTab('tickets'); setStatusFilter('overdue'); }}
-                            className={`p-4 bg-white dark:bg-slate-900 rounded-2xl border transition-all cursor-pointer group shadow-2xs hover:shadow-md ${
-                                statusFilter === 'overdue'
-                                    ? 'border-l-4 border-l-rose-500 border-slate-200 dark:border-slate-800 bg-rose-50/20 dark:bg-rose-950/10'
-                                    : 'border-slate-200 dark:border-slate-800 hover:border-rose-400'
-                            }`}
-                        >
-                            <div className="flex items-center justify-between gap-2">
-                                <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">Overdue TAT</span>
-                                <div className="w-8 h-8 rounded-xl bg-rose-50 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 border border-rose-200/60 dark:border-rose-900/60 flex items-center justify-center shrink-0">
-                                    <AlertTriangle className="w-4 h-4" />
+                            <div
+                                onClick={() => { setActiveTab('tickets'); setScopeFilter('all'); setTicketTypeFilter('all'); setStatusFilter('all'); }}
+                                className={`p-4 bg-white dark:bg-slate-900 rounded-2xl border transition-all cursor-pointer group shadow-2xs hover:shadow-md ${
+                                    (scopeFilter === 'all' || (!canViewOrgWide && scopeFilter === 'assigned_to_me')) && ticketTypeFilter === 'all' && statusFilter === 'all'
+                                        ? 'border-l-4 border-l-[#587e85] border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/20'
+                                        : 'border-slate-200 dark:border-slate-800 hover:border-[#587e85]'
+                                }`}
+                            >
+                                <div className="flex items-center justify-between gap-2">
+                                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">Total Requests</span>
+                                    <div className="w-8 h-8 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 border border-indigo-200/60 dark:border-indigo-900/60 flex items-center justify-center shrink-0">
+                                        <Ticket className="w-4 h-4" />
+                                    </div>
                                 </div>
+                                <p className="text-2xl font-black text-slate-900 dark:text-white mt-2 tracking-tight">{totalCount}</p>
+                                <p className="text-[11px] font-medium text-slate-400 mt-0.5">{canViewOrgWide ? 'Across organization' : 'Team & Assigned Workload'}</p>
                             </div>
-                            <p className="text-2xl font-black text-rose-600 dark:text-rose-400 mt-2 tracking-tight">{overdueCount}</p>
-                            <p className="text-[11px] font-medium text-rose-500 mt-0.5">Requires Escalation</p>
+
+                            <div
+                                onClick={() => { setActiveTab('tickets'); setTicketTypeFilter('grievance'); setStatusFilter('all'); }}
+                                className={`p-4 bg-white dark:bg-slate-900 rounded-2xl border transition-all cursor-pointer group shadow-2xs hover:shadow-md ${
+                                    ticketTypeFilter === 'grievance'
+                                        ? 'border-l-4 border-l-amber-500 border-slate-200 dark:border-slate-800 bg-amber-50/20 dark:bg-amber-950/10'
+                                        : 'border-slate-200 dark:border-slate-800 hover:border-amber-400'
+                                }`}
+                            >
+                                <div className="flex items-center justify-between gap-2">
+                                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">Grievances</span>
+                                    <div className="w-8 h-8 rounded-xl bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 border border-amber-200/60 dark:border-amber-900/60 flex items-center justify-center shrink-0">
+                                        <ShieldCheck className="w-4 h-4" />
+                                    </div>
+                                </div>
+                                <p className="text-2xl font-black text-slate-900 dark:text-white mt-2 tracking-tight">{openGrievancesCount}</p>
+                                <p className="text-[11px] font-medium text-amber-600 dark:text-amber-400 mt-0.5">
+                                    {pendingGrievancesCount > 0 ? `${pendingGrievancesCount} pending` : 'All resolved'}
+                                </p>
+                            </div>
+
+                            {showHrQueries && (
+                                <div
+                                    onClick={() => { setActiveTab('tickets'); setTicketTypeFilter('hr_query'); setStatusFilter('all'); }}
+                                    className={`p-4 bg-white dark:bg-slate-900 rounded-2xl border transition-all cursor-pointer group shadow-2xs hover:shadow-md ${
+                                        ticketTypeFilter === 'hr_query'
+                                            ? 'border-l-4 border-l-blue-500 border-slate-200 dark:border-slate-800 bg-blue-50/20 dark:bg-blue-950/10'
+                                            : 'border-slate-200 dark:border-slate-800 hover:border-blue-400'
+                                    }`}
+                                >
+                                    <div className="flex items-center justify-between gap-2">
+                                        <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">HR Queries</span>
+                                        <div className="w-8 h-8 rounded-xl bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 border border-blue-200/60 dark:border-blue-900/60 flex items-center justify-center shrink-0">
+                                            <HelpCircle className="w-4 h-4" />
+                                        </div>
+                                    </div>
+                                    <p className="text-2xl font-black text-slate-900 dark:text-white mt-2 tracking-tight">{hrQueriesCount}</p>
+                                    <p className="text-[11px] font-medium text-blue-600 dark:text-blue-400 mt-0.5">Direct HR Support</p>
+                                </div>
+                            )}
+
+                            {showConfidential && (
+                                <div
+                                    onClick={() => { setActiveTab('tickets'); setTicketTypeFilter('confidential'); setStatusFilter('all'); }}
+                                    className={`p-4 bg-white dark:bg-slate-900 rounded-2xl border transition-all cursor-pointer group shadow-2xs hover:shadow-md ${
+                                        ticketTypeFilter === 'confidential'
+                                            ? 'border-l-4 border-l-purple-500 border-slate-200 dark:border-slate-800 bg-purple-50/20 dark:bg-purple-950/10'
+                                            : 'border-slate-200 dark:border-slate-800 hover:border-purple-400'
+                                    }`}
+                                >
+                                    <div className="flex items-center justify-between gap-2">
+                                        <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                                            {isStrictOrgSuperAdmin ? 'Confidential & Anon' : 'Confidential'}
+                                        </span>
+                                        <div className="w-8 h-8 rounded-xl bg-purple-50 dark:bg-purple-950/60 text-purple-600 dark:text-purple-400 border border-purple-200/60 dark:border-purple-900/60 flex items-center justify-center shrink-0">
+                                            <Lock className="w-4 h-4" />
+                                        </div>
+                                    </div>
+                                    <p className="text-2xl font-black text-slate-900 dark:text-white mt-2 tracking-tight">{confidentialCount}</p>
+                                    <p className="text-[11px] font-medium text-purple-600 dark:text-purple-400 mt-0.5">
+                                        {isStrictOrgSuperAdmin ? 'Director / Anonymous' : 'Assigned to You'}
+                                    </p>
+                                </div>
+                            )}
+
+                            <div
+                                onClick={() => { setActiveTab('tickets'); setStatusFilter('overdue'); }}
+                                className={`p-4 bg-white dark:bg-slate-900 rounded-2xl border transition-all cursor-pointer group shadow-2xs hover:shadow-md ${
+                                    statusFilter === 'overdue'
+                                        ? 'border-l-4 border-l-rose-500 border-slate-200 dark:border-slate-800 bg-rose-50/20 dark:bg-rose-950/10'
+                                        : 'border-slate-200 dark:border-slate-800 hover:border-rose-400'
+                                }`}
+                            >
+                                <div className="flex items-center justify-between gap-2">
+                                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">Overdue TAT</span>
+                                    <div className="w-8 h-8 rounded-xl bg-rose-50 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 border border-rose-200/60 dark:border-rose-900/60 flex items-center justify-center shrink-0">
+                                        <AlertTriangle className="w-4 h-4" />
+                                    </div>
+                                </div>
+                                <p className="text-2xl font-black text-rose-600 dark:text-rose-400 mt-2 tracking-tight">{overdueCount}</p>
+                                <p className="text-[11px] font-medium text-rose-500 mt-0.5">Requires Escalation</p>
+                            </div>
                         </div>
                     </div>
                 );
             })()}
 
             {/* MAIN TICKETS TAB */}
-            {activeTab === 'tickets' && (
-                <div className="space-y-4">
+            <div className="space-y-4">
                     {/* Non-HR Scope Filter Pills & Assignee Inspector Dropdown */}
                     <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3 bg-white dark:bg-slate-900 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xs">
                         <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800/80 p-1 rounded-xl overflow-x-auto no-scrollbar whitespace-nowrap">
@@ -1706,7 +1967,12 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
 
                             <button
                                 type="button"
-                                onClick={() => { setScopeFilter('my_raised'); setStatusFilter('all'); }}
+                                onClick={() => {
+                                    setScopeFilter('my_raised');
+                                    setStatusFilter('all');
+                                    setTicketTypeFilter('all');
+                                    setSelectedAssigneeFilter('all');
+                                }}
                                 className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all shrink-0 ${
                                     scopeFilter === 'my_raised' ? 'bg-[#587e85] text-white shadow-xs' : 'text-slate-500 hover:text-slate-800'
                                 }`}
@@ -1800,14 +2066,15 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
                     </div>
 
                     {/* Content Section: Table */}
-                    {loading ? (
+                    {loading && tickets.length === 0 ? (
                         <div className="p-12 text-center bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800">
                             <div className="w-8 h-8 border-3 border-[#587e85] border-t-transparent rounded-full animate-spin mx-auto" />
                             <p className="text-xs font-bold text-slate-500 mt-3">Loading tickets data...</p>
                         </div>
                     ) : (
                         <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xs overflow-hidden">
-                            <div className="overflow-x-auto">
+                            {/* Desktop Table View */}
+                            <div className="hidden lg:block overflow-x-auto">
                                 <table className="w-full text-left text-xs">
                                     <thead>
                                         <tr className="bg-slate-50/90 dark:bg-slate-800/80 text-[10px] font-black uppercase tracking-wider text-slate-500 border-b border-slate-200 dark:border-slate-800">
@@ -2053,24 +2320,169 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
                                     </tbody>
                                 </table>
                             </div>
+
+                            {/* Mobile Card List (< lg) */}
+                            <div className="block lg:hidden p-2.5 sm:p-3 space-y-2.5 bg-slate-50/60 dark:bg-slate-950/30">
+                                {filteredTickets.length === 0 ? (
+                                    <div className="py-12 px-4 text-center bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/80 dark:border-slate-800">
+                                        <div className="w-10 h-10 rounded-xl bg-[#587e85]/10 text-[#587e85] flex items-center justify-center mx-auto mb-2.5">
+                                            {scopeFilter === 'my_team_assigned' ? <Users className="w-5 h-5" /> : <Ticket className="w-5 h-5" />}
+                                        </div>
+                                        <h3 className="text-xs font-extrabold text-slate-800 dark:text-slate-200">
+                                            No Tickets Found
+                                        </h3>
+                                        <p className="text-[11px] text-slate-500 mt-0.5">
+                                            No HR requests or grievances matched your filter criteria.
+                                        </p>
+                                    </div>
+                                ) : (
+                                    filteredTickets.map((t) => {
+                                        const isAnon = Boolean(t.is_anonymous);
+                                        const emp = !isAnon ? employeesList.find(e => 
+                                            (e.user_id && e.user_id === t.raised_by_user_id) || 
+                                            (e.id && e.id === t.raised_by_user_id) || 
+                                            (e.email && e.email.toLowerCase() === t.raised_by?.email?.toLowerCase()) ||
+                                            (e.employee_code && e.employee_code === t.employee_snapshot?.code)
+                                        ) : null;
+                                        const sName = isAnon ? 'Anonymous Employee' : (t.employee_snapshot?.name || (emp ? `${emp.first_name || ''} ${emp.last_name || ''}`.trim() || emp.full_name || emp.name : t.raised_by?.full_name || 'Employee'));
+                                        const handlerUserId = t.assigned_to_user_id || t.assigned_to_id;
+                                        const hEmp = employeesList.find(e => 
+                                            (handlerUserId && (e.user_id === handlerUserId || e.id === handlerUserId)) ||
+                                            (t.assigned_to?.email && e.email?.toLowerCase() === t.assigned_to.email.toLowerCase())
+                                        );
+                                        const hName = t.current_level_owner || t.assigned_to_details?.full_name || t.assigned_to?.full_name || (hEmp ? `${hEmp.first_name || ''} ${hEmp.last_name || ''}`.trim() || hEmp.full_name || hEmp.name : 'Manager / HR');
+                                        const statusConfig = getStatusDotBadge(t.status);
+
+                                        return (
+                                            <div 
+                                                key={t.id}
+                                                onClick={() => setSelectedTicketId(t.id)}
+                                                className="p-3.5 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-2xs hover:shadow-md hover:border-slate-300 dark:hover:border-slate-700 transition-all cursor-pointer active:scale-[0.99] space-y-2.5 group"
+                                            >
+                                                {/* Card Top: Subject + Live Status Badge + Relative Time */}
+                                                <div className="flex items-start justify-between gap-3">
+                                                    <div className="min-w-0 flex-1">
+                                                        <h4 className="text-[13px] font-bold text-slate-900 dark:text-white line-clamp-2 leading-snug group-hover:text-[#587e85] transition-colors">
+                                                            {t.subject}
+                                                        </h4>
+                                                    </div>
+                                                    <div className="flex flex-col items-end gap-1 shrink-0">
+                                                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold tracking-tight inline-flex items-center gap-1.5 border shadow-2xs ${statusConfig.badgeClass}`}>
+                                                            <span className={`w-1.5 h-1.5 rounded-full ${statusConfig.dotClass}`} />
+                                                            <span>{statusConfig.label}</span>
+                                                        </span>
+                                                        {t.created_at && (
+                                                            <span className="text-[10px] text-slate-400 font-medium flex items-center gap-0.5">
+                                                                <Clock className="w-2.5 h-2.5" />
+                                                                <span>{formatRelativeTime(t.created_at)}</span>
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                </div>
+
+                                                {/* Metadata Pills Row */}
+                                                <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                                                    <span className="font-mono text-[10.5px] font-bold text-[#587e85] bg-[#587e85]/10 px-2 py-0.5 rounded-md border border-[#587e85]/20">
+                                                        #{t.ticket_number}
+                                                    </span>
+                                                    <span className={`px-2 py-0.5 rounded-md text-[10px] font-semibold border ${
+                                                        t.ticket_type === 'grievance'
+                                                            ? 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-900/60'
+                                                            : 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/40 dark:text-blue-300 dark:border-blue-900/60'
+                                                    }`}>
+                                                        {t.ticket_type === 'grievance' ? '🛡️ Grievance' : '📋 HR Query'}
+                                                    </span>
+                                                    <span className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800/80 text-slate-600 dark:text-slate-300 text-[10px] font-medium border border-slate-200/60 dark:border-slate-700/60 truncate max-w-[140px]">
+                                                        {t.category?.category_name || t.category_name || 'General'}
+                                                    </span>
+                                                    <span className="px-1.5 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 text-[10px] font-bold border border-indigo-200/60 dark:border-indigo-800/60">
+                                                        L{t.current_level}
+                                                    </span>
+                                                    {Boolean(t.is_confidential) && (
+                                                        <span className="px-1.5 py-0.5 rounded-md bg-purple-50 dark:bg-purple-950/40 text-purple-600 dark:text-purple-400 text-[10px] font-bold border border-purple-200/60 dark:border-purple-800/60 flex items-center gap-1">
+                                                            <Lock className="w-2.5 h-2.5" /> Confidential
+                                                        </span>
+                                                    )}
+                                                </div>
+
+                                                {/* People Row: Submitter -> Handler */}
+                                                <div className="flex items-center justify-between text-[11px] py-1.5 px-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                                                    <div className="flex items-center gap-1.5 min-w-0 max-w-[48%]">
+                                                        <div className="w-5 h-5 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-[9px] font-bold text-slate-600 dark:text-slate-300 shrink-0">
+                                                            {isAnon ? '🕶️' : sName.charAt(0).toUpperCase()}
+                                                        </div>
+                                                        <span className="font-semibold text-slate-700 dark:text-slate-300 truncate text-[11px]">
+                                                            {sName}
+                                                        </span>
+                                                    </div>
+                                                    <div className="text-slate-300 dark:text-slate-600 text-xs px-1">→</div>
+                                                    <div className="flex items-center gap-1.5 min-w-0 max-w-[48%] justify-end text-right">
+                                                        <span className="font-semibold text-slate-700 dark:text-slate-300 truncate text-[11px]">
+                                                            {hName}
+                                                        </span>
+                                                        <div className="w-5 h-5 rounded-full bg-[#587e85]/15 text-[#587e85] flex items-center justify-center text-[9px] font-bold shrink-0">
+                                                            {hName.charAt(0).toUpperCase()}
+                                                        </div>
+                                                    </div>
+                                                </div>
+
+                                                {/* Footer: SLA Countdown + Action Button */}
+                                                <div className="flex items-center justify-between pt-1">
+                                                    <SLALiveTimer slaDueAt={t.sla_due_at} status={t.status} />
+                                                    <button
+                                                        type="button"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            setSelectedTicketId(t.id);
+                                                        }}
+                                                        className="inline-flex items-center gap-1 px-3 py-1 bg-[#587e85] hover:bg-[#48676d] text-white rounded-lg text-xs font-bold shadow-xs active:scale-95 transition-all"
+                                                    >
+                                                        <span>View</span>
+                                                        <ArrowUpRight className="w-3.5 h-3.5" />
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        );
+                                    })
+                                )}
+                            </div>
                         </div>
                     )}
+                </div>
                 </div>
             )}
 
             {/* TAB 3: OTHER HR MODULE TABS */}
-            {activeTab === 'notes' && (
-                <HRNotesTrackerTab
-                    orgId={orgId}
-                    currentUserId={user?.id}
-                    currentUserRole={userRole}
-                    onOpenTicket={(ticketId) => setSelectedTicketId(ticketId)}
-                />
+            {visitedTabs.has('notes') && (
+                <div className={activeTab === 'notes' ? 'block' : 'hidden'}>
+                    <HRNotesTrackerTab
+                        orgId={orgId}
+                        currentUserId={user?.id}
+                        currentUserRole={userRole}
+                        onOpenTicket={(ticketId) => setSelectedTicketId(ticketId)}
+                    />
+                </div>
             )}
-            {activeTab === 'directory' && <HREmployeeDirectory orgId={orgId} />}
-            {activeTab === 'reconciliation' && <HRReconciliationDashboard orgId={orgId} />}
-            {activeTab === 'config' && <HRAdminConfigPanel orgId={orgId} />}
-            {activeTab === 'analytics' && <HRAnalyticsDashboard orgId={orgId} tickets={tickets} />}
+            {visitedTabs.has('directory') && (
+                <div className={activeTab === 'directory' ? 'block' : 'hidden'}>
+                    <HREmployeeDirectory orgId={orgId} cachedEmployees={employeesList} />
+                </div>
+            )}
+            {visitedTabs.has('reconciliation') && (
+                <div className={activeTab === 'reconciliation' ? 'block' : 'hidden'}>
+                    <HRReconciliationDashboard orgId={orgId} />
+                </div>
+            )}
+            {visitedTabs.has('config') && (
+                <div className={activeTab === 'config' ? 'block' : 'hidden'}>
+                    <HRAdminConfigPanel orgId={orgId} />
+                </div>
+            )}
+            {visitedTabs.has('analytics') && (
+                <div className={activeTab === 'analytics' ? 'block' : 'hidden'}>
+                    <HRAnalyticsDashboard orgId={orgId} tickets={tickets} />
+                </div>
+            )}
 
             {/* Modals */}
             <TicketCreateModal
