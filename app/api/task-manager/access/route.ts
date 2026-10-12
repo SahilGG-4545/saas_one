@@ -26,7 +26,7 @@ export async function GET(request: NextRequest) {
         const config = await TaskDatabaseService.getTestingConfig();
         return NextResponse.json({
             success: true, ...overview, nlGatewayEnabled: config.nlGatewayEnabled === true,
-            botFeatures: { neverSilent: config.neverSilentEnabled === true, conversationMemory: config.conversationMemoryEnabled === true, frontDoor: config.frontDoorEnabled === true, teamReports: config.teamReportsEnabled === true, learningLoop: config.learningLoopEnabled === true, promptVersions: config.promptVersionsEnabled === true, nightlyAutoTune: config.nightlyAutoTuneEnabled === true },
+            botFeatures: { neverSilent: config.neverSilentEnabled === true, conversationMemory: config.conversationMemoryEnabled === true, frontDoor: config.frontDoorEnabled === true, teamReports: config.teamReportsEnabled === true, learningLoop: config.learningLoopEnabled === true, promptVersions: config.promptVersionsEnabled === true, nightlyAutoTune: config.nightlyAutoTuneEnabled === true, voiceNotes: config.voiceNotesEnabled === true },
         });
     } catch (err) {
         console.error('[TaskAccessAPI] GET error:', err);
@@ -114,14 +114,14 @@ export async function POST(request: NextRequest) {
         // Step 4: natural-language chat for unlocked people (OFF until switched on here)
         // WhatsApp bot upgrades (docs/WHATSAPP_BOT_PRODUCTION_PLAN.md): switched here, no redeploy. Takes effect within ~30 s.
         if (body.action === 'set_bot_feature') {
-            if (!['neverSilent', 'conversationMemory', 'frontDoor', 'teamReports', 'learningLoop', 'promptVersions', 'nightlyAutoTune'].includes(body.feature) || typeof body.enabled !== 'boolean') {
-                return NextResponse.json({ success: false, error: 'Missing feature (neverSilent | conversationMemory | frontDoor | teamReports) or enabled (true/false)' }, { status: 400 });
+            if (!['neverSilent', 'conversationMemory', 'frontDoor', 'teamReports', 'learningLoop', 'promptVersions', 'nightlyAutoTune', 'voiceNotes'].includes(body.feature) || typeof body.enabled !== 'boolean') {
+                return NextResponse.json({ success: false, error: 'Missing feature (neverSilent | conversationMemory | frontDoor | teamReports | learningLoop | promptVersions | nightlyAutoTune | voiceNotes) or enabled (true/false)' }, { status: 400 });
             }
             await TaskDatabaseService.setBotFeature(body.feature, body.enabled, guard.label);
             resetBotSwitchCache();
             // Privacy: with memory OFF the 24-hour clean-up stops, so delete everything stored right away.
             const cleared = body.feature === 'conversationMemory' && !body.enabled ? await clearAllMemory() : null;
-            const names: Record<string, string> = { neverSilent: 'Never silent', conversationMemory: 'Conversation memory', frontDoor: 'One front door', teamReports: 'Team reports', learningLoop: 'Learning loop', promptVersions: 'Prompt versions', nightlyAutoTune: 'Nightly auto-tune' };
+            const names: Record<string, string> = { neverSilent: 'Never silent', conversationMemory: 'Conversation memory', frontDoor: 'One front door', teamReports: 'Team reports', learningLoop: 'Learning loop', promptVersions: 'Prompt versions', nightlyAutoTune: 'Nightly auto-tune', voiceNotes: 'Voice notes' };
             const name = names[body.feature] || 'Bot feature';
             return NextResponse.json({
                 success: true,

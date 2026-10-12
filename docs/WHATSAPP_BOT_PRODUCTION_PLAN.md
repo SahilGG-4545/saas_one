@@ -602,3 +602,7 @@ help no longer names a fixed number. Tests: rollout 45/45; regression unchanged.
 - **Custom wording removed** from the Notifications tab: scheduled messages are template-only, so custom text was never
   delivered (only shown in the preview). Saving a rule clears old custom text.
 - Tests: `test_template_rollout.ts` 66/66; regression green except the old `SuperuserPanel.tsx` check; type check clean.
+- **Voice notes switch (2026-10-12):** "Voice notes" is now an ON/OFF button under the bot switches in the **Task Access**
+  panel (stored with the other switches, takes effect within ~30 s, no redeploy). `VOICE_NOTES_ENABLED=true` still forces it
+  ON. Leave `VOICE_NOTES_ALLOWED_PHONES` empty so everyone unlocked for the Task Manager can use it; with sandbox ON only
+  sandbox numbers can. Needs `GROQ_VOICE_API_KEY` in Vercel. Tests: `test_template_rollout.ts` 71/71, voice tests green.

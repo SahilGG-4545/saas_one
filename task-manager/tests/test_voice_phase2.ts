@@ -113,8 +113,15 @@ async function run() {
     let f = fakeIO({ enabled: false });
     let c = await V.claimVoiceNote(voiceBody(), f.io);
     check('switch OFF → pass, nothing read', c.kind === 'pass' && f.rec.recognised === 0 && f.rec.states.length === 0, c);
+    // The switch now lives in the Task Manager settings ("Voice notes" in the Task Access panel): stub that one read.
+    const { TaskDatabaseService: VDB } = await import('../TaskDatabaseService');
+    const { resetBotSwitchCache } = await import('../BotSwitches');
+    const realCfg = (VDB as any).getTestingConfig; let cfgReads = 0;
+    (VDB as any).getTestingConfig = async () => { cfgReads++; return { voiceNotesEnabled: false }; };
+    resetBotSwitchCache();
     c = await V.claimVoiceNote(voiceBody());
-    check('switch OFF and no IO given → pass without loading the database', c.kind === 'pass');
+    check('switch OFF (settings) and no IO given → pass; only the (cached) settings read happens', c.kind === 'pass' && cfgReads === 1, cfgReads);
+    (VDB as any).getTestingConfig = realCfg; resetBotSwitchCache();
     f = fakeIO({ sender: null });
     c = await V.claimVoiceNote(voiceBody(), f.io);
     check('unknown number → pass, nothing stored, nothing downloaded', c.kind === 'pass' && f.rec.states.length === 0 && f.rec.downloads === 0, c);

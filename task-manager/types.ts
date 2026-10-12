@@ -206,6 +206,7 @@ export interface TestingConfig {
     teamReportsEnabled?: boolean; // Bot plan Phase 4: "how is my team doing today?" (OFF unless switched on)
     learningLoopEnabled?: boolean; // Bot plan Phase 5: capture likely mistakes for admin review
     promptVersionsEnabled?: boolean; // Bot plan Phase 5: active database prompt sections
+    voiceNotesEnabled?: boolean; // WhatsApp voice notes for everyone using the Task Manager (Task Access panel; OFF unless switched on)
     nightlyAutoTuneEnabled?: boolean; // Bot plan Phase 5: draft and evaluate prompt candidates after 02:00 IST
     botAlertAdmins?: Array<{ name: string; phone: string }>;
 }

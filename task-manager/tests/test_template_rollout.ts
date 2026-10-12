@@ -227,6 +227,16 @@ async function run() {
     check('custom wording is gone from Notifications, and saving clears any old custom text',
         !/Customize the wording/.test(read('frontend/components/procurement/tasks/NotificationsView.tsx')) && /customTemplate: \{ headerGreeting: '', customMessage: '', footerInstruction: '', includeQuickReplies: true \}/.test(read('frontend/components/procurement/tasks/NotificationsView.tsx')));
 
+    console.log('\n12. Voice notes: a Task Access switch for everyone (no redeploy)');
+    const BS = await import('../BotSwitches');
+    BS.resetBotSwitchCache(); (DB as any).getTestingConfig = async () => ({ voiceNotesEnabled: true });
+    check('switch ON in the settings → voice notes on', (await BS.botSwitchOn('voiceNotes')) === true);
+    BS.resetBotSwitchCache(); (DB as any).getTestingConfig = async () => ({});
+    check('default → OFF', (await BS.botSwitchOn('voiceNotes')) === false);
+    check('the old env VOICE_NOTES_ENABLED still forces it ON; no allow-list needed (empty = everyone recognised)', /voiceNotes: 'VOICE_NOTES_ENABLED'/.test(read('task-manager/BotSwitches.ts')) && /Unset \/ empty → no limit/.test(read('task-manager/voice/VoiceIntake.ts')));
+    check('voice intake reads the switch (not only the env)', /botSwitchOn\('voiceNotes'\)/.test(read('task-manager/voice/VoiceIntake.ts')) && !/process\.env\.VOICE_NOTES_ENABLED !== 'true'/.test(read('task-manager/voice/VoiceIntake.ts')));
+    check('the panel and the admin API know it', /key: 'voiceNotes', title: 'Voice notes'/.test(read('frontend/components/task-manager/TaskAccessPanel.tsx')) && /'voiceNotes'\]\.includes\(body\.feature\)/.test(read('app/api/task-manager/access/route.ts')));
+
     check('no network used', net.length === 0, net);
     console.log(failures === 0 ? '\n🎉 TEMPLATE ROLLOUT TESTS PASSED\n' : `\n❌ ${failures} FAILED\n`);
     process.exit(failures === 0 ? 0 : 1);
