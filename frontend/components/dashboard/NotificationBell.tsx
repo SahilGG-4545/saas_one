@@ -616,7 +616,7 @@ export default function NotificationBell({ align = 'right' }: NotificationBellPr
     const hasPendingActions = pendingActions.length > 0;
 
     return (
-        <div className="relative inline-flex items-center" ref={dropdownRef}>
+        <div className={`relative inline-flex items-center ${isOpen ? 'z-[500]' : 'z-auto'}`} ref={dropdownRef}>
             {/* Header Bell Trigger Button - RED Icon */}
             <button
                 type="button"
@@ -660,7 +660,7 @@ export default function NotificationBell({ align = 'right' }: NotificationBellPr
                         animate={{ opacity: 1, y: 0, scale: 1 }}
                         exit={{ opacity: 0, y: 8, scale: 0.96 }}
                         transition={{ duration: 0.16, ease: 'easeOut' }}
-                        className={`fixed top-16 left-3 right-3 sm:absolute sm:top-full sm:mt-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl z-[100] overflow-hidden backdrop-blur-md ring-1 ring-black/5 
+                        className={`fixed top-16 left-3 right-3 sm:absolute sm:top-full sm:mt-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl z-[500] overflow-hidden backdrop-blur-md ring-1 ring-black/5 
                         ${align === 'left' ? 'sm:left-0 sm:right-auto origin-top-left' : 'sm:right-0 sm:left-auto origin-top-right'} sm:w-[440px]`}
                     >
                         {/* Header & Tab Selector */}

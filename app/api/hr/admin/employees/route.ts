@@ -4,6 +4,12 @@ import { createClient } from '@supabase/supabase-js';
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
+interface EmployeesCacheEntry {
+    data: any;
+    timestamp: number;
+}
+const serverEmployeesCache = new Map<string, EmployeesCacheEntry>();
+const CACHE_TTL_MS = 60 * 1000;
 
 export async function GET(request: Request) {
     try {
@@ -11,6 +17,13 @@ export async function GET(request: Request) {
         const department = searchParams.get('department');
         const queryStr = searchParams.get('q');
         const orgId = searchParams.get('organization_id') || searchParams.get('orgId');
+        const cacheKey = `${orgId || 'all'}_${department || 'all'}_${queryStr || 'all'}`;
+        const cached = serverEmployeesCache.get(cacheKey);
+        if (cached && (Date.now() - cached.timestamp < CACHE_TTL_MS)) {
+            return NextResponse.json(cached.data, {
+                headers: { 'Cache-Control': 'private, max-age=30, stale-while-revalidate=60' }
+            });
+        }
 
         // 1. Fetch profiles from employee_profiles table (active profiles only)
         let query = supabaseAdmin
@@ -153,14 +166,16 @@ export async function GET(request: Request) {
             .eq('is_active', true)
             .order('name');
 
+        const responseData = {
+            success: true,
+            data: combined,
+            unlinked_users: unlinkedUsers,
+            departments: dbDepts || []
+        };
+        serverEmployeesCache.set(cacheKey, { data: responseData, timestamp: Date.now() });
         return NextResponse.json(
-            {
-                success: true,
-                data: combined,
-                unlinked_users: unlinkedUsers,
-                departments: dbDepts || []
-            },
-            { headers: { 'Cache-Control': 'private, max-age=15, stale-while-revalidate=60' } }
+            responseData,
+            { headers: { 'Cache-Control': 'private, max-age=30, stale-while-revalidate=60' } }
         );
     } catch (err: any) {
         return NextResponse.json({ success: false, error: err.message }, { status: 500 });
@@ -169,6 +184,7 @@ export async function GET(request: Request) {
 
 export async function PATCH(request: Request) {
     try {
+        serverEmployeesCache.clear();
         const body = await request.json();
         const {
             employee_id,
@@ -430,6 +446,7 @@ export async function PATCH(request: Request) {
 
 export async function POST(request: Request) {
     try {
+        serverEmployeesCache.clear();
         const body = await request.json();
         const {
             user_id,
@@ -710,6 +727,7 @@ export async function POST(request: Request) {
 
 export async function DELETE(request: Request) {
     try {
+        serverEmployeesCache.clear();
         const { searchParams } = new URL(request.url);
         const id = searchParams.get('id') || searchParams.get('employee_id');
 

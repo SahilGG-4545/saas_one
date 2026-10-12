@@ -782,8 +782,12 @@ const MasterAdminDashboard = () => {
                         isAdminMode={true}
                         showInternalToggle={true}
                         organizations={organizations}
-                        onSuccess={() => {
+                        onSuccess={(ticket) => {
                             showToast('Request created successfully', 'success');
+                            if (typeof window !== 'undefined') {
+                                window.dispatchEvent(new CustomEvent('ticket-created', { detail: { ticket } }));
+                                window.dispatchEvent(new CustomEvent('request-created', { detail: { ticket } }));
+                            }
                         }}
                     />
                 )}

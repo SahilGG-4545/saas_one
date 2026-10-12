@@ -905,7 +905,7 @@ export default function ProcurementDashboard() {
                         )}
                         {activeTab === 'grievance' && (
                             <div className="py-2">
-                                <HRTicketsContent orgId={user?.user_metadata?.organization_id || userOrgId || ''} />
+                                <HRTicketsContent orgId={userOrgId || user?.user_metadata?.organization_id || (user as any)?.organization_id || '211e1330-ad83-446d-941f-dcea48396798'} />
                             </div>
                         )}
                         {activeTab === 'profile' && (

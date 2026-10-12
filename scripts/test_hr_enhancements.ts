@@ -21,6 +21,7 @@ async function testEnhancements() {
     const orgId = '211e1330-ad83-446d-941f-dcea48396798';
     let passed = 0;
     let failed = 0;
+    let testTicket: any = null;
 
     function assert(condition: boolean, testName: string, detail?: string) {
         if (condition) {
@@ -45,17 +46,39 @@ async function testEnhancements() {
         assert(duration < 2500, `GET /api/hr/tickets completed in ${duration}ms (non-blocking SLA check)`);
 
         // 2. TEST MANDATORY RESOLUTION NOTE ENFORCEMENT
-        console.log('\n--- TEST 2: Mandatory Resolution Note Enforcement ---');
-        // Find an open ticket to test resolution
-        const { data: testTicket } = await supabaseAdmin
-            .from('hr_tickets')
-            .select('*')
-            .not('status', 'in', '("resolved","closed","cancelled")')
+        // Find an HR user for test execution
+        const { data: hrMember } = await supabaseAdmin
+            .from('organization_memberships')
+            .select('user_id, role')
+            .eq('organization_id', orgId)
+            .ilike('role', '%hr%')
             .limit(1)
             .maybeSingle();
 
+        const hrUserId = hrMember?.user_id || '58394a71-c780-4c46-a558-06924b9440a4';
+
+        // Create an isolated temporary test ticket so NO user tickets (like HR-AUTO-B-2026-00003) are EVER touched
+        const testTicketNumber = `HR-TEMP-TEST-${Date.now()}`;
+        const insertRes = await supabaseAdmin
+            .from('hr_tickets')
+            .insert({
+                organization_id: orgId,
+                ticket_number: testTicketNumber,
+                ticket_type: 'grievance',
+                subject: '[AUTOMATION TEST TICKET - TRANSIENT]',
+                description: 'Safe test ticket for resolution note and force close verification',
+                priority: 'medium',
+                status: 'new',
+                current_level: 1,
+                raised_by_user_id: hrUserId,
+                assigned_to_user_id: hrUserId
+            })
+            .select('*')
+            .single();
+        testTicket = insertRes.data;
+
         if (testTicket) {
-            console.log(`Testing with ticket #${testTicket.ticket_number} (ID: ${testTicket.id})`);
+            console.log(`Testing with isolated temporary ticket #${testTicket.ticket_number} (ID: ${testTicket.id})`);
 
             // Attempt to resolve with NO resolution note
             const patchReqEmpty = new Request(`http://localhost/api/hr/tickets/${testTicket.id}`, {
@@ -65,7 +88,7 @@ async function testEnhancements() {
                     status: 'pending_acknowledgement',
                     action: 'resolve',
                     resolution_note: '   ',
-                    actor_user_id: testTicket.assigned_to_user_id || '58394a71-c780-4c46-a558-06924b9440a4'
+                    actor_user_id: hrUserId
                 })
             });
 
@@ -90,7 +113,7 @@ async function testEnhancements() {
                     status: 'pending_acknowledgement',
                     action: 'resolve',
                     resolution_note: validNote,
-                    actor_user_id: testTicket.assigned_to_user_id || '58394a71-c780-4c46-a558-06924b9440a4'
+                    actor_user_id: hrUserId
                 })
             });
 
@@ -113,29 +136,10 @@ async function testEnhancements() {
                 updatedTicket?.resolution_note === validNote,
                 'Resolution note was properly persisted in database'
             );
-
-            // Revert ticket status back to original for cleanliness
-            await supabaseAdmin
-                .from('hr_tickets')
-                .update({ status: testTicket.status, resolution_note: testTicket.resolution_note })
-                .eq('id', testTicket.id);
-        } else {
-            console.log('No open ticket found in DB to test live status update, skipping sub-test.');
         }
 
         // 3. TEST HR USER CREATING ANONYMOUS TICKET & SEEING IT IN "MY RAISED"
         console.log('\n--- TEST 3: HR Submitter Seeing Anonymous & Confidential in My Raised ---');
-        // Find an HR user or employee
-        const { data: hrMember } = await supabaseAdmin
-            .from('organization_memberships')
-            .select('user_id, role')
-            .eq('organization_id', orgId)
-            .ilike('role', '%hr%')
-            .limit(1)
-            .maybeSingle();
-
-        const hrUserId = hrMember?.user_id || '58394a71-c780-4c46-a558-06924b9440a4';
-
         // Check if an anonymous ticket raised by this user can be retrieved
         const { data: anyAnonTicket } = await supabaseAdmin
             .from('hr_tickets')
@@ -178,9 +182,52 @@ async function testEnhancements() {
             }
         }
 
+        // 5. TEST FORCE CLOSE PRESERVES SUBMITTER ACKNOWLEDGEMENT
+        console.log('\n--- TEST 5: Force Close Preserves Submitter Acknowledgement ---');
+        if (testTicket) {
+            // First put ticket into in_progress
+            await supabaseAdmin.from('hr_tickets').update({ status: 'in_progress' }).eq('id', testTicket.id);
+
+            // Attempt force close by HR authority
+            const fcReq = new Request(`http://localhost/api/hr/tickets/${testTicket.id}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    status: 'pending_acknowledgement',
+                    action: 'force_close',
+                    force_close: true,
+                    force_close_note: 'Resolved via HR intervention; awaiting employee acknowledgement',
+                    actor_user_id: hrUserId,
+                    actor_role: 'hr'
+                })
+            });
+            const fcRes = await patchTicket(fcReq, { params: Promise.resolve({ id: testTicket.id }) });
+            const fcData = await fcRes.json();
+            if (!fcData.success) console.log('fcData error details:', fcData);
+            assert(fcRes.status === 200 && fcData.success === true, 'Force close by HR succeeds', fcData.error);
+
+            // Verify the ticket in DB is pending_acknowledgement, NOT closed
+            const { data: fcCheck } = await supabaseAdmin.from('hr_tickets').select('status, employee_snapshot').eq('id', testTicket.id).single();
+            assert(
+                fcCheck?.status === 'pending_acknowledgement',
+                `Force close routed ticket to pending_acknowledgement (status: "${fcCheck?.status}"), preserving submitter acknowledgement`
+            );
+            assert(
+                fcCheck?.employee_snapshot?.force_closed === true,
+                'employee_snapshot recorded force_closed: true flag'
+            );
+        }
+
     } catch (err: any) {
         console.error('Unexpected test error:', err);
         failed++;
+    } finally {
+        if (testTicket?.id) {
+            await supabaseAdmin.from('hr_ticket_audit_logs').delete().eq('ticket_id', testTicket.id);
+            await supabaseAdmin.from('hr_ticket_comments').delete().eq('ticket_id', testTicket.id);
+            await supabaseAdmin.from('hr_tickets').delete().eq('id', testTicket.id);
+            console.log(`Cleaned up isolated temporary test ticket #${testTicket.ticket_number}`);
+        }
     }
 
     console.log('\n========================================================================');

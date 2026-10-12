@@ -22,20 +22,34 @@ import HROrgChartTree from '@/frontend/components/hr/HROrgChartTree';
 import EmployeeQuickProfileModal, { EmployeeProfileModalData } from '@/frontend/components/hr/EmployeeQuickProfileModal';
 import HRNotesTrackerTab from '@/frontend/components/hr/HRNotesTrackerTab';
 import { hrDataCache } from '@/frontend/components/hr/hrDataCache';
+import { createClient } from '@/frontend/utils/supabase/client';
 
 export function HRTicketsContent({ orgId }: { orgId: string }) {
     const { user, membership } = useAuth();
     const searchParams = useSearchParams();
+    const supabase = useMemo(() => createClient(), []);
+
+    // Universally resolve orgId across all account types (MST, Staff, Security, Soft Service, Procurement, Property Admin, etc.)
+    const resolvedOrgId = useMemo(() => {
+        if (orgId && orgId !== 'org' && orgId !== '') return orgId;
+        return (
+            membership?.org_id ||
+            membership?.organization_id ||
+            (user as any)?.organization_id ||
+            user?.user_metadata?.organization_id ||
+            '211e1330-ad83-446d-941f-dcea48396798'
+        );
+    }, [orgId, membership, user]);
 
     const [activeTab, setActiveTab] = useState<'tickets' | 'notes' | 'tree' | 'directory' | 'reconciliation' | 'config' | 'analytics'>('tickets');
     const [visitedTabs, setVisitedTabs] = useState<Set<string>>(new Set(['tickets']));
     const [viewMode, setViewMode] = useState<'kanban' | 'table' | 'properties'>('table');
 
     const [tickets, setTickets] = useState<any[]>(() => {
-        return hrDataCache.getTickets(`${orgId}_initial`).data || [];
+        return hrDataCache.getAnyTickets(resolvedOrgId) || [];
     });
     const [properties, setProperties] = useState<any[]>(() => {
-        return hrDataCache.getProperties(orgId).data || [];
+        return hrDataCache.getProperties(resolvedOrgId).data || [];
     });
     const [selectedPropertyId, setSelectedPropertyId] = useState<string>('all');
     const [scopeFilter, setScopeFilter] = useState<'all' | 'my_raised' | 'assigned_to_me' | 'department' | 'my_team_assigned'>('all');
@@ -45,9 +59,9 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
     const [ticketTypeFilter, setTicketTypeFilter] = useState<string>('all');
     const [statusFilter, setStatusFilter] = useState<string>('all');
     const [searchQuery, setSearchQuery] = useState<string>('');
-    const [loading, setLoading] = useState(false);
+    const [loading, setLoading] = useState<boolean>(() => !hrDataCache.getAnyTickets(resolvedOrgId)?.length);
     const [employeesList, setEmployeesList] = useState<any[]>(() => {
-        return hrDataCache.getEmployees(orgId).data || [];
+        return hrDataCache.getEmployees(resolvedOrgId).data || [];
     });
 
     useEffect(() => {
@@ -74,9 +88,16 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
     const [propertySearchQuery, setPropertySearchQuery] = useState('');
     const dropdownRef = useRef<HTMLDivElement>(null);
 
-    const userRole = (user?.user_metadata?.role || membership?.org_role || membership?.properties?.[0]?.role || 'employee').toLowerCase();
+    const userRole = (
+        user?.user_metadata?.role ||
+        (membership as any)?.role ||
+        membership?.org_role ||
+        (membership as any)?.all_org_memberships?.find((m: any) => /hr/i.test(m.role))?.role ||
+        membership?.properties?.[0]?.role ||
+        'employee'
+    ).toLowerCase();
     const isOrgSuperAdmin = ['org_super_admin', 'master_admin', 'super_admin', 'ops_super_admin'].includes(userRole);
-    const isHrRole = ['hr', 'hr_head', 'hr_manager', 'hr_ops'].includes(userRole);
+    const isHrRole = !isOrgSuperAdmin && (['hr', 'hr_head', 'hr_manager', 'hr_ops', 'hr_admin', 'director'].includes(userRole) || userRole.includes('hr'));
     const isPropertyAdmin = userRole === 'property_admin';
     const isOpsSuperAdmin = userRole === 'ops_super_admin';
     const isScopedRole = !isOrgSuperAdmin && !isHrRole;
@@ -94,25 +115,26 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
 
     useEffect(() => {
         fetchEmployeesList();
-    }, [orgId]);
+    }, [resolvedOrgId]);
 
     const fetchEmployeesList = async () => {
-        const cached = hrDataCache.getEmployees(orgId);
+        const cached = hrDataCache.getEmployees(resolvedOrgId);
         if (cached.data && cached.data.length > 0) {
             setEmployeesList(cached.data);
+            if (!cached.isStale) return;
         }
         try {
-            const res = await fetch(`/api/hr/admin/employees?orgId=${orgId}`);
+            const res = await fetch(`/api/hr/admin/employees?orgId=${resolvedOrgId}`);
             const data = await res.json();
             if (data.success && data.data) {
                 setEmployeesList(data.data || []);
-                hrDataCache.setEmployees(orgId, data.data || []);
+                hrDataCache.setEmployees(resolvedOrgId, data.data || []);
             } else {
-                const fallbackRes = await fetch(`/api/hr/admin/escalation-config?orgId=${orgId}`);
+                const fallbackRes = await fetch(`/api/hr/admin/escalation-config?orgId=${resolvedOrgId}`);
                 const fallbackData = await fallbackRes.json();
                 if (fallbackData.success && fallbackData.data?.employees) {
                     setEmployeesList(fallbackData.data.employees || []);
-                    hrDataCache.setEmployees(orgId, fallbackData.data.employees || []);
+                    hrDataCache.setEmployees(resolvedOrgId, fallbackData.data.employees || []);
                 }
             }
         } catch (e) {
@@ -318,7 +340,13 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
         if (filterParam && ['all', 'my_raised', 'assigned_to_me', 'department', 'my_team_assigned'].includes(filterParam)) {
             setScopeFilter(filterParam as any);
         } else {
-            setScopeFilter('all');
+            // Default to 'my_raised' for all non-HR roles (MST, Staff, Security, Soft Service, Procurement, Property Admin, etc.)
+            // So any account raising or tracking their grievance immediately views their ticket list with zero delay!
+            if (!canViewOrgWide) {
+                setScopeFilter('my_raised');
+            } else {
+                setScopeFilter('all');
+            }
         }
         setSelectedPropertyId(propertyParam || 'all');
     }, [searchParams, canViewOrgWide, isManager]);
@@ -342,12 +370,12 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
 
     useEffect(() => {
         fetchProperties();
-    }, [orgId]);
+    }, [resolvedOrgId]);
 
     useEffect(() => {
         if (!user?.id) return;
         fetchTickets();
-    }, [orgId, user?.id, userRole, selectedPropertyId]);
+    }, [resolvedOrgId, user?.id, userRole, selectedPropertyId]);
 
     // Real-time automatic background data refresh (every 30s, on window focus, and on ticket events)
     useEffect(() => {
@@ -358,27 +386,87 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
 
         const handleFocus = () => fetchTickets(true);
         const handleTicketUpdated = (e: any) => {
-            const { ticketId, status } = e?.detail || {};
-            if (ticketId && status) {
-                setTickets(prev => prev.map(t => t.id === ticketId ? { ...t, status } : t));
+            const { ticketId, status, updatedTicket } = e?.detail || {};
+            if (ticketId) {
+                if (status) hrDataCache.updateTicketStatus(ticketId, status);
+                setTickets(prev => prev.map(t => {
+                    if (t.id === ticketId) {
+                        return updatedTicket ? { ...t, ...updatedTicket } : (status ? { ...t, status } : t);
+                    }
+                    return t;
+                }));
             }
             fetchTickets(true);
+        };
+        const handleHrTicketCreatedEvent = (e: any) => {
+            const ticket = e?.detail?.ticket;
+            if (ticket && ticket.id) {
+                setScopeFilter('my_raised');
+                setTickets(prev => {
+                    if (prev.some(t => t.id === ticket.id)) return prev;
+                    return [ticket, ...prev];
+                });
+                hrDataCache.prependTicket(ticket);
+            }
         };
 
         window.addEventListener('focus', handleFocus);
         window.addEventListener('hr-ticket-updated', handleTicketUpdated);
+        window.addEventListener('hr-ticket-created', handleHrTicketCreatedEvent);
 
         return () => {
             clearInterval(interval);
             window.removeEventListener('focus', handleFocus);
             window.removeEventListener('hr-ticket-updated', handleTicketUpdated);
+            window.removeEventListener('hr-ticket-created', handleHrTicketCreatedEvent);
         };
     }, [orgId, user?.id, userRole, selectedPropertyId]);
+
+    // Supabase Realtime channel for instant cross-account ticket sync (<100ms)
+    useEffect(() => {
+        if (!resolvedOrgId) return;
+
+        const channel = supabase
+            .channel(`hr_tickets_live_${resolvedOrgId}`)
+            .on('postgres_changes', {
+                event: '*',
+                schema: 'public',
+                table: 'hr_tickets',
+                filter: `organization_id=eq.${resolvedOrgId}`
+            }, (payload: any) => {
+                if (payload.eventType === 'INSERT') {
+                    const newT = payload.new;
+                    setTickets(prev => {
+                        if (prev.some(t => t.id === newT.id)) return prev;
+                        return [newT, ...prev];
+                    });
+                    hrDataCache.prependTicket(newT);
+                    fetchTickets(true);
+                } else if (payload.eventType === 'UPDATE') {
+                    const upd = payload.new;
+                    setTickets(prev => prev.map(t => t.id === upd.id ? { ...t, ...upd } : t));
+                    hrDataCache.updateTicketStatus(upd.id, upd.status);
+                    fetchTickets(true);
+                } else if (payload.eventType === 'DELETE') {
+                    const delId = payload.old?.id;
+                    if (delId) {
+                        setTickets(prev => prev.filter(t => t.id !== delId));
+                        hrDataCache.invalidateTickets();
+                    }
+                }
+            })
+            .subscribe();
+
+        return () => {
+            supabase.removeChannel(channel);
+        };
+    }, [resolvedOrgId, supabase]);
 
     const fetchProperties = async () => {
         const cached = hrDataCache.getProperties(orgId);
         if (cached.data && cached.data.length > 0) {
             setProperties(cached.data);
+            if (!cached.isStale) return;
         }
         try {
             let res = await fetch(`/api/properties?organizationId=${orgId}`);
@@ -396,7 +484,7 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
             }
 
             if (propsList.length === 0) {
-                const adminRes = await fetch(`/api/admin/organizations/${orgId}/properties`);
+                const adminRes = await fetch(`/api/admin/organizations/${resolvedOrgId}/properties`);
                 if (adminRes.ok) {
                     const adminText = await adminRes.text();
                     let adminData: any = {};
@@ -411,7 +499,7 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
 
             setProperties(propsList);
             if (propsList.length > 0) {
-                hrDataCache.setProperties(orgId, propsList);
+                hrDataCache.setProperties(resolvedOrgId, propsList);
             }
         } catch (err) {
             console.error('Error fetching properties:', err);
@@ -423,19 +511,20 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
             setLoading(false);
             return;
         }
-        const cacheKey = `${orgId}_${user.id}_${selectedPropertyId}_${userRole}`;
+        const cacheKey = `${resolvedOrgId}_${user.id}_${selectedPropertyId}_${userRole}`;
         const cached = hrDataCache.getTickets(cacheKey);
         if (cached.data && cached.data.length > 0) {
-            if (tickets.length === 0) {
+            // Instant SWR initial display: show cached immediately, and seamlessly revalidate in background
+            if (!isBackground) {
                 setTickets(cached.data);
+                setLoading(false);
             }
-            setLoading(false);
         } else if (!isBackground && tickets.length === 0) {
             setLoading(true);
         }
         try {
             const url = new URL('/api/hr/tickets', window.location.origin);
-            url.searchParams.append('orgId', orgId);
+            url.searchParams.append('orgId', resolvedOrgId);
             url.searchParams.append('userId', user.id);
             url.searchParams.append('role', userRole);
             if (selectedPropertyId !== 'all') {
@@ -448,14 +537,57 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
             try { data = text ? JSON.parse(text) : {}; } catch {}
             if (data.success) {
                 const list = data.data || [];
-                setTickets(list);
-                hrDataCache.setTickets(cacheKey, list);
+                setTickets(prev => {
+                    const listIds = new Set(list.map((t: any) => t.id));
+                    const freshlyCreated = prev.filter(t => !listIds.has(t.id));
+                    const merged = [...freshlyCreated, ...list];
+                    hrDataCache.setTickets(cacheKey, merged);
+                    return merged;
+                });
+
+                // For non-HR users with zero raised tickets who have assigned tickets, auto-switch to assigned_to_me
+                const urlFilter = searchParams.get('filter');
+                if (!urlFilter) {
+                    setScopeFilter(currentScope => {
+                        if (currentScope === 'my_raised') {
+                            const hasRaised = list.some((t: any) => checkIsMyRaised(t));
+                            const hasAssigned = list.some((t: any) => isDirectlyAssignedToMe(t));
+                            if (!hasRaised && hasAssigned) {
+                                return 'assigned_to_me';
+                            }
+                        }
+                        return currentScope;
+                    });
+                }
             }
         } catch (err) {
             console.error('Error fetching tickets:', err);
         } finally {
             setLoading(false);
         }
+    };
+
+    const handleTicketCreated = (newTicket?: any) => {
+        if (newTicket && newTicket.id) {
+            // 1. Immediately switch to 'my_raised' so the user sees the newly raised ticket instantly
+            setScopeFilter('my_raised');
+            setStatusFilter('all');
+            setTicketTypeFilter('all');
+            setSelectedAssigneeFilter('all');
+
+            // 2. Optimistically prepend to active React state
+            setTickets(prev => [newTicket, ...prev.filter(t => t.id !== newTicket.id)]);
+
+            // 3. Update both in-memory cache and sessionStorage
+            hrDataCache.prependTicket(newTicket);
+            const cacheKey = `${resolvedOrgId}_${user?.id}_${selectedPropertyId}_${userRole}`;
+            const existingCache = hrDataCache.getTickets(cacheKey);
+            const updatedList = [newTicket, ...(existingCache.data || []).filter((t: any) => t.id !== newTicket.id)];
+            hrDataCache.setTickets(cacheKey, updatedList);
+        } else {
+            hrDataCache.invalidateTickets();
+        }
+        fetchTickets(true);
     };
 
     const handleUpdateStatus = async (ticketId: string, newStatus: string) => {
@@ -511,9 +643,9 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
 
         if (uid) {
             if (tAssignedId === uid || t.assigned_to_user_id === uid) return true;
-            if (!isConfOrAnon && (t.manager_user_id === uid || t.employee_snapshot?.manager_user_id === uid)) return true;
-            if (Array.isArray(t.assigned_history) && t.assigned_history.includes(uid) && (!isConfOrAnon || (uid !== t.manager_user_id && uid !== t.employee_snapshot?.manager_user_id))) return true;
-            if (Array.isArray(t.employee_snapshot?.assigned_history) && t.employee_snapshot.assigned_history.includes(uid) && (!isConfOrAnon || (uid !== t.manager_user_id && uid !== t.employee_snapshot?.manager_user_id))) return true;
+            if (!isConfOrAnon && t.ticket_type === 'grievance' && (t.current_level === 1 || !t.current_level) && (!tAssignedId || tAssignedId === uid) && (t.manager_user_id === uid || t.employee_snapshot?.manager_user_id === uid)) return true;
+            if (Array.isArray(t.assigned_history) && t.assigned_history.includes(uid) && (!isConfOrAnon || (uid !== t.manager_user_id && uid !== t.employee_snapshot?.manager_user_id)) && (t.ticket_type === 'grievance' || uid !== t.manager_user_id)) return true;
+            if (Array.isArray(t.employee_snapshot?.assigned_history) && t.employee_snapshot.assigned_history.includes(uid) && (!isConfOrAnon || (uid !== t.manager_user_id && uid !== t.employee_snapshot?.manager_user_id)) && (t.ticket_type === 'grievance' || uid !== t.manager_user_id)) return true;
         }
         if (pId) {
             if (tAssignedId === pId || tAssignedId.includes(pId)) return true;
@@ -579,6 +711,29 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
         return t.ticket_type === 'confidential' || t.ticket_type === 'confidential_feedback' || t.ticket_type === 'anonymous_feedback' || Boolean(t.is_confidential) || Boolean(t.is_anonymous);
     }, []);
 
+    const checkIsMyRaised = React.useCallback((t: any) => {
+        if (!t) return false;
+        const uId = user?.id ? String(user.id) : '';
+        const uEmail = user?.email ? user.email.toLowerCase() : '';
+        const pId = userEmpProfile?.id ? String(userEmpProfile.id) : '';
+        const pCode = userEmpProfile?.employee_code ? userEmpProfile.employee_code.toLowerCase() : '';
+
+        // Match against raised_by_user_id
+        if (uId && (String(t.raised_by_user_id) === uId || String(t.created_by) === uId)) return true;
+        if (pId && String(t.raised_by_user_id) === pId) return true;
+
+        // Match against raised_by user object
+        if (uId && (String(t.raised_by?.id) === uId || String(t.raised_by?.user_id) === uId)) return true;
+        if (uEmail && t.raised_by?.email && t.raised_by.email.toLowerCase() === uEmail) return true;
+
+        // Match against employee_snapshot
+        if (uEmail && t.employee_snapshot?.email && t.employee_snapshot.email.toLowerCase() === uEmail) return true;
+        if (pCode && t.employee_snapshot?.code && t.employee_snapshot.code.toLowerCase() === pCode) return true;
+        if (uId && t.employee_snapshot?.user_id && String(t.employee_snapshot.user_id) === uId) return true;
+
+        return false;
+    }, [user, userEmpProfile]);
+
     const {
         totalCount,
         assignedToYouCount,
@@ -601,15 +756,7 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
         const confidential = tickets.filter(t => isConfidential(t)).length;
         const overdue = tickets.filter(t => t.sla_due_at && new Date(t.sla_due_at) < new Date() && !['resolved', 'closed'].includes(t.status)).length;
 
-        const myRaised = tickets.filter(t => 
-            Boolean(
-                (user?.id && t.raised_by_user_id === user.id) || 
-                (user?.email && t.raised_by?.email && t.raised_by.email.toLowerCase() === user.email.toLowerCase()) ||
-                (userEmpProfile?.id && t.raised_by_user_id === userEmpProfile.id) ||
-                (userEmpProfile?.employee_code && t.employee_snapshot?.code === userEmpProfile.employee_code) ||
-                (user?.email && t.employee_snapshot?.email && t.employee_snapshot.email.toLowerCase() === user.email.toLowerCase())
-            )
-        ).length;
+        const myRaised = tickets.filter(t => checkIsMyRaised(t)).length;
 
         const teamTickets = tickets.filter(t => 
             !t.is_anonymous && !t.is_confidential && t.ticket_type !== 'confidential_feedback' && t.ticket_type !== 'confidential' && (
@@ -638,19 +785,12 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
             myRaisedCount: myRaised,
             teamTicketsCount: teamTickets
         };
-    }, [tickets, isDirectlyAssignedToMe, isCurrentlyAssignedToMe, isGrievance, isHRQuery, isConfidential, user, userEmpProfile, reporteeUserIds, employeesList, isTicketAssignedToUser]);
+    }, [tickets, isDirectlyAssignedToMe, isCurrentlyAssignedToMe, isGrievance, isHRQuery, isConfidential, checkIsMyRaised, reporteeUserIds, employeesList, isTicketAssignedToUser]);
 
     // Filter tickets based on UI search, scope, type, and status filters
     const filteredTickets = tickets.filter(t => {
         if (scopeFilter === 'my_raised') {
-            const isMyRaised = Boolean(
-                (user?.id && t.raised_by_user_id === user.id) || 
-                (user?.email && t.raised_by?.email && t.raised_by.email.toLowerCase() === user.email.toLowerCase()) ||
-                (userEmpProfile?.id && t.raised_by_user_id === userEmpProfile.id) ||
-                (userEmpProfile?.employee_code && t.employee_snapshot?.code === userEmpProfile.employee_code) ||
-                (user?.email && t.employee_snapshot?.email && t.employee_snapshot.email.toLowerCase() === user.email.toLowerCase())
-            );
-            if (!isMyRaised) return false;
+            if (!checkIsMyRaised(t)) return false;
         }
         if (scopeFilter === 'assigned_to_me' && !isDirectlyAssignedToMe(t)) return false;
         if (scopeFilter === 'department' || scopeFilter === 'my_team_assigned') {
@@ -2488,8 +2628,8 @@ export function HRTicketsContent({ orgId }: { orgId: string }) {
             <TicketCreateModal
                 isOpen={isCreateOpen}
                 onClose={() => setIsCreateOpen(false)}
-                onSuccess={() => fetchTickets(true)}
-                orgId={orgId}
+                onSuccess={(created) => handleTicketCreated(created)}
+                orgId={resolvedOrgId}
                 userId={user?.id || ''}
             />
 

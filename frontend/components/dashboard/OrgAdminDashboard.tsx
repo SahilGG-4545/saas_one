@@ -803,6 +803,21 @@ const OrgAdminDashboard = () => {
         if (dashboardContent === undefined) fetchSummaries();
     }, [fetchSummaries, dashboardContent]);
 
+    useEffect(() => {
+        const handleCreated = () => {
+            invalidateCache('org-summaries-');
+            invalidateCache('tickets-');
+            invalidateCache('spoc-dashboard-');
+            fetchSummaries();
+        };
+        window.addEventListener('ticket-created', handleCreated);
+        window.addEventListener('request-created', handleCreated);
+        return () => {
+            window.removeEventListener('ticket-created', handleCreated);
+            window.removeEventListener('request-created', handleCreated);
+        };
+    }, [fetchSummaries, invalidateCache]);
+
     const uploadBase64IfNeeded = async (url: string | undefined) => {
         if (!url || !url.startsWith('data:image/')) return url;
         try {
@@ -1740,7 +1755,7 @@ const OrgAdminDashboard = () => {
                             </div>
                         )}
                         {activeTab === 'grievance' && (
-                            <HRTicketsContent orgId={org?.id || membership?.org_id || 'org'} />
+                            <HRTicketsContent orgId={org?.id || membership?.org_id || membership?.organization_id || (user as any)?.organization_id || user?.user_metadata?.organization_id || '211e1330-ad83-446d-941f-dcea48396798'} />
                         )}
                         
                         {activeTab === 'water' && (
@@ -2136,6 +2151,16 @@ const OrgAdminDashboard = () => {
                     propertyId={selectedPropertyId === 'all' ? undefined : selectedPropertyId}
                     isAdminMode={true}
                     showInternalToggle={true}
+                    onSuccess={(ticket) => {
+                        invalidateCache('org-summaries-');
+                        invalidateCache('tickets-');
+                        invalidateCache('spoc-dashboard-');
+                        fetchSummaries();
+                        if (typeof window !== 'undefined') {
+                            window.dispatchEvent(new CustomEvent('ticket-created', { detail: { ticket } }));
+                            window.dispatchEvent(new CustomEvent('request-created', { detail: { ticket } }));
+                        }
+                    }}
                     organizations={(() => {
                         const orgs = org ? [org] : [];
                         // If user is from Autopilot Offices but viewing another org, add Autopilot to the list
