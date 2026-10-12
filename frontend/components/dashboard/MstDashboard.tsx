@@ -94,7 +94,7 @@ interface Ticket {
 
 const MstDashboard = () => {
     const { dashboardContent, dashboardPropertyId, navigateDashboard } = useDashboardContent();
-    const { user, signOut } = useAuth();
+    const { user, signOut, membership } = useAuth();
     const params = useParams();
     const router = useRouter();
     const propertyId = (params?.propertyId as string) || dashboardPropertyId;
@@ -136,7 +136,7 @@ const MstDashboard = () => {
         type: 'success',
         visible: false
     });
-    const [requestFilter, setRequestFilter] = useState<'all' | 'active' | 'completed' | 'tasks' | 'completed_by_me' | 'waitlist'>(
+    const [requestFilter, setRequestFilter] = useState<'all' | 'active' | 'completed' | 'tasks' | 'completed_by_me' | 'waitlist' | 'raised_by_me'>(
         (searchParams.get('filter') as any) || 'all'
     );
     const [categoryFilter, setCategoryFilter] = useState<string>(searchParams.get('category') || 'all');
@@ -453,7 +453,7 @@ const MstDashboard = () => {
             setIsFetching(true);
         }
 
-        const { data, error } = await supabase
+        const [ticketsResult, { count: totalCount }, { count: closedCountResult }] = await Promise.all([supabase
             .from('tickets')
             .select(`
                 *,
@@ -464,15 +464,19 @@ const MstDashboard = () => {
             `)
             .eq('property_id', propertyId)
             .order('created_at', { ascending: false })
-            .limit(10000);
-
-        const [
-            { count: totalCount },
-            { count: closedCountResult }
-        ] = await Promise.all([
+            .limit(10000),
             supabase.from('tickets').select('*', { count: 'exact', head: true }).eq('property_id', propertyId),
             supabase.from('tickets').select('*', { count: 'exact', head: true }).eq('property_id', propertyId).in('status', ['resolved', 'closed', 'pending_validation'])
         ]);
+        const { data, error } = ticketsResult;
+
+
+
+
+
+
+
+
 
         if (error) {
             console.error('Error fetching tickets:', error);
@@ -975,7 +979,7 @@ const MstDashboard = () => {
                                 />
                             )}
                             {activeTab === 'grievance' && (
-                                <HRTicketsContent orgId={property?.organization_id || 'org'} />
+                                <HRTicketsContent orgId={property?.organization_id || membership?.org_id || membership?.organization_id || (user as any)?.organization_id || '211e1330-ad83-446d-941f-dcea48396798'} />
                             )}
                             {activeTab === 'settings' && <SettingsView />}
                             {activeTab === 'profile' && (
@@ -1338,8 +1342,8 @@ const RequestsTab = ({
     isLoading: boolean, 
     propertyId?: string, 
     onTabChange?: (tab: Tab) => void, 
-    filter?: 'all' | 'active' | 'completed' | 'tasks' | 'completed_by_me' | 'waitlist', 
-    onFilterChange?: (filter: 'all' | 'active' | 'completed') => void,
+    filter?: 'all' | 'active' | 'completed' | 'tasks' | 'completed_by_me' | 'waitlist' | 'raised_by_me', 
+    onFilterChange?: (filter: any) => void,
     categoryFilter: string,
     setCategoryFilter: (v: string) => void,
     dateFrom: string,
@@ -1361,6 +1365,12 @@ const RequestsTab = ({
         let result = [];
         
         switch (filter) {
+            case 'raised_by_me':
+                result = [...activeTickets, ...completedTickets].filter(t =>
+                    String(t.raised_by) === String(uId) ||
+                    (t as any).creator?.id === uId
+                );
+                break;
             case 'completed_by_me':
                 result = completedTickets.filter(t =>
                     String(t.assigned_to) === String(uId) ||
@@ -1440,6 +1450,7 @@ const RequestsTab = ({
                                 className="bg-transparent text-xs font-bold text-text-secondary focus:outline-none cursor-pointer w-full sm:w-auto"
                             >
                                 <option value="all">All Request Types</option>
+                                <option value="raised_by_me">Raised By Me</option>
                                 <option value="active">All Active</option>
                                 <option value="completed">All Completed</option>
                                 <option value="tasks">Assigned To Me</option>

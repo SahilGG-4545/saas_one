@@ -318,7 +318,7 @@ const PropertyAdminDashboard = ({ propertyId: propPropertyId }: PropertyAdminDas
     const [dashboardTab, setActiveTab] = useState<Tab>('overview');
     const openTab = dashboardContent !== undefined ? 'petty-cash' as Tab : dashboardTab;
     const supabase = useMemo(() => createClient(), []);
-    const { getCachedData, setCachedData } = useDataCache();
+    const { getCachedData, setCachedData, invalidateCache } = useDataCache();
     const cacheKey = `property-${propertyId}`;
 
     // State initialized from cache if available
@@ -975,8 +975,14 @@ const PropertyAdminDashboard = ({ propertyId: propPropertyId }: PropertyAdminDas
                         propertyId={property.id}
                         organizationId={property.organization_id}
                         showInternalToggle={true}
-                        onSuccess={() => {
+                        onSuccess={(ticket) => {
+                            invalidateCache('tickets-');
+                            invalidateCache('spoc-dashboard-');
                             setStatsVersion(v => v + 1);
+                            if (typeof window !== 'undefined') {
+                                window.dispatchEvent(new CustomEvent('ticket-created', { detail: { ticket } }));
+                                window.dispatchEvent(new CustomEvent('request-created', { detail: { ticket } }));
+                            }
                         }}
                     />
                 )
@@ -986,7 +992,7 @@ const PropertyAdminDashboard = ({ propertyId: propPropertyId }: PropertyAdminDas
             <main className="flex-1 min-w-0 overflow-x-hidden lg:ml-72 flex flex-col bg-white border-l border-slate-300 shadow-[-4px_0_12px_-4px_rgba(0,0,0,0.05)] relative z-10">
 
                 {openTab !== 'overview' && (
-                    <header className="h-14 flex justify-between items-center px-3 md:px-8 lg:px-12 mb-2 md:mb-4 border-b border-border/10">
+                    <header className="relative z-40 h-14 flex justify-between items-center px-3 md:px-8 lg:px-12 mb-2 md:mb-4 border-b border-border/10">
                         <div className="flex items-center gap-3">
                             {/* Mobile Menu Toggle */}
                             <button
@@ -1098,7 +1104,7 @@ const PropertyAdminDashboard = ({ propertyId: propPropertyId }: PropertyAdminDas
                             />
                         )}
                         {openTab === 'grievance' && (
-                            <HRTicketsContent orgId={property?.organization_id || membership?.org_id || 'org'} />
+                            <HRTicketsContent orgId={property?.organization_id || membership?.org_id || membership?.organization_id || (user as any)?.organization_id || user?.user_metadata?.organization_id || '211e1330-ad83-446d-941f-dcea48396798'} />
                         )}
                         {openTab === 'visitors' && property && (
                             <VMSAdminDashboard propertyId={property.id} />
@@ -1745,8 +1751,8 @@ const OverviewTab = memo(function OverviewTab({
     return (
         <div className="min-h-screen bg-background">
             {/* Header Section */}
-            <div className="bg-[#708F96] px-2 lg:px-12 py-8 border-b border-white/10 shadow-lg">
-                <div className="flex flex-wrap items-center justify-between gap-y-3 mb-5">
+            <div className="relative z-30 bg-[#708F96] px-2 lg:px-12 py-8 border-b border-white/10 shadow-lg">
+                <div className="relative z-50 flex flex-wrap items-center justify-between gap-y-3 mb-5">
                     <div className="flex items-center gap-3">
                         {/* Mobile Menu Toggle */}
                         <button
@@ -1759,6 +1765,11 @@ const OverviewTab = memo(function OverviewTab({
                     </div>
 
                     <div className="flex items-center gap-2 md:gap-3">
+                        {/* Notification Bell */}
+                        <div className="relative z-[300] bg-white/15 hover:bg-white/25 rounded-full p-0.5 border border-white/20 shadow-inner flex items-center justify-center transition-all">
+                            <NotificationBell align="right" />
+                        </div>
+
                         {/* Global Time Period Filter — always visible, smaller on mobile */}
                         <div className="flex items-center bg-white/15 backdrop-blur-sm rounded-full p-0.5 md:p-1 border border-white/20 shadow-inner">
                             {([

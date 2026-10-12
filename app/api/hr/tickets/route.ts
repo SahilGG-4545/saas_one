@@ -93,6 +93,12 @@ interface OrgConfigCacheEntry {
 }
 const orgConfigCache = new Map<string, OrgConfigCacheEntry>();
 const CONFIG_CACHE_TTL_MS = 60 * 1000; // 60 seconds TTL
+interface OrgEmpsCacheEntry {
+    data: any[];
+    timestamp: number;
+}
+const orgEmpsCache = new Map<string, OrgEmpsCacheEntry>();
+const ORG_EMPS_CACHE_TTL_MS = 60 * 1000;
 
 export async function GET(request: Request) {
     try {
@@ -119,7 +125,8 @@ export async function GET(request: Request) {
                 *,
                 category:hr_ticket_categories(*),
                 raised_by:users!raised_by_user_id(id, email, full_name, user_photo_url),
-                assigned_to:users!assigned_to_user_id(id, email, full_name, user_photo_url)
+                assigned_to:users!assigned_to_user_id(id, email, full_name, user_photo_url),
+                resolved_by:users!resolved_by_user_id(id, email, full_name, user_photo_url)
             `)
             .order('created_at', { ascending: false });
 
@@ -212,26 +219,39 @@ export async function GET(request: Request) {
             query = query.or(hrConditions.join(','));
         } else if (userId) {
             // TIER 3: Property Admin, Ops Super Admin, Procurement, BD, MST, Soft Service, Staff, and all other internal roles.
-            let empQuery = supabaseAdmin
-                .from('employee_profiles')
-                .select('id, user_id, employee_code, first_name, last_name, email, reporting_manager_id, reporting_manager_code');
-            if (orgId) {
-                empQuery = empQuery.or(`organization_id.eq.${orgId},organization_id.is.null`);
+            const targetOrgKey = orgId || 'all';
+            const cachedEmps = orgEmpsCache.get(targetOrgKey);
+            const isEmpsFresh = cachedEmps && (Date.now() - cachedEmps.timestamp < ORG_EMPS_CACHE_TTL_MS);
+
+            let empQueryPromise: Promise<any>;
+            if (isEmpsFresh && cachedEmps?.data) {
+                empQueryPromise = Promise.resolve({ data: cachedEmps.data, error: null });
+            } else {
+                let empQuery = supabaseAdmin
+                    .from('employee_profiles')
+                    .select('id, user_id, employee_code, first_name, last_name, email, reporting_manager_id, reporting_manager_code');
+                if (orgId) {
+                    empQuery = empQuery.or(`organization_id.eq.${orgId},organization_id.is.null`);
+                }
+                empQueryPromise = empQuery as any;
             }
 
             // Run team scope resolution queries in parallel
             const [allEmpsRes, uProfileRes, propMemsRes, auditLogsRes] = await Promise.all([
-                empQuery,
+                empQueryPromise,
                 supabaseAdmin.from('users').select('full_name, email').eq('id', userId).maybeSingle(),
                 supabaseAdmin.from('property_memberships').select('property_id, property:properties(name)').eq('user_id', userId),
-                supabaseAdmin.from('hr_ticket_audit_logs').select('ticket_id').or(`actor_user_id.eq.${userId},old_values->>assigned_to.eq.${userId},new_values->>assigned_to.eq.${userId}`)
+                supabaseAdmin.from('hr_ticket_audit_logs').select('ticket_id').or(`actor_user_id.eq.${userId},old_values->>assigned_to.eq.${userId},new_values->>assigned_to.eq.${userId}`).limit(100)
             ]);
 
             const allEmps = allEmpsRes.data;
+            if (allEmps && !isEmpsFresh) {
+                orgEmpsCache.set(targetOrgKey, { data: allEmps, timestamp: Date.now() });
+            }
             if (allEmpsRes.error) console.error('[HR Tickets API] employee_profiles lookup failed; team scope will be empty:', allEmpsRes.error.message);
 
             const uProfile = uProfileRes.data;
-            myProfile = (allEmps || []).find(e => e.user_id === userId || (uProfile?.email && e.email && e.email.toLowerCase() === uProfile.email.toLowerCase()));
+            myProfile = (allEmps || []).find((e: any) => e.user_id === userId || (uProfile?.email && e.email && e.email.toLowerCase() === uProfile.email.toLowerCase()));
 
             const profileName = `${myProfile?.first_name || ''} ${myProfile?.last_name || ''}`.trim();
             const userFullName = (uProfile?.full_name || '').trim();
@@ -514,7 +534,7 @@ export async function GET(request: Request) {
 
         return NextResponse.json(
             { success: true, data: sanitized },
-            { headers: { 'Cache-Control': 'private, max-age=5, stale-while-revalidate=30' } }
+            { headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' } }
         );
     } catch (err: any) {
         return NextResponse.json({ success: false, error: err.message }, { status: 500 });
@@ -772,7 +792,11 @@ export async function POST(request: Request) {
         const isConfidentialOrAnonymous = Boolean(is_confidential || category.is_confidential || is_anonymous || category.is_anonymous || ticketType === 'confidential_feedback' || ticketType === 'anonymous_feedback' || ticketType === 'confidential');
         const effectiveManagerUserId = isConfidentialOrAnonymous ? null : managerUserId;
 
-        const assignedHistory = Array.from(new Set([firstLevelOwnerId, ...configuredLevel1UserIds, effectiveManagerUserId].filter(Boolean)));
+        const assignedHistory = Array.from(new Set([
+            firstLevelOwnerId,
+            ...configuredLevel1UserIds,
+            (ticketType === 'grievance' && !isConfidentialOrAnonymous && firstLevelOwnerId === effectiveManagerUserId ? effectiveManagerUserId : null)
+        ].filter(Boolean)));
 
         const snapshot = {
             name: is_anonymous ? 'Anonymous Employee' : submitterName,
@@ -813,7 +837,12 @@ export async function POST(request: Request) {
                 is_confidential: Boolean(is_confidential || category.is_confidential),
                 is_anonymous: Boolean(is_anonymous || category.is_anonymous)
             })
-            .select()
+            .select(`
+                *,
+                category:hr_ticket_categories(*),
+                raised_by:users!raised_by_user_id(id, email, full_name, user_photo_url),
+                assigned_to:users!assigned_to_user_id(id, email, full_name, user_photo_url)
+            `)
             .single();
 
         if (createErr) throw createErr;
