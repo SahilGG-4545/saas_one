@@ -643,14 +643,12 @@ const StaffDashboard = () => {
                                 <Wrench className="w-4 h-4" />
                                 Assets
                             </button>
+                            <PettyCashNavLink compact onNavigate={() => setSidebarOpen(false)} />
                         </div>
                     </div>
 
 
-                    <div className="mb-6" data-navigation-section="management-hub">
-                        <p className="px-4 mb-3 text-[10px] font-bold uppercase tracking-widest text-text-secondary">Management Hub</p>
-                        <PettyCashNavLink onNavigate={() => setSidebarOpen(false)} />
-                    </div>
+
 {/* System & Personal */}
                     <div className="mb-4">
                         <div className="space-y-0.5">
