@@ -178,7 +178,7 @@ export function passesSandbox(config: Pick<TestingConfig, 'enabled' | 'manager' 
 }
 
 export interface VoiceIO {
-    enabled(): boolean;
+    enabled(): boolean | Promise<boolean>;
     /** A registered employee or an approved WhatsApp user; null = unknown number (ignored, nothing spent). */
     recognise(phone: string): Promise<Sender | null>;
     download(url: string): Promise<MediaFetchResult>;
@@ -205,10 +205,11 @@ const PASS: VoiceClaim = { kind: 'pass' };
 
 export async function claimVoiceNote(body: unknown, io?: VoiceIO): Promise<VoiceClaim> {
     try {
-        // Switch OFF (the default): return before loading anything, so every webhook stays exactly as fast as before.
-        if (!io && process.env.VOICE_NOTES_ENABLED !== 'true') return PASS;
+        // Switch OFF (the default): return before loading anything else. The switch is "Voice notes" in the Task Access panel
+        // (settings, cached 30 s — no redeploy); env VOICE_NOTES_ENABLED=true still forces it ON.
+        if (!io && !(await (await import('../BotSwitches')).botSwitchOn('voiceNotes'))) return PASS;
         const real = io ?? await defaultVoiceIO();
-        if (!real.enabled()) return PASS;
+        if (!(await real.enabled())) return PASS;
         const voice = extractVoiceNote(body);
         if (voice) return await claimNote(voice, real);
         const text = extractTextReply(body);
@@ -392,7 +393,7 @@ export async function defaultVoiceIO(): Promise<VoiceIO> {
     const store = makeVoiceStore(supabaseAdmin);
     const llm = engyBrainLlm();
     return {
-        enabled: () => process.env.VOICE_NOTES_ENABLED === 'true',
+        enabled: async () => (await import('../BotSwitches')).botSwitchOn('voiceNotes'),
         async recognise(phone) {
             if (!passesVoiceAllowlist(process.env.VOICE_NOTES_ALLOWED_PHONES, phone)) return null;   // checked first: no database read
             if (!passesSandbox(await TaskDatabaseService.getTestingConfig(), phone)) return null;

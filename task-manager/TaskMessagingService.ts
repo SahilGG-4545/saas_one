@@ -248,15 +248,17 @@ export class TaskMessagingService {
     static getCampaignForRuleType(ruleType?: string): string {
         switch (ruleType) {
             case 'morning_digest':
-                return process.env.AISENSY_TASK_MORNING_CAMPAIGN || 'task_morning_kickoff_v1';
+                return process.env.AISENSY_TASK_MORNING_CAMPAIGN || 'task_morning_kickoff_v2';
             case 'pending_reminder':
                 return process.env.AISENSY_TASK_MIDDAY_CAMPAIGN || 'task_midday_reminder_v1';
             case 'eod_summary':
                 return process.env.AISENSY_TASK_EOD_CAMPAIGN || 'task_eod_summary_v1';
             case 'overdue_alert':
-                return process.env.AISENSY_TASK_MIDDAY_CAMPAIGN || 'task_midday_reminder_v1';
+                return process.env.AISENSY_TASK_OVERDUE_CAMPAIGN || 'task_overdue_alert_v1';
+            case 'team_digest':
+                return process.env.AISENSY_TASK_TEAM_DIGEST_CAMPAIGN || 'task_manager_team_digest_v1';
             default:
-                return process.env.AISENSY_TASK_MORNING_CAMPAIGN || process.env.AISENSY_TASK_CAMPAIGN_NAME || 'task_morning_kickoff_v1';
+                return process.env.AISENSY_TASK_MORNING_CAMPAIGN || process.env.AISENSY_TASK_CAMPAIGN_NAME || 'task_morning_kickoff_v2';
         }
     }
 

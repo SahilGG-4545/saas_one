@@ -746,6 +746,7 @@ export class TaskDatabaseService {
             learningLoopEnabled: raw.learningLoopEnabled === true,
             promptVersionsEnabled: raw.promptVersionsEnabled === true,
             nightlyAutoTuneEnabled: raw.nightlyAutoTuneEnabled === true,
+            voiceNotesEnabled: raw.voiceNotesEnabled === true,
             botAlertAdmins: Array.isArray(raw.botAlertAdmins) ? raw.botAlertAdmins.filter(isBotAlertAdmin).slice(0, 10) : [],
         };
     }
@@ -781,14 +782,14 @@ export class TaskDatabaseService {
                 },
             },
             pretendMode: raw.whatsappPretendMode !== false,
-            botFeatures: { neverSilent: raw.neverSilentEnabled === true, conversationMemory: raw.conversationMemoryEnabled === true, frontDoor: raw.frontDoorEnabled === true, teamReports: raw.teamReportsEnabled === true, learningLoop: raw.learningLoopEnabled === true, promptVersions: raw.promptVersionsEnabled === true, nightlyAutoTune: raw.nightlyAutoTuneEnabled === true },
+            botFeatures: { neverSilent: raw.neverSilentEnabled === true, conversationMemory: raw.conversationMemoryEnabled === true, frontDoor: raw.frontDoorEnabled === true, teamReports: raw.teamReportsEnabled === true, learningLoop: raw.learningLoopEnabled === true, promptVersions: raw.promptVersionsEnabled === true, nightlyAutoTune: raw.nightlyAutoTuneEnabled === true, voiceNotes: raw.voiceNotesEnabled === true },
             botAlertAdmins: Array.isArray(raw.botAlertAdmins) ? raw.botAlertAdmins.filter(isBotAlertAdmin).slice(0, 10) : [],
         };
     }
 
     /** WhatsApp bot upgrades (docs/WHATSAPP_BOT_PRODUCTION_PLAN.md): flipped from the Task Access panel, no redeploy needed. */
     static async setBotFeature(feature: import('./BotSwitches').BotSwitch, enabled: boolean, actor?: string): Promise<TestingConfig> {
-        const fields: Record<import('./BotSwitches').BotSwitch, keyof TestingConfig> = { neverSilent: 'neverSilentEnabled', conversationMemory: 'conversationMemoryEnabled', frontDoor: 'frontDoorEnabled', teamReports: 'teamReportsEnabled', learningLoop: 'learningLoopEnabled', promptVersions: 'promptVersionsEnabled', nightlyAutoTune: 'nightlyAutoTuneEnabled' };
+        const fields: Record<import('./BotSwitches').BotSwitch, keyof TestingConfig> = { neverSilent: 'neverSilentEnabled', conversationMemory: 'conversationMemoryEnabled', frontDoor: 'frontDoorEnabled', teamReports: 'teamReportsEnabled', learningLoop: 'learningLoopEnabled', promptVersions: 'promptVersionsEnabled', nightlyAutoTune: 'nightlyAutoTuneEnabled', voiceNotes: 'voiceNotesEnabled' };
         const updated = await this.saveTestingConfig({ [fields[feature]]: enabled });
         await this.logAudit({
             event_type: 'bot_feature_updated',

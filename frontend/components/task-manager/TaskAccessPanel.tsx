@@ -54,8 +54,8 @@ export default function TaskAccessPanel({ orgId }: { orgId?: string }) {
     const [notice, setNotice] = useState<string | null>(null);
     const [provisioned, setProvisioned] = useState(true);
     const [nlGateway, setNlGateway] = useState(false);
-    type BotFeature = 'neverSilent' | 'conversationMemory' | 'frontDoor' | 'teamReports' | 'learningLoop' | 'promptVersions' | 'nightlyAutoTune';
-    const [botFeatures, setBotFeatures] = useState<Record<BotFeature, boolean>>({ neverSilent: false, conversationMemory: false, frontDoor: false, teamReports: false, learningLoop: false, promptVersions: false, nightlyAutoTune: false });
+    type BotFeature = 'neverSilent' | 'conversationMemory' | 'frontDoor' | 'teamReports' | 'learningLoop' | 'promptVersions' | 'nightlyAutoTune' | 'voiceNotes';
+    const [botFeatures, setBotFeatures] = useState<Record<BotFeature, boolean>>({ neverSilent: false, conversationMemory: false, frontDoor: false, teamReports: false, learningLoop: false, promptVersions: false, nightlyAutoTune: false, voiceNotes: false });
     const [taskImportColumnMissing, setTaskImportColumnMissing] = useState(false);
     const [smartChatColumnMissing, setSmartChatColumnMissing] = useState(false);
     const [collabColumnMissing, setCollabColumnMissing] = useState(false);
@@ -75,7 +75,7 @@ export default function TaskAccessPanel({ orgId }: { orgId?: string }) {
             if (!res.ok || !data.success) throw new Error(data.error || 'Failed to load access settings');
             setProvisioned(Boolean(data.provisioned));
             setNlGateway(Boolean(data.nlGatewayEnabled));
-            setBotFeatures({ neverSilent: data.botFeatures?.neverSilent === true, conversationMemory: data.botFeatures?.conversationMemory === true, frontDoor: data.botFeatures?.frontDoor === true, teamReports: data.botFeatures?.teamReports === true, learningLoop: data.botFeatures?.learningLoop === true, promptVersions: data.botFeatures?.promptVersions === true, nightlyAutoTune: data.botFeatures?.nightlyAutoTune === true });
+            setBotFeatures({ neverSilent: data.botFeatures?.neverSilent === true, conversationMemory: data.botFeatures?.conversationMemory === true, frontDoor: data.botFeatures?.frontDoor === true, teamReports: data.botFeatures?.teamReports === true, learningLoop: data.botFeatures?.learningLoop === true, promptVersions: data.botFeatures?.promptVersions === true, nightlyAutoTune: data.botFeatures?.nightlyAutoTune === true, voiceNotes: data.botFeatures?.voiceNotes === true });
             setTaskImportColumnMissing(Boolean(data.taskImportColumnMissing));
             setSmartChatColumnMissing(Boolean(data.smartChatColumnMissing));
             setCollabColumnMissing(Boolean(data.superuserCollabColumnMissing));
@@ -143,6 +143,16 @@ export default function TaskAccessPanel({ orgId }: { orgId?: string }) {
         post(`notif-${d.departmentId}`, { action: 'set_notifications_delegated', departmentId: d.departmentId, enabled: next });
     };
 
+    // Reporting manager (moved here from the old "Manager Role Assignment & WhatsApp Kickoff" card, 2026-10-12).
+    const toggleManager = (m: AccessMember) => {
+        const next = m.taskRole !== 'reporting_manager';
+        const text = next
+            ? `Make ${m.name} a REPORTING MANAGER?\n\nThey can see and assign tasks across their department, and get their team's progress at midday (if anything is pending) and in the evening. No WhatsApp message is sent by this button. You can remove this later.`
+            : `Remove ${m.name}'s manager role?\n\nThey go back to a normal employee.`;
+        if (!window.confirm(text)) return;
+        post(`manager-${m.userId}`, { action: 'set_manager', userId: m.userId, enabled: next });
+    };
+
     const toggleSuperuser = (m: AccessMember) => {
         const next = m.taskRole !== 'superuser';
         const text = next
@@ -177,7 +187,11 @@ export default function TaskAccessPanel({ orgId }: { orgId?: string }) {
     const toggleBotFeature = (feature: BotFeature) => {
         const next = !botFeatures[feature];
         const phase5 = feature === 'learningLoop' ? 'Capture likely mistakes for admin review? Requires Phase 5 SQL.' : feature === 'promptVersions' ? 'Use approved database prompt versions? Invalid or unavailable versions fall back to built-in instructions.' : feature === 'nightlyAutoTune' ? 'Draft and safety-test at most one candidate per night after 02:00 IST? Nothing activates automatically.' : null;
-        const text = phase5 ? `Switch "${feature}" ${next ? 'ON' : 'OFF'}?\n\n${phase5}` : feature === 'teamReports'
+        const text = phase5 ? `Switch "${feature}" ${next ? 'ON' : 'OFF'}?\n\n${phase5}` : feature === 'voiceNotes'
+            ? (next
+                ? 'Switch "Voice notes" ON?\n\nEveryone who uses the Task Manager can send a WhatsApp voice note instead of typing. It is turned into text, they see "🎙️ I heard: …", and changes still need their YES. While the sandbox is ON, only sandbox numbers can use it.\n\nNo SQL file needed. Needs GROQ_VOICE_API_KEY on the server.'
+                : 'Switch "Voice notes" OFF? Voice notes are ignored again; typing works as before.')
+            : feature === 'teamReports'
             ? (next
                 ? 'Switch "Team reports" ON?\n\nIn Smart chat, anyone who can give work to others can ask "how is my team doing today?" or "anything overdue in my team?". The answer only includes people they are already allowed to see. Read-only: nothing is changed.\n\nNo SQL file needed.'
                 : 'Switch "Team reports" OFF? Team questions stop working; the AI goes back to exactly its previous instructions.')
@@ -332,6 +346,7 @@ Their files and images go back to being handled exactly as before.`;
                 { key: 'conversationMemory', title: 'Conversation memory', body:'The AI remembers the last 20 messages of each chat for 24 hours, so "make it tomorrow" or "the second one" are understood. Nobody can see them in the app. Needs SQL file 20261011000002 run once.' },
                 { key: 'learningLoop', title: 'Learning loop', body: 'Capture likely mistakes for admin review and permanent live test cases. Needs SQL file 20261011000003 run once.' },
                 { key: 'promptVersions', title: 'Prompt versions', body: 'Use approved tunable instruction versions without redeploying. Locked safety rules remain in code.' },
+                { key: 'voiceNotes', title: 'Voice notes', body: 'Everyone using the Task Manager can send a WhatsApp voice note instead of typing: it is turned into text and handled like a typed message (changes still need YES). Sandbox ON → only sandbox numbers. No SQL needed.' },
                 { key: 'nightlyAutoTune', title: 'Nightly auto-tune', body: 'After 02:00 IST, draft and safety-test one candidate only when new labelled cases exist. Never auto-activates.' },
             ] as const).map(f => (
                 <div key={f.key} className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
@@ -496,6 +511,16 @@ Their files and images go back to being handled exactly as before.`;
                                                         </span>
                                                     )}
                                                 </div>
+                                                {provisioned && m.taskRole !== 'superuser' && (
+                                                    <button
+                                                        type="button"
+                                                        disabled={busyKey === `manager-${m.userId}`}
+                                                        onClick={() => toggleManager(m)}
+                                                        className={`text-[11px] font-bold underline cursor-pointer disabled:opacity-50 mr-3 ${m.taskRole === 'reporting_manager' ? 'text-rose-600 hover:text-rose-800' : 'text-emerald-700 hover:text-emerald-900'}`}
+                                                    >
+                                                        {m.taskRole === 'reporting_manager' ? 'Remove manager' : 'Make manager'}
+                                                    </button>
+                                                )}
                                                 {provisioned && (
                                                     <button
                                                         type="button"

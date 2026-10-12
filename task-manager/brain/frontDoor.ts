@@ -15,7 +15,7 @@ import type { Action, BrainContext, BrainTask } from './types';
 
 export const UNDO_WINDOW_MS = 10 * 60_000;
 
-export const AI_DOWN_HELP = "I'm having trouble understanding right now. 🙏 Try *tasks* to see your list, or *done 2* to finish task 2.";
+export const AI_DOWN_HELP = "I'm having trouble understanding right now. 🙏 Try *tasks* to see your list, then *done* and the task number (e.g. *done 1*).";
 export const UNDO_HINT = 'Reply *undo* within 10 minutes to reverse it.';
 
 export type ExactCommand =
@@ -101,7 +101,11 @@ const list = (tasks: BrainTask[]) => tasks.map(t => `${t.n}. ${t.title} ${t.stat
 export function planExact(cmd: ExactCommand, ctx: BrainContext): ExactPlan | null {
     if (cmd.kind === 'undo') return { kind: 'undo', change: null };   // the caller fills in the stored change
     if (cmd.kind === 'view') {
-        return { kind: 'reply', text: ctx.tasks.length ? `📋 *Your tasks today*\n\n${list(ctx.tasks)}\n\nReply *done 2* when you finish task 2.` : '📋 You have no tasks today.' };
+        if (!ctx.tasks.length) return { kind: 'reply', text: '📋 You have no tasks today.' };
+        // The hint uses a REAL number from this list (the first open task) — never a fixed "done 2".
+        const firstOpen = ctx.tasks.find(t => t.status !== 'completed');
+        const hint = firstOpen ? `Reply *done ${firstOpen.n}* when you finish task ${firstOpen.n}.` : 'All done for today ✅';
+        return { kind: 'reply', text: `📋 *Your tasks today*\n\n${list(ctx.tasks)}\n\n${hint}` };
     }
     const open = ctx.tasks.filter(t => t.status !== 'completed');
     if (cmd.kind === 'done_all') return open.length ? { kind: 'act', action: { type: 'complete_tasks', taskIds: open.map(t => t.id) } } : null;

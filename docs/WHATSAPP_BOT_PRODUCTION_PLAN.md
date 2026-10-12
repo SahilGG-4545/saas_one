@@ -544,3 +544,65 @@ provider cost and whether an auto-drafted candidate improves live messages.
 once → get `whatsapp_bot_admin_alert_v2` approved → add alert recipients in Bot health → turn on Learning loop → Prompt
 versions → Nightly auto-tune. **Rollback:** turn the three switches OFF; the live brain uses the built-in prompt,
 capture/tuning/alerts stop, and the tables may stay.
+
+### Approved templates rollout + Phase 5 review fix — 2026-10-12 (uncommitted, waiting for review)
+
+**Phase 5 review (commits 9a3ce98 · 9ad3493 · 6c7a72c):** well built — with the switches OFF the AI instructions are
+byte-identical to before (verified against the Phase 4 commit), locked safety text, atomic activate / roll back / label,
+admin-only API, all tests pass. **Fixed:** the nightly safety test charged every AI call its worst case (~5× real) against a
+$0.25 cap, so a full test always stopped at the cap and was rejected (its labelled cases marked used). Now the worst case
+only decides whether a call may start, the real usage is charged, the test skips writing replies (scoring does not use
+them), the cap is $0.50 per candidate (a full test ≈ $0.13), and a technical stop frees the labelled cases for the next
+night. **Still open (unchanged):** the drafting model is the same as the live one (glm-5.3-flash), not a stronger one.
+
+**Templates now wired** (all approved, UTILITY; full text in `WHATSAPP_META_TEMPLATES.md` §11):
+- `task_handover_v1` replaces the "…, handed over" workaround.
+- `task_completed_notice_v1` — **every** completion tells the giver (owner decision), from all four places a task can be
+  marked done; grouped per giver; at most once an hour per task; no duplicate when a superuser's reply is relayed.
+- `task_overdue_alert_v1` — new **"Overdue alert"** rule type in the Notifications tab (open tasks from the last 7 days;
+  people with nothing overdue are skipped). Before, the type existed but could not be created and used the midday template.
+- `task_manager_team_digest_v1` — with the **Evening summary** rule, reporting managers (their department) and superusers
+  (all departments) also get the team summary, **in addition to** their own evening summary (owner decision); once a day.
+- `whatsapp_bot_admin_alert_v2` — the name can now be overridden (`AISENSY_BOT_ADMIN_ALERT_CAMPAIGN`).
+
+**Tests (offline only):** new `test_template_rollout.ts` 35/35; updated for the intended changes: hand-over (4 blanks),
+completion (every completion, 5 blanks), Overdue alert now allowed, Phase 5 cost accounting, one import stub. Full
+regression green except the old `SuperuserPanel.tsx` check. Type check, lint (new files) and `lint:sql` clean.
+**No new migration.**
+
+**Added 2026-10-12:** morning rule now uses `task_morning_kickoff_v2` ("Daily Task Standup", 3 blanks: name, date,
+one-line summary); people with no tasks are greeted with the approved nudge on a "don't skip" rule (the morning
+default) — before, everyone with zero tasks was always skipped. If `AISENSY_TASK_MORNING_CAMPAIGN` still says
+`task_morning_kickoff_v1`, the old one-blank format is used automatically (no mismatched sends). Fixed: the "tasks" reply
+always said "Reply done 2" even with one task — it now names the first OPEN task (or "All done for today ✅"); the AI-down
+help no longer names a fixed number. Tests: rollout 45/45; regression unchanged.
+
+**Added 2026-10-12 (2):**
+- **Midday team progress:** with the Midday reminder rule, reporting managers (their department) and superusers (all
+  departments) get `task_manager_team_digest_v1` **only when something in that scope is still pending**; once a day,
+  tracked separately from the evening digest so neither blocks the other. Like all rules, it reaches only the people the
+  rule targets (a department-scoped Midday rule covers that department's manager; superusers need a rule that includes them).
+- **Learning loop drafts with Gemini** (different model family, doctrine L6): `gemini-3.8-flash` → `gemini-2.5-flash` →
+  falls back to `glm-5.3-flash`, so the loop never stops. Key: `GEMINI_AUTOTUNE_API_KEY` (free AI Studio key, added by the
+  owner; verified with one tiny call — 2.5-flash OK, 3.8-flash was temporarily busy). The drafting model is recorded on each
+  version. The safety test still uses the live models.
+- **Fixed a Phase 5 bug:** the section validator rejected any blank line, but the built-in instructions use blank separator
+  lines — so every draft that kept the layout was rejected. Blank separators are now allowed; a section must still contain text.
+- Tests: `test_template_rollout.ts` 59/59; full regression green except the old `SuperuserPanel.tsx` check; type check clean.
+
+**Added 2026-10-12 (3):**
+- **Superusers' midday company progress no longer needs its own rule:** whenever ANY team or company Midday rule runs
+  (first one each day), every superuser also gets the all-company progress — only if something is pending. Same safety
+  filters as any rule (sandbox numbers while the sandbox is ON, Task Manager access check). A personal reminder never
+  triggers it.
+- **"Manager Role Assignment & WhatsApp Kickoff" card removed** from the Task Manager console. Its essential part — make /
+  remove a reporting manager — is now a "Make manager / Remove manager" link per person in the **Task Access** panel (same
+  database change and audit events; a superuser is never silently downgraded). Unlocking people still works through
+  "Mark kickoff as sent (manual)". The manager-role API stays: other cards on the page still load from it.
+- **Custom wording removed** from the Notifications tab: scheduled messages are template-only, so custom text was never
+  delivered (only shown in the preview). Saving a rule clears old custom text.
+- Tests: `test_template_rollout.ts` 66/66; regression green except the old `SuperuserPanel.tsx` check; type check clean.
+- **Voice notes switch (2026-10-12):** "Voice notes" is now an ON/OFF button under the bot switches in the **Task Access**
+  panel (stored with the other switches, takes effect within ~30 s, no redeploy). `VOICE_NOTES_ENABLED=true` still forces it
+  ON. Leave `VOICE_NOTES_ALLOWED_PHONES` empty so everyone unlocked for the Task Manager can use it; with sandbox ON only
+  sandbox numbers can. Needs `GROQ_VOICE_API_KEY` in Vercel. Tests: `test_template_rollout.ts` 71/71, voice tests green.

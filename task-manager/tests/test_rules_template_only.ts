@@ -41,7 +41,7 @@ async function run() {
     check('kill switch still blocks a template-only send', blocked === false && calls.length === 0, calls);
 
     check('each rule type maps to its approved template',
-        M.getCampaignForRuleType('morning_digest') === 'task_morning_kickoff_v1'
+        M.getCampaignForRuleType('morning_digest') === 'task_morning_kickoff_v2'
         && M.getCampaignForRuleType('pending_reminder') === 'task_midday_reminder_v1'
         && M.getCampaignForRuleType('eod_summary') === 'task_eod_summary_v1');
 

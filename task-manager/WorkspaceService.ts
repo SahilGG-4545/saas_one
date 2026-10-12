@@ -3,7 +3,8 @@ import { TaskDatabaseService } from './TaskDatabaseService';
 import { TaskAccessService } from './TaskAccessService';
 import { PermissionService } from './PermissionService';
 import { HierarchyService } from './HierarchyService';
-import { personLabel, sendTaskAssigned, sendTaskUpdate } from './taskAlerts';
+import { personLabel, sendTaskAssigned, sendTaskHandover } from './taskAlerts';
+import { notifyGiversOfCompletion } from './completionNotice';
 import { Employee, TaskAssignment, TaskStatus } from './types';
 
 /**
@@ -422,9 +423,9 @@ export class WorkspaceService {
 
         // Tell the receiver who gave it (names only; gated, so nothing is sent in Pretend Mode). Never blocks the hand-over.
         // Approved template, so it reaches people outside WhatsApp's 24-hour window too.
-        void sendTaskAssigned(target.phone_number, {
-            titles: [row.title], fromLabel: `${personLabel(actor.name, actor.department_name)}, handed over`, date: row.assigned_date,
-            messageType: 'task_handover', departmentId: target.department_id || undefined,
+        void sendTaskHandover(target.phone_number, {
+            recipientName: target.name, fromLabel: personLabel(actor.name, actor.department_name), titles: [row.title], date: row.assigned_date,
+            departmentId: target.department_id || undefined,
         });
 
         return { task: moved as TaskAssignment, toName: target.name };
@@ -541,40 +542,21 @@ export class WorkspaceService {
     }
 
     /**
-     * A superuser finished a task someone else gave him: tell that person, in plain words.
-     * Goes through the same safety gate as every other message (kill switches, Pretend Mode, sandbox) as the approved
-     * `task_update_v2` template, so it also reaches people outside WhatsApp's 24-hour window. Told at most once an hour per task (dragging it out of Done and back must not repeat it).
-     * Never throws: a failed notice must not undo or fail the status change.
+     * Someone finished a task another person gave them: tell the giver (approved template task_completed_notice_v1, every
+     * completion — owner decision 2026-10-12). Rules (once an hour per task, grouping, never throws) live in completionNotice.ts.
      */
     private static async notifyAssignerOfCompletion(row: any): Promise<void> {
-        try {
-            if (!row.assigned_by || row.assigned_by === row.employee_id) return;
-            const [holder, assigner] = await Promise.all([TaskDatabaseService.getEmployeeById(row.employee_id), TaskDatabaseService.getEmployeeById(row.assigned_by)]);
-            if (!holder || holder.role !== 'superuser' || !assigner || !assigner.active) return;
-            if (!assigner.phone_number || assigner.phone_number.trim().length < 10) return;
-
-            const since = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-            const { data: recent } = await supabaseAdmin.from('task_audit_logs').select('id')
-                .eq('event_type', 'task_completion_notified').eq('task_id', row.id).gte('created_at', since).limit(1);
-            if (recent && recent.length > 0) return;
-
-            await TaskDatabaseService.logAudit({
-                eventType: 'task_completion_notified',
-                actorId: holder.id,
-                targetEmployeeId: assigner.id,
-                taskId: row.id,
-                details: { title: row.title, via: 'web_tasks_tab' },
-            });
-            void sendTaskUpdate(assigner.phone_number, {
-                titles: [row.title], assigneeLabel: personLabel(holder.name, holder.department_name), update: 'Finished ✅',
-                messageType: 'task_completed_relay', departmentId: assigner.department_id || undefined,
-            });
-        } catch (err: any) {
-            console.error('[WorkspaceService] completion notice failed:', err?.message || err);
-        }
+        await notifyGiversOfCompletion([row]);
     }
 
-    static async setStatus(actorUserId: string, input: { taskId?: string; status?: string }): Promise<TaskAssignment> {
+    /** One grouped completion notice for tasks that were completed quietly (`notifyGiver: false`), e.g. "done all". */
+    static async notifyCompleted(taskIds: string[]): Promise<number> {
+        if (!taskIds.length) return 0;
+        const { data } = await supabaseAdmin.from('task_assignments').select('id, title, employee_id, assigned_by, status').in('id', taskIds);
+        return notifyGiversOfCompletion((data || []).filter(r => r.status === 'completed') as any[]);
+    }
+
+    static async setStatus(actorUserId: string, input: { taskId?: string; status?: string; notifyGiver?: boolean }): Promise<TaskAssignment> {
         if (!input.taskId) throw new WorkspaceError(400, 'Missing task.');
         if (!['pending', 'in_progress', 'completed'].includes(input.status || '')) {
             throw new WorkspaceError(400, 'Status must be pending, in_progress or completed.');
@@ -601,7 +583,8 @@ export class WorkspaceService {
             details: { title: row.title, from: row.status, to: input.status, via: 'web_tasks_tab' },
         });
 
-        if (input.status === 'completed' && row.status !== 'completed') await this.notifyAssignerOfCompletion(row);
+        // notifyGiver:false → the caller sends ONE grouped notice (or a superuser's reply is relayed instead).
+        if (input.status === 'completed' && row.status !== 'completed' && input.notifyGiver !== false) await this.notifyAssignerOfCompletion(row);
 
         return updated;
     }

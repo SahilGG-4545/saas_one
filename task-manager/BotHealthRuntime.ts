@@ -4,6 +4,9 @@ import { computeBotHealth, alertKinds, singleLineAlert, type BotHealthMetrics } 
 import { TaskDatabaseService } from './TaskDatabaseService';
 import { TaskMessagingService } from './TaskMessagingService';
 
+/** Approved template "System Incident Alert" — one blank: the incident details (one line). */
+export const ADMIN_ALERT_CAMPAIGN = process.env.AISENSY_BOT_ADMIN_ALERT_CAMPAIGN || 'whatsapp_bot_admin_alert_v2';
+
 export async function readBotHealth(now = new Date()): Promise<BotHealthMetrics & { window15: { apologies: number; aiFailures: number; brainMessages: number } }> {
     const since24 = new Date(now.getTime() - 86400_000).toISOString(), since15 = new Date(now.getTime() - 15 * 60_000).toISOString();
     const [ledger, audits, reviews] = await Promise.all([
@@ -32,7 +35,7 @@ export async function sendHealthAlerts(now = new Date()): Promise<number> {
         if (count) continue;
         const text = singleLineAlert(kind === 'apology_spike' ? `Bot health alert: ${health.window15.apologies} apologies in the last 15 minutes. Open Task Manager Bot Health.` : `Bot health alert: ${health.window15.aiFailures} of ${health.window15.brainMessages} Smart-chat messages had AI failures in the last 15 minutes. Open Task Manager Bot Health.`);
         await TaskDatabaseService.logAudit({ eventType: 'bot_admin_alert_attempted', details: { kind, recipients: admins.length } });
-        let delivered = 0; for (const admin of admins) if (await TaskMessagingService.sendTemplateNotification({ phone: admin.phone, campaignName: 'whatsapp_bot_admin_alert_v2', templateParams: [text] })) { sent++; delivered++; }
+        let delivered = 0; for (const admin of admins) if (await TaskMessagingService.sendTemplateNotification({ phone: admin.phone, campaignName: ADMIN_ALERT_CAMPAIGN, templateParams: [text] })) { sent++; delivered++; }
         await TaskDatabaseService.logAudit({ eventType: delivered ? 'bot_admin_alert_sent' : 'bot_admin_alert_failed', details: { kind, recipients: admins.length, delivered } });
     }
     return sent;
@@ -44,6 +47,6 @@ export async function alertWaitingPrompt(promptId: string, summary: string): Pro
     const admins = (await TaskDatabaseService.getTestingConfig()).botAlertAdmins || []; let delivered = 0;
     const text = singleLineAlert(`A new AI-instruction version is waiting for approval: ${summary}. Open Prompt versions to review it.`);
     await TaskDatabaseService.logAudit({ eventType: 'bot_prompt_waiting_alert_attempted', details: { promptId, recipients: admins.length } });
-    for (const admin of admins) if (await TaskMessagingService.sendTemplateNotification({ phone: admin.phone, campaignName: 'whatsapp_bot_admin_alert_v2', templateParams: [text] })) delivered++;
+    for (const admin of admins) if (await TaskMessagingService.sendTemplateNotification({ phone: admin.phone, campaignName: ADMIN_ALERT_CAMPAIGN, templateParams: [text] })) delivered++;
     await TaskDatabaseService.logAudit({ eventType: delivered ? 'bot_prompt_waiting_alert_sent' : 'bot_prompt_waiting_alert_failed', details: { promptId, recipients: admins.length, delivered } }); return delivered;
 }

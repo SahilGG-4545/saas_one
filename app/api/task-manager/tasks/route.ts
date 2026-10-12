@@ -3,6 +3,7 @@ import { supabaseAdmin } from '@/backend/lib/supabase/admin';
 import { PermissionService, PermissionDeniedError } from '@/task-manager/PermissionService';
 import { TaskDatabaseService } from '@/task-manager/TaskDatabaseService';
 import { personLabel, sendTaskAssigned } from '@/task-manager/taskAlerts';
+import { notifyGiversOfCompletion } from '@/task-manager/completionNotice';
 import { TaskAccessService } from '@/task-manager/TaskAccessService';
 import { requireActor } from '../_shared/adminGuard';
 import { TaskAssignment } from '@/task-manager/types';
@@ -251,6 +252,9 @@ export async function POST(request: NextRequest) {
                 taskId: updated.id,
                 details: { newStatus: status }
             });
+
+            // Tell whoever gave the task (approved template, every completion; never fails the request).
+            if (status === 'completed' && (taskRow as TaskAssignment).status !== 'completed') void notifyGiversOfCompletion([taskRow as TaskAssignment]);
 
             return NextResponse.json({ success: true, task: updated });
         }

@@ -12,8 +12,7 @@ import TimeWheelPicker from './TimeWheelPicker';
  * "Preview" is a simulation that sends and writes nothing.
  */
 
-type RuleType = 'morning_digest' | 'pending_reminder' | 'eod_summary';
-type Field = 'headerGreeting' | 'customMessage' | 'footerInstruction';
+type RuleType = 'morning_digest' | 'pending_reminder' | 'eod_summary' | 'overdue_alert';
 
 interface ServerRule {
     id: string;
@@ -51,8 +50,9 @@ interface Preview {
 
 const TYPES: Array<{ id: RuleType; label: string; time: string; blurb: string; icon: React.ReactNode }> = [
     { id: 'morning_digest', label: 'Morning list', time: '09:00', blurb: 'Everyone gets their tasks for the day.', icon: <Sun className="h-4 w-4" /> },
-    { id: 'pending_reminder', label: 'Midday reminder', time: '14:30', blurb: 'Only people with unfinished tasks.', icon: <Clock className="h-4 w-4" /> },
-    { id: 'eod_summary', label: 'Evening summary', time: '18:30', blurb: 'What got done and what carries over.', icon: <Moon className="h-4 w-4" /> },
+    { id: 'pending_reminder', label: 'Midday reminder', time: '14:30', blurb: 'Only people with unfinished tasks. Managers also get team progress if anything is pending.', icon: <Clock className="h-4 w-4" /> },
+    { id: 'eod_summary', label: 'Evening summary', time: '18:30', blurb: 'What got done and what carries over. Managers also get a team summary.', icon: <Moon className="h-4 w-4" /> },
+    { id: 'overdue_alert', label: 'Overdue alert', time: '10:00', blurb: 'Only people with tasks overdue from earlier days.', icon: <AlertTriangle className="h-4 w-4" /> },
 ];
 const typeOf = (t: RuleType) => TYPES.find(x => x.id === t) ?? TYPES[0];
 
@@ -60,9 +60,6 @@ const DAYS: Array<{ n: number; short: string; long: string }> = [
     { n: 1, short: 'M', long: 'Monday' }, { n: 2, short: 'T', long: 'Tuesday' }, { n: 3, short: 'W', long: 'Wednesday' },
     { n: 4, short: 'T', long: 'Thursday' }, { n: 5, short: 'F', long: 'Friday' }, { n: 6, short: 'S', long: 'Saturday' }, { n: 0, short: 'S', long: 'Sunday' },
 ];
-const VARIABLE_HELP: Record<string, string> = {
-    firstName: 'first name', fullName: 'full name', totalTasks: 'task count', pendingTasks: 'unfinished', completedTasks: 'finished', date: 'date',
-};
 
 const fromServer = (r: ServerRule): Draft => ({
     key: r.id, id: r.id, name: r.name, ruleType: r.ruleType, targetTimeIST: r.targetTimeIST, daysOfWeek: r.daysOfWeek || [], enabled: r.enabled !== false,
@@ -72,7 +69,9 @@ const fromServer = (r: ServerRule): Draft => ({
 
 const toPayload = (d: Draft) => ({
     id: d.id, name: d.name, ruleType: d.ruleType, targetTimeIST: d.targetTimeIST, daysOfWeek: d.daysOfWeek, enabled: d.enabled,
-    customTemplate: { headerGreeting: d.headerGreeting, customMessage: d.customMessage, footerInstruction: d.footerInstruction, includeQuickReplies: d.includeQuickReplies },
+    // Custom wording was removed (2026-10-12): scheduled messages are sent ONLY as approved templates, so custom text was
+    // never delivered — it only showed in the preview. Saving sends the standard wording, which also clears any old custom text.
+    customTemplate: { headerGreeting: '', customMessage: '', footerInstruction: '', includeQuickReplies: true },
 });
 
 const signature = (d: Draft) => JSON.stringify({ ...toPayload(d), lastRunSummary: undefined });
@@ -88,12 +87,11 @@ function Switch({ on, disabled, onChange, label }: { on: boolean; disabled?: boo
     );
 }
 
-function RuleCard({ draft, baseline, canEdit, variables, department, endpoint, personal, onChange, onSave, onDelete, onSendNow, countAudience, saving }: {
-    draft: Draft; baseline: string | null; canEdit: boolean; variables: string[]; department: string; endpoint: string; personal: boolean;
+function RuleCard({ draft, baseline, canEdit, department, endpoint, personal, onChange, onSave, onDelete, onSendNow, countAudience, saving }: {
+    draft: Draft; baseline: string | null; canEdit: boolean; department: string; endpoint: string; personal: boolean;
     onChange: (d: Draft) => void; onSave: () => void; onDelete: () => void; onSendNow: (confirm: boolean) => Promise<void>; countAudience: () => Promise<number>; saving: boolean;
 }) {
     const reduce = !!useReducedMotion();
-    const [customize, setCustomize] = useState(!!(draft.headerGreeting || draft.customMessage || draft.footerInstruction));
     const [showPreview, setShowPreview] = useState(false);
     const [preview, setPreview] = useState<Preview | null>(null);
     const [previewError, setPreviewError] = useState<string | null>(null);
@@ -101,7 +99,6 @@ function RuleCard({ draft, baseline, canEdit, variables, department, endpoint, p
     const [confirmDelete, setConfirmDelete] = useState(false);
     const [sending, setSending] = useState(false);
     const [confirmSend, setConfirmSend] = useState<number | null>(null); // how many people a team send would reach
-    const lastField = useRef<Field>('customMessage');
     const t = typeOf(draft.ruleType);
     const dirty = baseline === null || baseline !== signature(draft);
 
@@ -145,9 +142,7 @@ function RuleCard({ draft, baseline, canEdit, variables, department, endpoint, p
 
     const set = (patch: Partial<Draft>) => onChange({ ...draft, ...patch });
     const toggleDay = (n: number) => set({ daysOfWeek: draft.daysOfWeek.includes(n) ? draft.daysOfWeek.filter(d => d !== n) : [...draft.daysOfWeek, n] });
-    const insertVariable = (v: string) => set({ [lastField.current]: `${draft[lastField.current]}{{${v}}}` } as Partial<Draft>);
 
-    const input = 'w-full rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none transition-colors placeholder:text-zinc-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100';
     const cap = 'text-[10px] font-black uppercase tracking-widest text-zinc-500';
 
     return (
@@ -188,39 +183,6 @@ function RuleCard({ draft, baseline, canEdit, variables, department, endpoint, p
                 </div>
             </div>
 
-            {canEdit && (
-                <div>
-                    <button type="button" onClick={() => setCustomize(c => !c)} className="text-xs font-bold text-indigo-600 hover:underline dark:text-indigo-300">
-                        {customize ? 'Use the standard wording' : 'Customize the wording'}
-                    </button>
-                    <AnimatePresence initial={false}>
-                        {customize && (
-                            <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.35, ease: EASE }} className="overflow-hidden">
-                                <div className="space-y-3 pt-3">
-                                    <label className="block"><span className={cap}>Greeting</span>
-                                        <input id={`rule-greeting-${draft.key}`} value={draft.headerGreeting} onFocus={() => { lastField.current = 'headerGreeting'; }} onChange={e => set({ headerGreeting: e.target.value })} maxLength={300} placeholder="Good morning {{firstName}}!" className={`${input} mt-1.5`} /></label>
-                                    <label className="block"><span className={cap}>Message</span>
-                                        <textarea id={`rule-message-${draft.key}`} rows={2} value={draft.customMessage} onFocus={() => { lastField.current = 'customMessage'; }} onChange={e => set({ customMessage: e.target.value })} maxLength={1000} placeholder="Optional note for the team" className={`${input} mt-1.5 resize-none`} /></label>
-                                    <label className="block"><span className={cap}>Closing line</span>
-                                        <input id={`rule-footer-${draft.key}`} value={draft.footerInstruction} onFocus={() => { lastField.current = 'footerInstruction'; }} onChange={e => set({ footerInstruction: e.target.value })} maxLength={500} placeholder="You have {{pendingTasks}} left today" className={`${input} mt-1.5`} /></label>
-                                    <div className="flex flex-wrap items-center gap-1.5">
-                                        <span className="text-[11px] font-bold text-zinc-500">Insert:</span>
-                                        {variables.map(v => (
-                                            <button key={v} type="button" onClick={() => insertVariable(v)} className="rounded-lg bg-zinc-100 px-2 py-1 text-[11px] font-bold text-zinc-700 transition-colors hover:bg-indigo-100 hover:text-indigo-700 dark:bg-zinc-800 dark:text-zinc-300">
-                                                {VARIABLE_HELP[v] || v}
-                                            </button>
-                                        ))}
-                                    </div>
-                                    <label className="flex items-center gap-2 text-xs font-semibold text-zinc-600 dark:text-zinc-300">
-                                        <input id={`rule-quick-${draft.key}`} type="checkbox" checked={draft.includeQuickReplies} onChange={e => set({ includeQuickReplies: e.target.checked })} />
-                                        Add the reply hints (&ldquo;done 1&rdquo;, &ldquo;done all&rdquo;)
-                                    </label>
-                                </div>
-                            </motion.div>
-                        )}
-                    </AnimatePresence>
-                </div>
-            )}
 
             <div>
                 <button type="button" onClick={() => setShowPreview(p => !p)} className="flex items-center gap-1.5 text-xs font-bold text-zinc-600 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-100">
@@ -421,7 +383,7 @@ export default function NotificationsView({ departmentName = 'Procurement', pers
                     <h3 className="text-sm font-black text-zinc-900 dark:text-zinc-100">{personal ? 'Your own WhatsApp notifications' : `WhatsApp notifications for ${meta.departmentName}`}</h3>
                     <p className="text-xs leading-relaxed text-zinc-500">
                         {personal ? 'Choose when you get your own task messages. They go only to you, with the tasks assigned to you.' : 'Choose when your team gets its task messages.'} A message goes out within about 15 minutes of the time you pick.
-                        Messages are sent as WhatsApp's approved template (morning, midday or end-of-day), so they reach everyone; custom wording is not sent.
+                        Messages are sent as WhatsApp&apos;s approved templates, so they reach everyone, even people who have not messaged the bot recently.
                     </p>
                 </div>
             </div>
@@ -448,7 +410,7 @@ export default function NotificationsView({ departmentName = 'Procurement', pers
 
             <AnimatePresence initial={false}>
                 {ordered.map(d => (
-                    <RuleCard key={d.key} draft={d} baseline={d.id ? baselines[d.key] ?? null : null} canEdit={meta.canEdit} variables={meta.variables} department={departmentName} endpoint={endpoint} personal={personal}
+                    <RuleCard key={d.key} draft={d} baseline={d.id ? baselines[d.key] ?? null : null} canEdit={meta.canEdit} department={departmentName} endpoint={endpoint} personal={personal}
                         onChange={next => setDrafts(prev => prev.map(x => (x.key === d.key ? next : x)))}
                         onSave={() => save(d)} onDelete={() => remove(d)} onSendNow={c => sendNow(d, c)} countAudience={() => countAudience(d)} saving={savingKey === d.key} />
                 ))}
