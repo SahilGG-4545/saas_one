@@ -195,14 +195,12 @@ const SoftServiceManagerDashboard: React.FC<SoftServiceManagerDashboardProps> = 
                                 <Smartphone className="w-4 h-4" />
                                 Client Support
                             </button>
+                            <PettyCashNavLink onNavigate={() => setSidebarOpen(false)} />
                         </div>
                     </div>
 
 
-                    <div className="mb-6" data-navigation-section="management-hub">
-                        <p className="px-4 mb-3 text-[10px] font-bold uppercase tracking-widest text-text-secondary">Management Hub</p>
-                        <PettyCashNavLink onNavigate={() => setSidebarOpen(false)} />
-                    </div>
+
 {/* System & Personal */}
                     <div className="mb-6">
                         <p className="px-4 text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] mb-3 flex items-center gap-2">
