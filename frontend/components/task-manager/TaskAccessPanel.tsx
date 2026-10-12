@@ -143,6 +143,16 @@ export default function TaskAccessPanel({ orgId }: { orgId?: string }) {
         post(`notif-${d.departmentId}`, { action: 'set_notifications_delegated', departmentId: d.departmentId, enabled: next });
     };
 
+    // Reporting manager (moved here from the old "Manager Role Assignment & WhatsApp Kickoff" card, 2026-10-12).
+    const toggleManager = (m: AccessMember) => {
+        const next = m.taskRole !== 'reporting_manager';
+        const text = next
+            ? `Make ${m.name} a REPORTING MANAGER?\n\nThey can see and assign tasks across their department, and get their team's progress at midday (if anything is pending) and in the evening. No WhatsApp message is sent by this button. You can remove this later.`
+            : `Remove ${m.name}'s manager role?\n\nThey go back to a normal employee.`;
+        if (!window.confirm(text)) return;
+        post(`manager-${m.userId}`, { action: 'set_manager', userId: m.userId, enabled: next });
+    };
+
     const toggleSuperuser = (m: AccessMember) => {
         const next = m.taskRole !== 'superuser';
         const text = next
@@ -496,6 +506,16 @@ Their files and images go back to being handled exactly as before.`;
                                                         </span>
                                                     )}
                                                 </div>
+                                                {provisioned && m.taskRole !== 'superuser' && (
+                                                    <button
+                                                        type="button"
+                                                        disabled={busyKey === `manager-${m.userId}`}
+                                                        onClick={() => toggleManager(m)}
+                                                        className={`text-[11px] font-bold underline cursor-pointer disabled:opacity-50 mr-3 ${m.taskRole === 'reporting_manager' ? 'text-rose-600 hover:text-rose-800' : 'text-emerald-700 hover:text-emerald-900'}`}
+                                                    >
+                                                        {m.taskRole === 'reporting_manager' ? 'Remove manager' : 'Make manager'}
+                                                    </button>
+                                                )}
                                                 {provisioned && (
                                                     <button
                                                         type="button"

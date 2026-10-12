@@ -69,7 +69,7 @@ async function run() {
   check('resumed evaluation keeps one baseline and skips completed sides', /baselineSections/.test(hs) && /target\.some\([^\n]+item\.c\.id/.test(hs));
   check('evaluation uses the shipped understanding/reply fallback mix', !/interpretModels:\s*\[/.test(hs) && !/replyModels:\s*\[/.test(hs));
   check('provider-unavailable eval cases enter the persisted three-attempt retry path', /r\.status === 'ai_unavailable'/.test(hs) && /state\.attempts\[key\] >= 3/.test(hs));
-  check('each provider call charges its worst-case reservation before dispatch', /state\.costUsd \+= reserve;\s*return base\.complete\(req\)/.test(hs));
+  check('each provider call reserves its worst case before dispatch, then is charged what it really used (and evals skip the reply)', /state\.costUsd \+= reserve;\s*const res = await base\.complete\(req\)/.test(hs) && /state\.costUsd \+= used - reserve/.test(hs) && /skipReply: true/.test(hs));
   check('live-case database errors abort evaluation instead of silently dropping the group', /if \(error\) throw error/.test(hs));
   check('an invalid nightly draft is saved rejected once and remains retryable later', /status:\s*'rejected'/.test(hs) && /source_label_at:\s*null/.test(hs));
   check('successful sends remove only provisional observations', /clearAnsweredObservations/.test(svc) && /clearAnsweredObservations/.test(msg));

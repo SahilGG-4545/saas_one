@@ -6,14 +6,12 @@ import {
     Shield,
     CheckCircle2,
     AlertCircle,
-    UserCheck,
     UserX,
     Users,
     Send,
     RefreshCw,
     Search,
     Phone,
-    Mail,
     Building2,
     Sparkles,
     ArrowRight,
@@ -344,13 +342,11 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
     const [departments, setDepartments] = useState<DepartmentItem[]>([]);
     const [departmentSummaries, setDepartmentSummaries] = useState<Record<string, DepartmentSummaryItem>>({});
     const [selectedDepartmentId, setSelectedDepartmentId] = useState<string>('');
-    const [deptFilterScope, setDeptFilterScope] = useState<'department' | 'all'>('department');
     const [techSummary, setTechSummary] = useState<TechSummary | null>(null);
     const [loading, setLoading] = useState(true);
     const [actionLoading, setActionLoading] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
     const [selectedEmployeeId, setSelectedEmployeeId] = useState<string>('');
-    const [sendKickoff, setSendKickoff] = useState(true);
 
     // Cron Schedule & Multi-Rule Engine State
     const [cronTiming, setCronTiming] = useState('09:00');
@@ -1549,59 +1545,6 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
         return full.includes(searchQuery.toLowerCase());
     });
 
-    const selectedEmployee = employees.find(e => e.id === selectedEmployeeId);
-
-    // Handle Assign, Remove Role, or Employee Kickoff
-    const handleRoleAction = async (action: 'assign_manager' | 'remove_manager' | 'send_employee_kickoff') => {
-        if (!selectedEmployee) return;
-        setActionLoading(true);
-        setStatusMessage(null);
-
-        try {
-            const res = await fetch('/api/task-manager/manager-role', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    employeeId: selectedEmployee.id,
-                    action,
-                    sendKickoff
-                })
-            });
-
-            const data = await res.json();
-            if (!res.ok || !data.success) {
-                throw new Error(data.error || 'Failed to execute action');
-            }
-
-            setStatusMessage({
-                type: 'success',
-                title: data.message,
-                details: data.whatsappDetails || (data.details ? JSON.stringify(data.details) : undefined)
-            });
-
-            // Refresh data
-            await fetchData();
-        } catch (err: any) {
-            setStatusMessage({
-                type: 'error',
-                title: 'Operation Failed',
-                details: err.message
-            });
-        } finally {
-            setActionLoading(false);
-        }
-    };
-
-    // Quick select helper
-    const quickSelect = (term: string) => {
-        const found = employees.find(e =>
-            e.phone?.includes(term) ||
-            e.first_name?.toLowerCase().includes(term.toLowerCase()) ||
-            e.email?.toLowerCase().includes(term.toLowerCase())
-        );
-        if (found) setSelectedEmployeeId(found.id);
-    };
-
     // Sleek Loading State matching Task Manager
     if (loading) {
         return (
@@ -1639,15 +1582,6 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
         whatsappStatus: 'active',
         rulesCount: 3
     };
-
-    const departmentMembers = (employees || []).filter(e => 
-        e.department_id === currentDepartment?.id ||
-        (e.department && currentDepartment && e.department.toLowerCase() === currentDepartment.name.toLowerCase())
-    );
-
-    const displayedEmployees = deptFilterScope === 'department' && departmentMembers.length > 0
-        ? departmentMembers
-        : employees;
 
     const totalDepartmentsCount = departments.length || 14;
     const totalEmployeesCount = employees.length || 124;
@@ -3197,195 +3131,6 @@ export default function TaskManagerTestingDashboard({ orgId }: { orgId?: string 
 
             {/* Step 2: Read-only reporting chain preview (from reporting_manager_id) */}
             <OrgHierarchyPanel orgId={orgId} />
-
-            {/* Main Interactive Control Card */}
-            <div className={`bg-white border border-slate-200 rounded-3xl p-6 md:p-8 shadow-sm space-y-6 ${animationStep >= 4 ? 'tm-slide-up-visible' : 'tm-slide-up-hidden'}`}>
-                <div>
-                    <h2 className="text-lg font-black text-slate-900 tracking-tight flex items-center gap-2">
-                        <UserCheck className="w-5 h-5 text-primary" />
-                        Manager Role Assignment & WhatsApp Kickoff
-                    </h2>
-                    <p className="text-xs text-slate-500 mt-1">
-                        Select an employee to promote to Reporting Manager or demote back to Employee. When promoted, an official Meta-approved kickoff template is sent to open their 24h WhatsApp window.
-                    </p>
-                </div>
-
-                {/* Quick Shortcuts */}
-                <div className="flex items-center gap-2 flex-wrap text-xs">
-                    <span className="font-bold text-slate-400">Quick Select:</span>
-                    <button
-                        type="button"
-                        onClick={() => quickSelect('8433649199')}
-                        className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-bold transition-colors cursor-pointer"
-                    >
-                        👤 Myself (Sahil Gorde)
-                    </button>
-                    {currentDepartmentSummary?.manager && (
-                        <button
-                            type="button"
-                            onClick={() => setSelectedEmployeeId(currentDepartmentSummary.manager!.id)}
-                            className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-lg font-bold transition-colors cursor-pointer"
-                        >
-                            👑 {currentDepartment?.name} Manager ({currentDepartmentSummary.manager.first_name})
-                        </button>
-                    )}
-                    <button
-                        type="button"
-                        onClick={() => quickSelect('9100256500')}
-                        className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-bold transition-colors cursor-pointer"
-                    >
-                        👑 Lohitaksha Ranganathan
-                    </button>
-                    <button
-                        type="button"
-                        onClick={() => quickSelect('7028232515')}
-                        className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-bold transition-colors cursor-pointer"
-                    >
-                        ⚡ Harsh Patil
-                    </button>
-                </div>
-
-                {/* Dropdown Selector */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                        <div className="flex items-center justify-between mb-2">
-                            <label className="text-xs font-black text-slate-700 uppercase tracking-wider">
-                                Select Employee
-                            </label>
-                            {/* Scope Filter: Selected Dept vs All Company Staff */}
-                            <div className="flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200">
-                                <button
-                                    type="button"
-                                    onClick={() => setDeptFilterScope('department')}
-                                    className={`px-2 py-0.5 text-[10px] font-extrabold rounded-md transition-all cursor-pointer ${
-                                        deptFilterScope === 'department'
-                                            ? 'bg-white text-slate-900 shadow-2xs'
-                                            : 'text-slate-500 hover:text-slate-900'
-                                    }`}
-                                >
-                                    {currentDepartment?.name || 'Dept'} ({departmentMembers.length})
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => setDeptFilterScope('all')}
-                                    className={`px-2 py-0.5 text-[10px] font-extrabold rounded-md transition-all cursor-pointer ${
-                                        deptFilterScope === 'all'
-                                            ? 'bg-white text-slate-900 shadow-2xs'
-                                            : 'text-slate-500 hover:text-slate-900'
-                                    }`}
-                                >
-                                    All Staff ({employees.length})
-                                </button>
-                            </div>
-                        </div>
-                        <select
-                            value={selectedEmployeeId}
-                            onChange={(e) => setSelectedEmployeeId(e.target.value)}
-                            className="w-full px-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all"
-                        >
-                            {displayedEmployees.map(emp => (
-                                <option key={emp.id} value={emp.id}>
-                                    {emp.first_name} {emp.last_name || ''} ({emp.department || 'No Dept'}) — [{emp.task_role}]
-                                </option>
-                            ))}
-                        </select>
-                    </div>
-
-                    {/* Kickoff Template Toggle */}
-                    <div className="flex items-center">
-                        <label className="flex items-center gap-3 p-3 bg-slate-50 border border-slate-200 rounded-xl cursor-pointer w-full hover:bg-slate-100/70 transition-colors">
-                            <input
-                                type="checkbox"
-                                checked={sendKickoff}
-                                onChange={(e) => setSendKickoff(e.target.checked)}
-                                className="w-4 h-4 text-primary rounded border-slate-300 focus:ring-primary"
-                            />
-                            <div>
-                                <span className="text-xs font-bold text-slate-900 block">
-                                    Send Meta-approved WhatsApp Kickoff Template
-                                </span>
-                                <span className="text-[11px] text-slate-500 block">
-                                    Dispatches campaign template to invite the user and open the 24-hr session.
-                                </span>
-                            </div>
-                        </label>
-                    </div>
-                </div>
-
-                {/* Selected Employee Card */}
-                {selectedEmployee && (
-                    <div className="p-4 bg-slate-50/80 border border-slate-200 rounded-2xl flex flex-col md:flex-row md:items-center justify-between gap-4">
-                        <div className="space-y-1">
-                            <div className="flex items-center gap-2">
-                                <span className="text-sm font-black text-slate-900">
-                                    {selectedEmployee.first_name} {selectedEmployee.last_name || ''}
-                                </span>
-                                <span className={`text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full ${
-                                    selectedEmployee.task_role === 'reporting_manager'
-                                        ? 'bg-emerald-500 text-white'
-                                        : 'bg-slate-300 text-slate-700'
-                                }`}>
-                                    Current: {selectedEmployee.task_role}
-                                </span>
-                            </div>
-                            <div className="flex flex-wrap items-center gap-4 text-xs text-slate-500 font-medium">
-                                <span className="flex items-center gap-1 font-mono">
-                                    <Phone className="w-3 h-3 text-slate-400" />
-                                    {selectedEmployee.phone || 'No phone set'}
-                                </span>
-                                <span className="flex items-center gap-1">
-                                    <Mail className="w-3 h-3 text-slate-400" />
-                                    {selectedEmployee.email}
-                                </span>
-                                <span className="flex items-center gap-1">
-                                    <Building2 className="w-3 h-3 text-slate-400" />
-                                    {selectedEmployee.department || 'Unassigned'}
-                                </span>
-                            </div>
-                        </div>
-
-                        {/* Action Buttons */}
-                        <div className="flex items-center gap-2 self-start md:self-auto flex-wrap">
-                            {/* Assign Role Button */}
-                            <button
-                                type="button"
-                                disabled={actionLoading || !selectedEmployee.phone}
-                                onClick={() => handleRoleAction('assign_manager')}
-                                className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs shadow-sm hover:shadow transition-all disabled:opacity-50"
-                            >
-                                {actionLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <UserCheck className="w-4 h-4" />}
-                                {actionLoading ? 'Assigning...' : 'Assign Reporting Manager & Kickoff'}
-                            </button>
-
-                            {/* Send Employee Kickoff Button */}
-                            <button
-                                type="button"
-                                disabled={actionLoading || !selectedEmployee.phone}
-                                onClick={() => {
-                                    if (window.confirm(`Send official Employee Kickoff (tm_employee_kickoff_v1) to ${selectedEmployee.first_name} on ${selectedEmployee.phone}?`)) {
-                                        handleRoleAction('send_employee_kickoff');
-                                    }
-                                }}
-                                className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-xs shadow-sm hover:shadow transition-all disabled:opacity-50"
-                            >
-                                {actionLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                                {actionLoading ? 'Sending Kickoff...' : 'Send Employee Kickoff'}
-                            </button>
-
-                            {/* Remove Role Button */}
-                            <button
-                                type="button"
-                                disabled={actionLoading}
-                                onClick={() => handleRoleAction('remove_manager')}
-                                className="flex items-center gap-2 px-4 py-2.5 bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 rounded-xl font-bold text-xs shadow-sm transition-all disabled:opacity-50"
-                            >
-                                {actionLoading ? <RefreshCw className="w-4 h-4 animate-spin text-rose-500" /> : <UserX className="w-4 h-4 text-rose-500" />}
-                                {actionLoading ? 'Removing...' : 'Remove Manager Role (Revert)'}
-                            </button>
-                        </div>
-                    </div>
-                )}
-            </div>
 
             {/* Meta Approved Templates & WhatsApp Quick Reply Cheatsheet */}
             <div className={`bg-slate-900 text-white rounded-3xl p-6 md:p-8 space-y-5 ${animationStep >= 5 ? 'tm-slide-up-visible' : 'tm-slide-up-hidden'}`}>

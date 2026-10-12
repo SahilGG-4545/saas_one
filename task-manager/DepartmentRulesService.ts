@@ -20,13 +20,14 @@ export class RulesError extends Error {
     }
 }
 
-export const ALLOWED_RULE_TYPES: ReadonlyArray<NotificationRuleType> = ['morning_digest', 'pending_reminder', 'eod_summary'];
+export const ALLOWED_RULE_TYPES: ReadonlyArray<NotificationRuleType> = ['morning_digest', 'pending_reminder', 'eod_summary', 'overdue_alert'];
 export const TEMPLATE_VARIABLES = ['firstName', 'fullName', 'totalTasks', 'pendingTasks', 'completedTasks', 'date'] as const;
 
 const TYPE_LABEL: Record<string, string> = {
     morning_digest: 'Morning task list',
     pending_reminder: 'Midday reminder',
     eod_summary: 'Evening summary',
+    overdue_alert: 'Overdue alert',
 };
 
 export interface RuleInput {
@@ -44,6 +45,13 @@ export function defaultsFor(ruleType: NotificationRuleType): Pick<NotificationRu
     if (ruleType === 'pending_reminder') {
         return {
             taskFilters: { includeTodayFixed: true, includeTodayAssigned: true, includeYesterdayPending: true, lookbackDays: 1, onlyPending: true },
+            conditions: { skipIfZeroTasks: true, requirePendingOnly: true },
+        };
+    }
+    if (ruleType === 'overdue_alert') {
+        // Only OPEN tasks from earlier days (last 7) — today's tasks are not overdue. Nobody with nothing overdue is messaged.
+        return {
+            taskFilters: { includeTodayFixed: false, includeTodayAssigned: false, includeYesterdayPending: true, lookbackDays: 7, onlyPending: true },
             conditions: { skipIfZeroTasks: true, requirePendingOnly: true },
         };
     }

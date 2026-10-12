@@ -38,7 +38,7 @@ async function run() {
     check('a bad time is refused', validateRuleInput({ ...good, targetTimeIST: '25:99' }).ok === false);
     check('no days is refused', validateRuleInput({ ...good, daysOfWeek: [] }).ok === false);
     check('an unknown placeholder is refused', validateRuleInput({ ...good, customTemplate: { customMessage: 'Hello {{secretData}}' } }).ok === false);
-    check('overdue alerts are not on offer', validateRuleInput({ ...good, ruleType: 'overdue_alert' }).ok === false);
+    check('overdue alerts are on offer (approved task_overdue_alert_v1, owner request 2026-10-12)', validateRuleInput({ ...good, ruleType: 'overdue_alert' }).ok === true);
     check('empty wording means the standard message (no custom template)', (validateRuleInput({ ...good, customTemplate: { headerGreeting: '', customMessage: '' } }) as any).value.customTemplate === undefined);
 
     // ── stubbed world ────────────────────────────────────────────────────────

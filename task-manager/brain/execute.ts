@@ -11,7 +11,10 @@ import type { Action, BrainContext, ProgressState } from './types';
  */
 
 export interface ExecIO {
-    setStatus(actorId: string, taskId: string, status: 'pending' | 'in_progress' | 'completed'): Promise<void>;
+    setStatus(actorId: string, taskId: string, status: 'pending' | 'in_progress' | 'completed', opts?: { notifyGiver?: boolean }): Promise<void>;
+    /** ONE grouped "task completed" notice to each giver for tasks completed quietly (optional: without it, each completion
+     *  notifies on its own). */
+    notifyCompleted?(actorId: string, taskIds: string[]): Promise<void>;
     assign(actorId: string, input: { targetUserId: string; title: string; description?: string; date: string; notify?: boolean }): Promise<void>;
     /** ONE "new task" WhatsApp alert for several tasks created together for the same person (optional: without it, each
      *  assign sends its own alert). */
@@ -61,16 +64,26 @@ export async function executeAction(action: Action, ctx: BrainContext, io: ExecI
     const titleOf = (id: string) => opts.titles?.[id] ?? ctx.tasks.find(t => t.id === id)?.title ?? 'that task';
     const nameOf = (id: string) => (id === me ? 'you' : ctx.people.find(p => p.id === id)?.name ?? 'them');
 
+    /** Mark tasks done; givers get ONE grouped "task completed" notice (or none when a relay already tells them). */
+    const completeAll = async (ids: string[], relayTells: boolean) => {
+        const quiet = relayTells || (!!io.notifyCompleted && ids.length > 0);
+        const doneIds: string[] = [];
+        const r = await each(ids, async id => { await io.setStatus(me, id, 'completed', quiet ? { notifyGiver: false } : undefined); doneIds.push(id); }, titleOf);
+        if (!relayTells && io.notifyCompleted && doneIds.length) { try { await io.notifyCompleted(me, doneIds); } catch { /* the tasks are done; a failed notice must not fail them */ } }
+        return r;
+    };
+
     switch (action.type) {
         case 'complete_tasks': {
-            const r = await each(action.taskIds, id => io.setStatus(me, id, 'completed'), titleOf);
+            const r = await completeAll(action.taskIds, false);
             return outcome('Marked', 'mark', { one: 'task as done', many: 'tasks as done' }, r.done, r.failed);
         }
 
         case 'progress_update': {
             const base = await (async (): Promise<ExecutionResult> => {
             if (action.state === 'done_all' || action.state === 'done_some') {
-                const r = await each(action.taskIds, id => io.setStatus(me, id, 'completed'), titleOf);
+                // A reply to someone's request is relayed to the givers (with the note), so no separate completion notice then.
+                const r = await completeAll(action.taskIds, !!opts.relay && !!io.relay);
                 return outcome('Marked', 'mark', { one: 'task as done', many: 'tasks as done' }, r.done, r.failed);
             }
             if (action.state === 'blocked') {

@@ -70,6 +70,20 @@ export async function POST(request: NextRequest) {
         }
 
         // Superuser role (Task Manager): make or remove a superuser. Admin-only; the last superuser cannot be removed.
+        // Reporting manager role (moved from the old manager-role card). Admin-only, like every action here.
+        if (body.action === 'set_manager') {
+            if (!body.userId || typeof body.enabled !== 'boolean') {
+                return NextResponse.json({ success: false, error: 'Missing userId or enabled (true/false)' }, { status: 400 });
+            }
+            await TaskAccessService.setReportingManager(body.userId, body.enabled, guard.label);
+            return NextResponse.json({
+                success: true,
+                message: body.enabled
+                    ? 'Now a reporting manager: can see and assign tasks across their department.'
+                    : 'Back to a normal employee.'
+            });
+        }
+
         if (body.action === 'set_superuser') {
             if (!body.userId || typeof body.enabled !== 'boolean') {
                 return NextResponse.json({ success: false, error: 'Missing userId or enabled (true/false)' }, { status: 400 });

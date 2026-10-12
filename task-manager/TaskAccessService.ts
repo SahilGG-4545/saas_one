@@ -276,6 +276,44 @@ export class TaskAccessService {
         });
     }
 
+    // ── Reporting manager role ───────────────────────────────────────────────────
+
+    /**
+     * Makes a person a reporting manager, or returns them to a normal employee. Same database change and the same audit
+     * events (manager_role_assigned / manager_role_removed) as the old "Manager Role Assignment" card it replaces.
+     * A superuser is never silently downgraded: remove the superuser role first.
+     */
+    static async setReportingManager(userId: string, enabled: boolean, actor?: string): Promise<void> {
+        const { data: rows, error } = await supabaseAdmin
+            .from('employee_profiles')
+            .select('id, task_role, first_name, last_name, department')
+            .eq('user_id', userId)
+            .eq('is_active', true);
+        if (error) throw error;
+        if (!rows || rows.length === 0) throw new Error('Active employee with a user account not found');
+
+        const previousRole = rows[0].task_role as string;
+        if (previousRole === 'superuser') throw new Error('This person is a superuser. Remove the superuser role first.');
+        if (enabled && previousRole === 'reporting_manager') return;
+        if (!enabled && previousRole !== 'reporting_manager') return;
+
+        const { error: upErr } = await supabaseAdmin
+            .from('employee_profiles')
+            .update({ task_role: enabled ? 'reporting_manager' : 'employee', updated_at: new Date().toISOString() })
+            .eq('user_id', userId)
+            .eq('is_active', true);
+        if (upErr) throw upErr;
+
+        await TaskDatabaseService.logAudit({
+            event_type: enabled ? 'manager_role_assigned' : 'manager_role_removed',
+            actor_id: null,
+            target_employee_id: userId,
+            details: enabled
+                ? { role: 'reporting_manager', department: rows[0].department ?? null, profileId: rows[0].id, actor: actor || null }
+                : { previousRole: 'reporting_manager', newRole: 'employee', department: rows[0].department ?? null, profileId: rows[0].id, actor: actor || null },
+        });
+    }
+
     // ── Superuser role ───────────────────────────────────────────────────────────
 
     /**

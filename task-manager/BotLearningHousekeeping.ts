@@ -9,21 +9,32 @@ import { engyBrainLlm, extractJson, type BrainLlm, type LlmRequest } from './bra
 import { runBrain } from './brain';
 import { scoreCase, summarize, type EvalCase } from './brain/eval/score';
 import { tasksDomainWithTeam } from './brain/tasksDomain';
+import { geminiDraftModels, geminiLlm } from './brain/geminiLlm';
 import { facilityDomain } from './brain/facilityDomain';
 
+// USD per million tokens (in, out). Gemini uses deliberately conservative PAID-tier figures: on the free tier the real
+// cost is $0, and if the key is a paid one the cap still holds.
 const PRICE: Record<string, [number, number]> = { 'glm-5.3-flash': [0.135, 0.45], 'qwen3.8-27b': [0.045, 0.32] };
+const GEMINI_PRICE: [number, number] = [0.5, 3.0];
+const priceOf = (model: string): [number, number] | undefined => PRICE[model] ?? (/^gemini-/.test(model) ? GEMINI_PRICE : undefined);
 const MAX_DRAFT_TOKENS = 1800, BATCH_CASES = 4;
 
 interface StoredEval { id: string; group: string; score: ReturnType<typeof scoreCase> }
-interface EvalState { index: number; before: StoredEval[]; after: StoredEval[]; attempts: Record<string, number>; costUsd: number; baselineSections: PromptSections }
+interface EvalState { index: number; before: StoredEval[]; after: StoredEval[]; attempts: Record<string, number>; costUsd: number; baselineSections: PromptSections; draftModel?: string }
 
-function budgeted(base: BrainLlm, state: EvalState): BrainLlm {
+export function budgeted(base: BrainLlm, state: Pick<EvalState, 'costUsd'>): BrainLlm {
     return { async complete(req: LlmRequest) {
-        const price = PRICE[req.model]; if (!price) throw new Error(`no price configured for ${req.model}`);
+        const price = priceOf(req.model); if (!price) throw new Error(`no price configured for ${req.model}`);
         const reserve = reserveWorstCaseUsd(`${req.system}\n${req.user}`, req.maxTokens ?? 1200, price[0], price[1]);
         if (state.costUsd + reserve > NIGHTLY_CAP_USD) throw new Error('nightly cost cap reached');
+        // The worst case only decides whether a call may START; what is charged is what the call really used
+        // (the reserve again only when the provider reports no usage). Charging the worst case made a full safety
+        // test (~190 cases × 2 versions) look ~5× dearer than it is, so it always stopped at the cap.
         state.costUsd += reserve;
-        return base.complete(req);
+        const res = await base.complete(req);
+        const used = (res.tokensIn || res.tokensOut) ? (res.tokensIn * price[0] + res.tokensOut * price[1]) / 1_000_000 : reserve;
+        state.costUsd += used - reserve;
+        return res;
     } };
 }
 
@@ -39,7 +50,12 @@ async function allCases(): Promise<Array<{ c: EvalCase; ctx: any; team: boolean 
 function groupPass(rows: StoredEval[]) { const out: Record<string, number> = {}; for (const r of rows) if (r.score.pass) out[r.group] = (out[r.group] || 0) + 1; return out; }
 function evalSummary(rows: StoredEval[]) { const s = summarize(rows.map(r => r.score)); return { ...s, byGroup: groupPass(rows) }; }
 
-async function draftCandidate(current: PromptSections, labels: any[], state: EvalState, llm: BrainLlm): Promise<{ sections: PromptSections; changeSummary: string }> {
+/**
+ * Draft improved tunable sections. Tries Gemini first (a different model family from the live bot — doctrine L6; owner
+ * decision 2026-10-12), each model in order, then falls back to the existing provider (glm-5.3-flash), so the loop never
+ * stops because Gemini is unavailable (no key, quota, depleted credits). The model that wrote it is recorded.
+ */
+export async function draftCandidate(current: PromptSections, labels: any[], state: EvalState, llm: BrainLlm, gemini: BrainLlm | null = geminiLlm()): Promise<{ sections: PromptSections; changeSummary: string; model: string }> {
     const user = JSON.stringify({ current, labelled_cases: labels.map(x => ({ message: String(x.message_text).slice(0, 800), context: x.context_snapshot, correct: x.expectation })) });
     const system = [
         'You improve only the tunable task-understanding steps and examples.',
@@ -52,9 +68,23 @@ async function draftCandidate(current: PromptSections, labels: any[], state: Eva
         '5. Return JSON only: {"steps":string[],"examples":string[],"change_summary":string}.',
         'Example output: {"steps":["1. Read the context."],"examples":["Example. Message: tasks → view_tasks."],"change_summary":"Clarify short task-list requests."}',
     ].join('\n');
-    const res = await budgeted(llm, state).complete({ model: 'glm-5.3-flash', system, user, json: true, maxTokens: MAX_DRAFT_TOKENS }); const raw: any = extractJson(res.text);
-    const baseChars = current.steps.concat(current.examples).join('\n').length, checked = validatePromptSections({ steps: raw.steps, examples: raw.examples }, { maxChars: 12000, maxBaseChars: baseChars });
-    if (!checked.ok) throw new Error(checked.error); return { sections: checked.value, changeSummary: String(raw.change_summary || 'Improve handling of newly labelled messages.').slice(0, 240) };
+    const baseChars = current.steps.concat(current.examples).join('\n').length;
+    const attempts: Array<[BrainLlm, string]> = [...(gemini ? geminiDraftModels().map(m => [gemini, m] as [BrainLlm, string]) : []), [llm, 'glm-5.3-flash']];
+    const failures: string[] = [];
+    for (const [client, model] of attempts) {
+        try {
+            const res = await budgeted(client, state).complete({ model, system, user, json: true, maxTokens: MAX_DRAFT_TOKENS }); const raw: any = extractJson(res.text);
+            const checked = validatePromptSections({ steps: raw.steps, examples: raw.examples }, { maxChars: 12000, maxBaseChars: baseChars });
+            if (!checked.ok) throw new Error(checked.error);
+            state.draftModel = model;
+            return { sections: checked.value, changeSummary: String(raw.change_summary || 'Improve handling of newly labelled messages.').slice(0, 240), model };
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            failures.push(`${model}: ${msg.slice(0, 120)}`);
+            if (/cost cap/.test(msg)) break;   // never try the next model past the spending cap
+        }
+    }
+    throw new Error(`no draft: ${failures.join(' · ')}`);
 }
 
 async function evaluateBatch(row: any, state: EvalState, current: PromptSections, llm: BrainLlm) {
@@ -64,7 +94,8 @@ async function evaluateBatch(row: any, state: EvalState, current: PromptSections
         const target = side === 'before' ? state.before : state.after;
         if (target.some(done => done.id === item.c.id)) continue;
         try {
-            const r = await runBrain(item.c.message, item.ctx, { llm: wrapped, promptSections: sections, ...(item.team ? { domains: [tasksDomainWithTeam, facilityDomain] } : {}) });
+            // skipReply: scoring only looks at what was understood and decided, so writing the reply would double the cost.
+            const r = await runBrain(item.c.message, item.ctx, { llm: wrapped, promptSections: sections, skipReply: true, ...(item.team ? { domains: [tasksDomainWithTeam, facilityDomain] } : {}) });
             if (r.status === 'ai_unavailable') throw new Error('AI unavailable during evaluation');
             target.push({ id: item.c.id, group: item.c.group, score: scoreCase(item.c, r) });
         } catch (e) {
@@ -92,7 +123,7 @@ export async function runNightlyAutoTune(now = new Date(), rawLlm: BrainLlm = en
         const version = (max?.version || 0) + 1, runDate = istDateHour(now).date;
         try {
             const draft = await draftCandidate(current, labels || [], state, rawLlm);
-            const { data, error } = await supabaseAdmin.from(tables.PROMPTS).insert({ prompt_key: 'task_brain_understand', version, sections: draft.sections, status: 'evaluating', change_summary: draft.changeSummary, evaluation_state: state, estimated_cost_usd: state.costUsd, run_date: runDate, source_label_at: newestLabelAt, created_by: 'auto-tune' }).select('*').single(); if (error) throw error; row = data;
+            const { data, error } = await supabaseAdmin.from(tables.PROMPTS).insert({ prompt_key: 'task_brain_understand', version, sections: draft.sections, status: 'evaluating', change_summary: `${draft.changeSummary} [drafted by ${draft.model}]`.slice(0, 300), evaluation_state: state, estimated_cost_usd: state.costUsd, run_date: runDate, source_label_at: newestLabelAt, created_by: 'auto-tune' }).select('*').single(); if (error) throw error; row = data;
         } catch (e) {
             const reason = e instanceof Error ? e.message : String(e); console.warn('[BotAutoTune] draft rejected:', reason);
             await supabaseAdmin.from(tables.PROMPTS).insert({ prompt_key: 'task_brain_understand', version, sections: current, status: 'rejected', change_summary: 'Draft validation failed.', estimated_cost_usd: state.costUsd, run_date: runDate, source_label_at: null, rejection_reason: reason, created_by: 'auto-tune' });
@@ -111,7 +142,8 @@ export async function runNightlyAutoTune(now = new Date(), rawLlm: BrainLlm = en
         return { status, calls: BATCH_CASES * 2 };
     } catch (e) {
         const message = e instanceof Error ? e.message : String(e); const terminal = /3 attempts|cost cap/.test(message);
-        await supabaseAdmin.from(tables.PROMPTS).update({ ...(terminal ? { status: 'rejected', rejection_reason: message } : {}), evaluation_state: state, estimated_cost_usd: state.costUsd, updated_at: now.toISOString() }).eq('id', row.id);
+        // A technical stop (cost cap, AI unavailable) says nothing about the labelled cases: free them so the next night retries.
+        await supabaseAdmin.from(tables.PROMPTS).update({ ...(terminal ? { status: 'rejected', rejection_reason: message, source_label_at: null } : {}), evaluation_state: state, estimated_cost_usd: state.costUsd, updated_at: now.toISOString() }).eq('id', row.id);
         return { status: terminal ? 'rejected' as const : 'evaluating' as const, calls: 0 };
     }
 }

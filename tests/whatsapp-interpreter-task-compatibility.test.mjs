@@ -24,6 +24,7 @@ function setup({facilityActive=false,choice=false,testingConfig=null}={}){
     imports['./TaskGateway']=load('task-manager/TaskGateway.ts',{});imports['./TaskGatewayExecutor']={TaskGatewayExecutor:{}};imports['./SuperuserAIInterpreter']={SuperuserAIInterpreter:{}}; // Step 4 gateway is OFF in this suite
     imports['./TaskErrorHandler']=load('task-manager/TaskErrorHandler.ts',{});
     imports['./taskAlerts']={personLabel:(name,dept)=>dept?`${name} (${dept})`:name,sendTaskAssigned:async()=>true}; // event alerts: approved templates
+    imports['./completionNotice']={notifyGiversOfCompletion:async()=>0}; // task_completed_notice_v1 to the giver
     imports['./TaskCommandHandler']=load('task-manager/TaskCommandHandler.ts',imports);
     const router=load('task-manager/TaskMessageRouter.ts',imports);
     const route=load('app/api/webhooks/aisensy/route.ts',{

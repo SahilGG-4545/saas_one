@@ -1,6 +1,7 @@
 import { TaskDatabaseService } from './TaskDatabaseService';
 import { TaskMessagingService } from './TaskMessagingService';
 import { personLabel, sendTaskAssigned } from './taskAlerts';
+import { notifyGiversOfCompletion } from './completionNotice';
 import { TaskErrorHandler } from './TaskErrorHandler';
 import { TaskAccessService } from './TaskAccessService';
 import { PermissionService } from './PermissionService';
@@ -395,6 +396,8 @@ export class TaskCommandHandler {
 
             const reply = `🎉 All your tasks for today have been completed (${tasks.length}/${tasks.length} - 100%)!\n\nHave a great rest of your day!`;
             if (shouldSend) await TaskMessagingService.sendMessage(params.phone, reply);
+            // Tell each giver once, listing their tasks (approved template; never blocks or fails the reply).
+            if (shouldSend) void notifyGiversOfCompletion(pendingTasks);
 
             return {
                 success: true,
@@ -460,6 +463,8 @@ export class TaskCommandHandler {
             const reply = `✅ Marked task #${taskNum} ("${targetTask.title}") as completed!\n\nProgress: ${newCompletedCount}/${tasks.length} (${percent}%)${allDoneCelebration}`;
 
             if (shouldSend) await TaskMessagingService.sendMessage(params.phone, reply);
+            // Tell whoever gave this task (approved template; never blocks or fails the reply).
+            if (shouldSend) void notifyGiversOfCompletion([targetTask]);
 
             return {
                 success: true,

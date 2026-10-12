@@ -1,4 +1,6 @@
-export const NIGHTLY_CAP_USD = 0.25;
+/** Spending cap for ONE candidate (its draft + its whole safety test, which may span several cron runs). A full test
+ *  costs ≈ US$0.15 today (understand-only calls); the cap leaves room for the live test set to grow. */
+export const NIGHTLY_CAP_USD = 0.5;
 export interface EvalSummary { passRate: number; unsafe: number; missedClarify: number; wrongProposal: number; byGroup: Record<string, number> }
 
 export function istDateHour(now: Date): { date: string; hour: number } {

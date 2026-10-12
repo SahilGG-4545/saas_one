@@ -38,7 +38,12 @@ export function validatePromptSections(value: unknown, limits: { maxChars: numbe
     const v = value as Record<string, unknown>; const keys = Object.keys(v);
     if (keys.some(k => !['steps', 'examples'].includes(k)) || !Array.isArray(v.steps) || !Array.isArray(v.examples)) return { ok: false, error: 'only steps and examples are tunable' };
     const all = [...v.steps, ...v.examples];
-    if (!all.length || all.some(x => typeof x !== 'string' || !x.trim())) return { ok: false, error: 'sections contain an empty line' };
+    // Blank SEPARATOR lines are fine (the built-in examples use them); every entry must be text, and each section must
+    // still contain real text. (Rejecting any blank line made the built-in sections — and every draft that kept their
+    // layout — fail their own validation.)
+    if (all.some(x => typeof x !== 'string')) return { ok: false, error: 'sections must contain only text lines' };
+    const hasText = (a: unknown[]) => a.some(x => typeof x === 'string' && x.trim().length > 0);
+    if (!hasText(v.steps) || !hasText(v.examples)) return { ok: false, error: 'sections contain an empty line' };
     const chars = all.join('\n').length;
     if (chars > limits.maxChars || chars > Math.floor(limits.maxBaseChars * 1.2)) return { ok: false, error: 'sections are too large' };
     return { ok: true, value: { steps: v.steps as string[], examples: v.examples as string[] } };
