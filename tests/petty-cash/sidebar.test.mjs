@@ -41,7 +41,7 @@ test('role dashboards reuse their established body and place Petty Cash in exist
 test('shared email handler changes leave all non-petty-cash action functions unchanged',async()=>{
  const ts=(await import('typescript')).default;
  const path='backend/lib/emailActions/handlers.ts';
- const before=execFileSync('git',['show',`5140c02a7f0e2692f8c33c5663ad9ec28576ee6a:${path}`],{encoding:'utf8'});const after=readFileSync(path,'utf8');
+ const before=execFileSync('git',['show',`5140c02a7f0e2692f8c33c5663ad9ec28576ee6a:${path}`],{encoding:'utf8'}).replace(/\r\n/g,'\n');const after=readFileSync(path,'utf8').replace(/\r\n/g,'\n');
  const functions=source=>{const ast=ts.createSourceFile(path,source,ts.ScriptTarget.Latest,true);return new Map(ast.statements.filter(n=>ts.isFunctionDeclaration(n)&&n.name?.text!=='handlePettyCash').map(n=>[n.name.text,n.getText(ast)]));};
  assert.deepEqual(functions(after),functions(before));
 });

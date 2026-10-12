@@ -29,6 +29,6 @@ export default function ExpenseForm({ context, requestId, balance, correction, o
         </>}
         <label className="block">{correction ? 'Correction note' : 'Description / purpose'}<textarea className="pc-input" name="description" required maxLength={2000} /></label>
         <ProofUpload org={context.organization_id} value={proofs} onChange={setProofs} disabled={busy} onBusyChange={setUploading} label={correction ? 'Replacement bills / receipts' : 'Bills / receipts (optional)'} />
-        {error && <p role="alert" className="text-red-600">{error}</p>}<button className="pc-button" disabled={busy || uploading || (!!correction && !proofs.length)}>{busy ? 'Saving…' : correction ? 'Submit corrected proof' : 'Save expense'}</button>
+        {error && <p role="alert" className="text-red-600">{error}</p>}<button className="pc-button" disabled={busy || uploading || (!!correction && !proofs.length) || (!correction && !validAmount)}>{busy ? 'Saving…' : correction ? 'Submit corrected proof' : 'Save expense'}</button>
     </form>;
 }
