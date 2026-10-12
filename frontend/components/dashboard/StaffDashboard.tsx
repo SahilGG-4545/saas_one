@@ -286,7 +286,7 @@ const StaffDashboard = () => {
             .select(`
                 *,
                 assignee:users!assigned_to(id, full_name, email, user_photo_url),
-                creator:users!raised_by(property_memberships(role, property_id)),
+                creator:users!raised_by(property_memberships!property_memberships_user_id_fkey(role, property_id)),
                 ticket_escalation_logs(from_level, to_level, escalated_at, from_employee:users!from_employee_id(full_name, user_photo_url), to_employee:users!to_employee_id(full_name, user_photo_url)),
                 material_requests(id)
             `)
