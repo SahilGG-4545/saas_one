@@ -1,7 +1,7 @@
 'use client';
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { ArrowDownLeft, ArrowUpRight, CheckCircle2, ChevronLeft, ChevronRight, FilePlus2, Inbox, Loader2, Plus, RefreshCw, RotateCcw, Wallet } from 'lucide-react';
+import { ArrowDownLeft, ArrowUpRight, CheckCircle2, ChevronLeft, ChevronRight, Clock, Eye, FilePlus2, Inbox, Loader2, Plus, RefreshCw, RotateCcw, Wallet } from 'lucide-react';
 import { Button } from '@/frontend/components/ui/button';
 import PettyCashStyles from './PettyCashStyles';
 import { inr, PC_STATUS_META } from '@/frontend/lib/pettyCash/roles';
@@ -11,7 +11,8 @@ import PropertyRoutingSettings from './PropertyRoutingSettings';
 import ExpenseHistory from './ExpenseHistory';
 import { createClient } from '@/frontend/utils/supabase/client';
 import ConsolidatedOverview from './ConsolidatedOverview';
-import { pcFetch, pcJson, type Context, type PettyCashRequest } from './workflowTypes';
+import VisionUsageAudit from './VisionUsageAudit';
+import { pcFetch, pcJson, pettyCashDate, type Context, type PettyCashRequest } from './workflowTypes';
 export default function PettyCashDashboard() {
     const { orgId } = useParams<{ orgId: string }>();
     const router=useRouter();const pathname=usePathname();const searchParams=useSearchParams();const linkedRequest=searchParams.get('request_id');
@@ -24,7 +25,7 @@ export default function PettyCashDashboard() {
     const [loading,setLoading]=useState(true);const [contextLoading,setContextLoading]=useState(true);const [contextError,setContextError]=useState('');const [requestError,setRequestError]=useState('');const [requestsOrg,setRequestsOrg]=useState('');
     const contextSequence=useRef(0);const requestSequence=useRef(0);
     const loadContext=useCallback(async(signal?:AbortSignal)=>{const sequence=++contextSequence.current;setContextLoading(true);setContextError('');try{const data=await pcFetch<Context>(`/api/petty-cash/context?org_id=${orgId}`,{signal});if(!signal?.aborted&&sequence===contextSequence.current)setContext(data);}catch(reason){if(!signal?.aborted&&sequence===contextSequence.current){setContext(undefined);setContextError(reason instanceof Error?reason.message:'Could not load wallet and permissions');}}finally{if(!signal?.aborted&&sequence===contextSequence.current)setContextLoading(false);}},[orgId]);
-    const loadRequests=useCallback(async(signal?:AbortSignal)=>{const sequence=++requestSequence.current;setRequestError('');if(!context || ['routing','overview','expenses'].includes(tab)){setLoading(false);return;}setLoading(true);try{const data=await pcFetch<{requests:PettyCashRequest[];pagination:{total_pages:number}}>(`/api/petty-cash?org_id=${orgId}&tab=${tab}&page=${page}`,{signal});if(!signal?.aborted&&sequence===requestSequence.current){setRequests(data.requests);setRequestsOrg(orgId);setPages(Math.max(1,data.pagination.total_pages));}}catch(reason){if(!signal?.aborted&&sequence===requestSequence.current){setRequests([]);setRequestsOrg('');setRequestError(reason instanceof Error?reason.message:'Could not load requests');}}finally{if(!signal?.aborted&&sequence===requestSequence.current)setLoading(false);}},[orgId,tab,page,Boolean(context)]);
+    const loadRequests=useCallback(async(signal?:AbortSignal)=>{const sequence=++requestSequence.current;setRequestError('');if(!context || ['routing','overview','expenses','vision_usage'].includes(tab)){setLoading(false);return;}setLoading(true);try{const data=await pcFetch<{requests:PettyCashRequest[];pagination:{total_pages:number}}>(`/api/petty-cash?org_id=${orgId}&tab=${tab}&page=${page}`,{signal});if(!signal?.aborted&&sequence===requestSequence.current){setRequests(data.requests);setRequestsOrg(orgId);setPages(Math.max(1,data.pagination.total_pages));}}catch(reason){if(!signal?.aborted&&sequence===requestSequence.current){setRequests([]);setRequestsOrg('');setRequestError(reason instanceof Error?reason.message:'Could not load requests');}}finally{if(!signal?.aborted&&sequence===requestSequence.current)setLoading(false);}},[orgId,tab,page,Boolean(context)]);
     useEffect(()=>{const controller=new AbortController();setContext(undefined);setError('');setRequests([]);setRequestsOrg('');setSelected([]);setTab(null);setPage(1);void loadContext(controller.signal);return()=>{controller.abort();contextSequence.current++;};},[loadContext]);
     useEffect(()=>{const controller=new AbortController();void loadRequests(controller.signal);return()=>{controller.abort();requestSequence.current++;};},[loadRequests]);
     const refresh=useCallback(async()=>{setError('');await Promise.all([loadContext(),loadRequests()]);setRevision(n=>n+1);},[loadContext,loadRequests]);
@@ -41,7 +42,7 @@ export default function PettyCashDashboard() {
         ...(context?.caps.canApprove ? [{ key: 'approvals', label: 'To Approve' }] : []),
         ...(context?.caps.canAllocate || context?.caps.canApprove ? [{ key: 'assigned', label: 'Assigned Requests & Spends' }] : []),
         ...(context?.caps.canDisburse ? [{ key: 'disbursements', label: 'To Pay' }, { key: 'reconciliation', label: 'Reconciliation' }] : []),
-        ...(context?.caps.isAdmin ? [{ key: 'all', label: 'All Requests' }] : []),
+        ...(context?.caps.isAdmin ? [{ key: 'all', label: 'All Requests' }, { key: 'vision_usage', label: 'Vision AI Usage' }] : []),
         ...(context?.caps.canManageRouting ? [{ key: 'routing', label: 'Property Routing' }] : []),
     ];
     const isBulk = tab === 'allocations' || tab === 'approvals';
@@ -108,7 +109,7 @@ export default function PettyCashDashboard() {
                     </button>
                 ))}
             </nav>
-            {tab === 'routing' && context ? <PropertyRoutingSettings context={context} onSaved={() => { void loadContext(); }} /> : tab === 'expenses' ? <ExpenseHistory key={revision} org={orgId} onOpen={setDetailId} /> : tab === 'overview' ? <ConsolidatedOverview key={revision} countsIssue={context?.counts_error||undefined} org={orgId} onOpen={setDetailId} context={context} /> : <>
+            {tab === 'routing' && context ? <PropertyRoutingSettings context={context} onSaved={() => { void loadContext(); }} /> : tab === 'expenses' ? <ExpenseHistory key={revision} org={orgId} onOpen={setDetailId} /> : tab === 'overview' ? <ConsolidatedOverview key={revision} countsIssue={context?.counts_error||undefined} org={orgId} onOpen={setDetailId} context={context} /> : tab === 'vision_usage' ? <VisionUsageAudit key={revision} org={orgId} onOpenRequest={setDetailId} /> : <>
                 {isBulk && <div className="pc-panel p-4 flex flex-wrap gap-3 items-center rounded-2xl bg-white dark:bg-[#161b22] border border-slate-100 dark:border-[#30363d] shadow-sm"><button disabled={busy || loading || !selected.length} className="pc-button" onClick={async () => {
                     const total = requests.filter(r => selected.includes(r.id)).reduce((sum, r) => sum + Number(tab === 'allocations' ? amounts[r.id] || r.amount_requested : r.allocated_amount || r.amount_requested), 0);
                     if (!window.confirm(`${tab === 'allocations' ? 'Allocate' : 'Approve'} ${selected.length} requests totalling ${inr(total)}?`)) return;
@@ -123,25 +124,133 @@ export default function PettyCashDashboard() {
                         <thead>
                             <tr className="bg-slate-50/70 dark:bg-[#1c2128] border-b border-slate-100 dark:border-[#30363d]">
                                 {isBulk && <th className="p-3.5"><input type="checkbox" aria-label="Select all visible requests" disabled={loading || busy} checked={!!requests.length && requests.every(r => selected.includes(r.id))} onChange={e => setSelected(e.target.checked ? requests.map(r => r.id) : [])} /></th>}
-                                {['Request', 'Property', 'Requester', 'Status', 'Requested', 'Allocated', 'Approver', 'Details'].map(h => (
+                                {['Request & Purpose', 'Property', 'Requester', 'Stage / Status', 'Requested', 'Allocated', 'Available Balance', 'Action Required By', ''].map(h => (
                                     <th className="p-3.5 text-left text-[10px] font-black uppercase tracking-wider text-slate-400 dark:text-slate-500" key={h}>{h}</th>
                                 ))}
                             </tr>
                         </thead>
                         <tbody>
-                            {!loading && requests.map(r => (
+                            {!loading && requests.map(r => {
+                                const isPaidStage = ['paid', 'settlement_submitted', 'settled'].includes(r.status);
+                                const advancePaid = Number(r.paid_amount ?? r.allocated_amount ?? 0);
+                                const spentAmt = Number(r.actual_spent ?? 0);
+                                const returnedAmt = Number(r.amount_returned ?? 0);
+                                const availAmt = isPaidStage ? Math.max(0, advancePaid - spentAmt - returnedAmt) : 0;
+                                const percentSpent = advancePaid > 0 ? Math.min(100, Math.round((spentAmt / advancePaid) * 100)) : 0;
+
+                                return (
                                 <tr key={r.id} className="border-t border-slate-100 dark:border-[#30363d]/60 hover:bg-slate-50/60 dark:hover:bg-[#21262d]/50 transition-colors">
                                     {isBulk && <td className="p-3.5"><input type="checkbox" aria-label={`Select ${r.request_no}`} disabled={loading || busy} checked={selected.includes(r.id)} onChange={e => setSelected(prev => e.target.checked ? [...prev, r.id] : prev.filter(id => id !== r.id))} /></td>}
-                                    <td className="p-3.5 whitespace-nowrap font-bold text-slate-900 dark:text-white">{r.request_no}</td>
-                                    <td className="p-3.5 text-slate-600 dark:text-slate-300">{r.property?.name}</td>
-                                    <td className="p-3.5 text-slate-700 dark:text-slate-200 font-medium">{r.requester?.full_name || r.requester?.email}</td>
-                                    <td className="p-3.5"><span className="pc-status" data-status={r.status}>{r.request_type === 'reimbursement' ? 'Historical reimbursement' : r.workflow_version === 1 && r.status === 'submitted' ? 'Needs routing reassignment' : PC_STATUS_META[r.status]?.label || r.status}</span></td>
-                                    <td className="p-3.5 font-bold whitespace-nowrap tabular-nums text-slate-900 dark:text-white">{inr(r.amount_requested)}</td>
-                                    <td className="p-3.5">{tab === 'allocations' ? <input className="pc-input min-w-28" aria-label={`Allocated amount ${r.request_no}`} type="number" min="0.01" max={r.amount_requested} step="0.01" value={amounts[r.id] ?? String(r.amount_requested)} onChange={e => setAmounts(prev => ({ ...prev, [r.id]: e.target.value }))} /> : inr(r.allocated_amount)}</td>
-                                    <td className="p-3.5 text-slate-600 dark:text-slate-300">{r.assigned_approver?.full_name || r.assigned_approver?.email}</td>
-                                    <td className="p-3.5"><Button variant="solid" size="sm" className="rounded-xl font-bold" disabled={!context} onClick={() => setDetailId(r.id)}>View</Button></td>
+                                    <td className="p-3.5">
+                                        <div className="flex flex-col gap-0.5">
+                                            <span className="font-black text-slate-900 dark:text-white tracking-tight">{r.request_no}</span>
+                                            <p className="text-xs text-slate-500 dark:text-slate-400 line-clamp-1 max-w-[220px]" title={r.purpose}>
+                                                {r.purpose || 'No description provided'}
+                                            </p>
+                                            <span className="text-[10px] text-slate-400 dark:text-slate-500 flex items-center gap-1 mt-0.5">
+                                                <Clock size={10} /> {pettyCashDate(r.created_at)}
+                                            </span>
+                                        </div>
+                                    </td>
+                                    <td className="p-3.5 whitespace-nowrap">
+                                        <span className="font-semibold text-slate-700 dark:text-slate-200 text-xs block">{r.property?.name || '—'}</span>
+                                        {r.property?.code && <span className="text-[10px] text-slate-400 font-mono">{r.property.code}</span>}
+                                    </td>
+                                    <td className="p-3.5 whitespace-nowrap">
+                                        <span className="font-semibold text-slate-800 dark:text-slate-200 text-xs block">{r.requester?.full_name || r.requester?.email || '—'}</span>
+                                        {r.department && <span className="text-[10px] text-slate-400 block">{r.department}</span>}
+                                    </td>
+                                    <td className="p-3.5 whitespace-nowrap">
+                                        <div className="flex flex-col gap-1 items-start">
+                                            <span className="pc-status" data-status={r.status}>
+                                                {r.request_type === 'reimbursement' ? 'Historical reimbursement' : r.workflow_version === 1 && r.status === 'submitted' ? 'Needs routing reassignment' : PC_STATUS_META[r.status]?.label || r.status}
+                                            </span>
+                                            {r.status === 'submitted' && <span className="text-[10px] font-bold text-amber-600 dark:text-amber-400 flex items-center gap-1">● Step 1/4: With Allocator</span>}
+                                            {r.status === 'pending_approval' && <span className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 flex items-center gap-1">● Step 2/4: With Approver</span>}
+                                            {r.status === 'approved' && <span className="text-[10px] font-bold text-sky-600 dark:text-sky-400 flex items-center gap-1">● Step 3/4: Ready for Payment</span>}
+                                            {r.status === 'paid' && <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">● Step 4/4: Cash Active</span>}
+                                            {r.status === 'settlement_submitted' && <span className="text-[10px] font-bold text-purple-600 dark:text-purple-400 flex items-center gap-1">● Reviewing Bills</span>}
+                                            {r.status === 'closed' && <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500">✓ Settled & Closed</span>}
+                                        </div>
+                                    </td>
+                                    <td className="p-3.5 font-bold whitespace-nowrap tabular-nums text-slate-700 dark:text-slate-300">
+                                        {inr(r.amount_requested)}
+                                    </td>
+                                    <td className="p-3.5 whitespace-nowrap">
+                                        {tab === 'allocations' ? (
+                                            <input className="pc-input min-w-28 text-xs font-bold" aria-label={`Allocated amount ${r.request_no}`} type="number" min="0.01" max={r.amount_requested} step="0.01" value={amounts[r.id] ?? String(r.amount_requested)} onChange={e => setAmounts(prev => ({ ...prev, [r.id]: e.target.value }))} />
+                                        ) : (
+                                            <span className="font-bold tabular-nums text-slate-900 dark:text-white text-xs">{inr(r.allocated_amount || (isPaidStage ? r.paid_amount : null) || r.amount_requested)}</span>
+                                        )}
+                                    </td>
+                                    <td className="p-3.5 whitespace-nowrap tabular-nums">
+                                        {isPaidStage ? (
+                                            <div className="flex flex-col gap-1 min-w-[130px]">
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <span className={`text-xs font-black ${availAmt > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400'}`}>
+                                                        {inr(availAmt)}
+                                                    </span>
+                                                    {availAmt > 0 && (
+                                                        <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                                                            Ready
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                {advancePaid > 0 && (
+                                                    <div className="w-full bg-slate-100 dark:bg-slate-800 h-1.5 rounded-full overflow-hidden">
+                                                        <div
+                                                            className="bg-primary h-full rounded-full transition-all"
+                                                            style={{ width: `${percentSpent}%` }}
+                                                        />
+                                                    </div>
+                                                )}
+                                                <span className="text-[10px] text-slate-400 font-medium">
+                                                    Spent: {inr(spentAmt)} ({percentSpent}%)
+                                                </span>
+                                            </div>
+                                        ) : (
+                                            <span className="text-xs text-slate-400 dark:text-slate-500 italic">— Pending payment</span>
+                                        )}
+                                    </td>
+                                    <td className="p-3.5 whitespace-nowrap text-xs text-slate-600 dark:text-slate-300">
+                                        {r.status === 'submitted' ? (
+                                            <div>
+                                                <span className="text-[10px] font-bold text-slate-400 uppercase block">Allocator</span>
+                                                <span className="font-semibold text-slate-800 dark:text-slate-200">{r.assigned_allocator?.full_name || 'Assigned Allocator'}</span>
+                                            </div>
+                                        ) : r.status === 'pending_approval' ? (
+                                            <div>
+                                                <span className="text-[10px] font-bold text-slate-400 uppercase block">Approver</span>
+                                                <span className="font-semibold text-slate-800 dark:text-slate-200">{r.assigned_approver?.full_name || 'Assigned Approver'}</span>
+                                            </div>
+                                        ) : r.status === 'approved' ? (
+                                            <div>
+                                                <span className="text-[10px] font-bold text-slate-400 uppercase block">Disbursement</span>
+                                                <span className="font-semibold text-sky-600 dark:text-sky-400">Treasury / Finance</span>
+                                            </div>
+                                        ) : r.status === 'paid' ? (
+                                            <div>
+                                                <span className="text-[10px] font-bold text-slate-400 uppercase block">Custodian</span>
+                                                <span className="font-semibold text-emerald-600 dark:text-emerald-400">{r.requester?.full_name || 'Requester'}</span>
+                                            </div>
+                                        ) : (
+                                            <span>{r.assigned_approver?.full_name || r.assigned_approver?.email || '—'}</span>
+                                        )}
+                                    </td>
+                                    <td className="p-3.5 whitespace-nowrap text-right">
+                                        <Button
+                                            variant="solid"
+                                            size="sm"
+                                            className="rounded-xl font-black text-xs gap-1.5 shadow-sm hover:scale-[1.02] active:scale-95 transition-all"
+                                            disabled={!context}
+                                            onClick={() => setDetailId(r.id)}
+                                        >
+                                            <Eye size={13} /> Track
+                                        </Button>
+                                    </td>
                                 </tr>
-                            ))}
+                                );
+                            })}
                         </tbody>
                     </table>
                     {loading ? <p role="status" className="pc-empty"><Loader2 size={24} className="animate-spin text-primary" />Loading requests…</p> : !requests.length && <div className="pc-empty"><Inbox size={32} className="text-slate-400" /><h3>No requests in this queue</h3><p>{tab === 'mine' ? 'Your petty cash requests will appear here. Create a request to get started.' : 'Requests will appear here when they reach this stage.'}</p></div>}

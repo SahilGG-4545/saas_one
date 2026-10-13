@@ -7,7 +7,17 @@ export function overviewAnalysis(rows:AnalysisRow[],now=new Date()) {
 }
 export function calendarDate(value:Date){return `${value.getFullYear()}-${String(value.getMonth()+1).padStart(2,'0')}-${String(value.getDate()).padStart(2,'0')}`;}
 export function periodDates(period:string,now=new Date()) {
- const end=calendarDate(now);const start=new Date(now);if(period==='7days')start.setDate(start.getDate()-6);else if(period==='30days')start.setDate(start.getDate()-29);else if(period==='month')start.setDate(1);else return {from:'',to:''};return {from:calendarDate(start),to:end};
+ const end=calendarDate(now);const start=new Date(now);
+ if(period==='7days')start.setDate(start.getDate()-6);
+ else if(period==='30days')start.setDate(start.getDate()-29);
+ else if(period==='month'){start.setDate(1);return {from:calendarDate(start),to:end};}
+ else if(period==='last_month'){
+  const first=new Date(now.getFullYear(),now.getMonth()-1,1);
+  const last=new Date(now.getFullYear(),now.getMonth(),0);
+  return {from:calendarDate(first),to:calendarDate(last)};
+ }
+ else return {from:'',to:''};
+ return {from:calendarDate(start),to:end};
 }
 
 export type AttentionKey='cash'|'corrections'|'sent_back'|'aged'|'settlements'|'payments'|'routing';

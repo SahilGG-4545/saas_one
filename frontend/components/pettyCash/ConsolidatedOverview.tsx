@@ -823,9 +823,10 @@ export default function ConsolidatedOverview({
                             value={period}
                             options={[
                                 { value: 'all', label: 'All request dates' },
+                                { value: 'month', label: 'This month' },
+                                { value: 'last_month', label: 'Last month' },
                                 { value: '7days', label: 'Last 7 days' },
                                 { value: '30days', label: 'Last 30 days' },
-                                { value: 'month', label: 'This month' },
                                 { value: 'custom', label: 'Custom range' }
                             ]}
                             onChange={value => {
