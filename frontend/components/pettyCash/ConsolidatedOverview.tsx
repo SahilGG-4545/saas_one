@@ -19,11 +19,11 @@ import {
     X,
     ChevronRight,
     ArrowUpRight,
-    Check,
-    Sparkles,
-    Calendar,
     Search,
-    ChevronLeft
+    ChevronLeft,
+    UserCheck,
+    Calendar,
+    RotateCcw
 } from 'lucide-react';
 import { inr, PC_STATUS_META } from '@/frontend/lib/pettyCash/roles';
 import { overviewGroups } from '@/frontend/lib/pettyCash/overviewGroups';
@@ -36,7 +36,7 @@ import {
     matchesAttention,
     type AttentionKey
 } from '@/frontend/lib/pettyCash/overviewAnalysis';
-import { pcFetch } from './workflowTypes';
+import { pcFetch, type Context } from './workflowTypes';
 
 interface Row {
     id: string;
@@ -111,11 +111,13 @@ const STAGE_CONFIG = {
 export default function ConsolidatedOverview({
     org,
     onOpen,
-    countsIssue
+    countsIssue,
+    context: contextProp
 }: {
     org: string;
     onOpen: (id: string) => void;
     countsIssue?: string;
+    context?: Context;
 }) {
     const [period, setPeriod] = useState('all');
     const [attention, setAttention] = useState<AttentionKey | null>(null);
@@ -133,11 +135,18 @@ export default function ConsolidatedOverview({
     const [page, setPage] = useState(1);
     const [breakdownTab, setBreakdownTab] = useState<'property' | 'requester'>('property');
 
+    // Full organization metadata
+    const [orgUsers, setOrgUsers] = useState<{ id: string; full_name: string; email?: string }[]>([]);
+    const [orgProperties, setOrgProperties] = useState<{ id: string; name: string; code?: string }[]>([]);
+
+    // Fetch tracker requests and all organization members & properties
     useEffect(() => {
         let active = true;
         setLoading(true);
         setRows([]);
         setError('');
+
+        // 1. Fetch tracker requests
         pcFetch<{ rows: Row[] }>(`/api/petty-cash/tracker?org_id=${org}`)
             .then(data => {
                 if (active) {
@@ -145,7 +154,7 @@ export default function ConsolidatedOverview({
                         data.rows.map(row => ({
                             ...row,
                             requester_name: row.requester_name || 'Unnamed user',
-                            property_name: row.property_name || 'Unnamed property'
+                            property_name: (row.property_name || 'Unnamed property').replace(/\s*\.\s*$/, '')
                         }))
                     );
                 }
@@ -156,10 +165,124 @@ export default function ConsolidatedOverview({
             .finally(() => {
                 if (active) setLoading(false);
             });
+
+        // 2. Fetch all organization users to populate dropdown
+        fetch(`/api/users/list?orgId=${org}`)
+            .then(r => (r.ok ? r.json() : null))
+            .then(data => {
+                if (!active || !data) return;
+                const list = Array.isArray(data) ? data : Array.isArray(data.users) ? data.users : [];
+                const mapped = list.map((u: any) => ({
+                    id: String(u.id || u.user_id),
+                    full_name: u.full_name || u.name || u.email || 'Unnamed user',
+                    email: u.email
+                }));
+                if (mapped.length) setOrgUsers(mapped);
+            })
+            .catch(() => {
+                /* silent fallback to rows & routes */
+            });
+
+        // 3. If context was not provided, fetch context to get configuration properties
+        if (!contextProp) {
+            pcFetch<Context>(`/api/petty-cash/context?org_id=${org}`)
+                .then(data => {
+                    if (!active || !data) return;
+                    const props = [
+                        ...(data.configuration_properties || []),
+                        ...(data.properties || [])
+                    ];
+                    if (props.length) setOrgProperties(props);
+                })
+                .catch(() => {
+                    /* silent fallback to rows */
+                });
+        }
+
         return () => {
             active = false;
         };
-    }, [org, retry]);
+    }, [org, retry, contextProp]);
+
+    // Build comprehensive list of all properties in the organization
+    const allProperties = useMemo(() => {
+        const map = new Map<string, string>();
+        // Configuration properties from context (all active properties in the org)
+        (contextProp?.configuration_properties || orgProperties).forEach(p => {
+            if (p.id && p.name) map.set(p.id, p.name.replace(/\s*\.\s*$/, ''));
+        });
+        // Assigned properties from context
+        contextProp?.properties?.forEach(p => {
+            if (p.id && p.name) map.set(p.id, p.name.replace(/\s*\.\s*$/, ''));
+        });
+        // Properties present in tracker rows
+        rows.forEach(r => {
+            if (r.property_id && r.property_name) map.set(r.property_id, r.property_name.replace(/\s*\.\s*$/, ''));
+        });
+        return [...map.entries()]
+            .map(([value, label]) => ({ value, label }))
+            .sort((a, b) => a.label.localeCompare(b.label));
+    }, [contextProp, orgProperties, rows]);
+
+    // Build comprehensive list of all users in the organization
+    const allRequesters = useMemo(() => {
+        const map = new Map<string, { label: string; email?: string }>();
+        // Users from /api/users/list
+        orgUsers.forEach(u => {
+            if (u.id) map.set(u.id, { label: u.full_name, email: u.email });
+        });
+        // Users from routing assignments
+        contextProp?.routes?.forEach(r => {
+            if (r.user?.id) map.set(r.user.id, { label: r.user.full_name, email: r.user.email });
+        });
+        // Users from tracker requests
+        rows.forEach(r => {
+            if (r.requester_id) {
+                const existing = map.get(r.requester_id);
+                map.set(r.requester_id, {
+                    label: r.requester_name || existing?.label || 'Unnamed user',
+                    email: existing?.email
+                });
+            }
+        });
+        return [...map.entries()]
+            .map(([value, { label, email }]) => ({
+                value,
+                label,
+                description: email || (value.length > 8 ? value.slice(-8) : undefined),
+                searchText: `${label} ${email || ''} ${value}`
+            }))
+            .sort((a, b) => a.label.localeCompare(b.label));
+    }, [orgUsers, contextProp, rows]);
+
+    // Build comprehensive list of assigned actors (allocators / approvers)
+    const allActors = useMemo(() => {
+        const map = new Map<string, string>();
+        contextProp?.routes?.forEach(r => {
+            if (r.user?.id && r.user?.full_name) map.set(r.user.id, r.user.full_name);
+        });
+        rows.forEach(r => {
+            if (r.assigned_allocator_id) {
+                map.set(
+                    r.assigned_allocator_id,
+                    r.assigned_allocator_name || map.get(r.assigned_allocator_id) || `Actor ${r.assigned_allocator_id.slice(-8)}`
+                );
+            }
+            if (r.assigned_approver_id) {
+                map.set(
+                    r.assigned_approver_id,
+                    r.assigned_approver_name || map.get(r.assigned_approver_id) || `Actor ${r.assigned_approver_id.slice(-8)}`
+                );
+            }
+        });
+        return [...map.entries()]
+            .map(([value, label]) => ({
+                value,
+                label,
+                searchText: `${label} ${value}`
+            }))
+            .sort((a, b) => a.label.localeCompare(b.label));
+    }, [contextProp, rows]);
 
     const baseFiltered = useMemo(() => {
         return rows.filter(
@@ -170,7 +293,7 @@ export default function ConsolidatedOverview({
                 (!actor || actor === r.assigned_allocator_id || actor === r.assigned_approver_id) &&
                 (!from || calendarDate(new Date(r.created_at)) >= from) &&
                 (!to || calendarDate(new Date(r.created_at)) <= to) &&
-                `${r.requester_name} ${r.request_no}`.toLowerCase().includes(search.toLowerCase())
+                `${r.requester_name} ${r.request_no} ${r.property_name}`.toLowerCase().includes(search.toLowerCase())
         );
     }, [rows, property, requester, status, actor, from, to, search]);
 
@@ -192,23 +315,16 @@ export default function ConsolidatedOverview({
         setPage(1);
     };
 
-    const hasActiveFilters = Boolean(
-        search || property || status || actor || requester || period !== 'all' || from || to || attention
-    );
+    const activeFilterCount =
+        (search ? 1 : 0) +
+        (property ? 1 : 0) +
+        (requester ? 1 : 0) +
+        (status ? 1 : 0) +
+        (actor ? 1 : 0) +
+        (period !== 'all' || from || to ? 1 : 0) +
+        (attention ? 1 : 0);
 
-    const actors = [
-        ...new Map(
-            rows
-                .flatMap(
-                    r =>
-                        [
-                            [r.assigned_allocator_id, r.assigned_allocator_name],
-                            [r.assigned_approver_id, r.assigned_approver_name]
-                        ] as [string | undefined, string | undefined][]
-                )
-                .filter(([id]) => id)
-        ).entries()
-    ];
+    const hasActiveFilters = activeFilterCount > 0;
 
     const analysis = useMemo(() => overviewAnalysis(filtered), [filtered]);
 
@@ -645,122 +761,66 @@ export default function ConsolidatedOverview({
                 </div>
             </div>
 
-            {/* Filter Toolbar */}
-            <div data-overview-filters className="p-4 rounded-2xl bg-white dark:bg-[#161b22] border border-slate-100 dark:border-[#30363d] shadow-sm space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
+            {/* Redesigned Search & Filter Controls */}
+            <div data-overview-filters className="p-5 rounded-3xl bg-white dark:bg-[#161b22] border border-slate-100 dark:border-[#30363d] shadow-sm space-y-4">
+                {/* Header row */}
+                <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="flex items-center gap-2">
-                        <Filter size={14} className="text-primary" />
-                        <span className="text-xs font-black uppercase tracking-wider text-slate-800 dark:text-slate-200">
-                            Search & Filter Controls
-                        </span>
-                        {hasActiveFilters && (
-                            <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-primary/10 text-primary">
-                                Filters active
-                            </span>
-                        )}
+                        <div className="w-8 h-8 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
+                            <Filter size={15} />
+                        </div>
+                        <div>
+                            <h3 className="text-xs font-black uppercase tracking-wider text-slate-800 dark:text-slate-200">
+                                Search & Filter Controls
+                            </h3>
+                            <p className="text-[11px] text-slate-400">
+                                Filter by all organization properties ({allProperties.length}) and members ({allRequesters.length})
+                            </p>
+                        </div>
                     </div>
+
                     {hasActiveFilters && (
                         <Button
                             variant="solid"
                             size="sm"
                             onClick={clearFilters}
-                            className="rounded-xl font-bold text-xs gap-1 h-8"
+                            className="rounded-xl font-bold text-xs gap-1.5 h-8 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700"
                         >
-                            <X size={12} /> Clear all filters
+                            <RotateCcw size={12} /> Clear all filters ({activeFilterCount})
                         </Button>
                     )}
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2.5">
-                    {/* Search box */}
-                    <div className="relative flex-1 min-w-[200px] max-w-xs">
-                        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                {/* Primary Search Bar + Date Period Controls */}
+                <div className="flex flex-wrap items-center gap-3">
+                    <div className="relative flex-1 min-w-[280px]">
+                        <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
                         <input
-                            className="pc-input w-full rounded-xl pl-9 pr-3 text-xs"
-                            style={{ height: 38, marginTop: 0 }}
+                            className="pc-input w-full rounded-xl pl-10 pr-9 text-xs"
+                            style={{ height: 40, marginTop: 0 }}
                             aria-label="Filter requester"
-                            placeholder="Search requester or request no…"
+                            placeholder="Search by requester name, property, or request no (e.g. PC-101)…"
                             value={search}
                             onChange={e => pick(setSearch)(e.target.value)}
                         />
+                        {search && (
+                            <button
+                                onClick={() => pick(setSearch)('')}
+                                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                                aria-label="Clear search input"
+                            >
+                                <X size={14} />
+                            </button>
+                        )}
                     </div>
 
-                    {/* Filter Dropdowns */}
-                    <div className="flex-1 min-w-[150px] max-w-[200px]">
-                        <SearchableSelect
-                            compact
-                            label="Property"
-                            value={property}
-                            options={[
-                                { value: '', label: 'All properties' },
-                                ...[...new Map(rows.map(r => [r.property_id, r.property_name])).entries()].map(
-                                    ([value, label]) => ({ value, label })
-                                )
-                            ]}
-                            onChange={pick(setProperty)}
-                        />
-                    </div>
-
-                    <div className="flex-1 min-w-[150px] max-w-[190px]">
-                        <SearchableSelect
-                            compact
-                            label="Status"
-                            value={status}
-                            options={[
-                                { value: '', label: 'All statuses' },
-                                ...Object.entries(PC_STATUS_META).map(([value, item]) => ({
-                                    value,
-                                    label: item.label
-                                }))
-                            ]}
-                            onChange={pick(setStatus)}
-                        />
-                    </div>
-
-                    <div className="flex-1 min-w-[150px] max-w-[200px]">
-                        <SearchableSelect
-                            compact
-                            label="Requester"
-                            value={requester}
-                            options={[
-                                { value: '', label: 'All requesters' },
-                                ...[...new Map(rows.map(r => [r.requester_id, r.requester_name])).entries()].map(
-                                    ([value, label]) => ({
-                                        value,
-                                        label,
-                                        searchText: value,
-                                        description: value.slice(-8)
-                                    })
-                                )
-                            ]}
-                            onChange={pick(setRequester)}
-                        />
-                    </div>
-
-                    <div className="flex-1 min-w-[150px] max-w-[200px]">
-                        <SearchableSelect
-                            compact
-                            label="Assigned actor"
-                            value={actor}
-                            options={[
-                                { value: '', label: 'All assigned actors' },
-                                ...actors.map(([value, name]) => ({
-                                    value: value!,
-                                    label: name || `Assigned user ${value!.slice(-8)}`,
-                                    searchText: value
-                                }))
-                            ]}
-                            onChange={pick(setActor)}
-                        />
-                    </div>
-
-                    <div className="flex-1 min-w-[140px] max-w-[180px]">
+                    <div className="w-full sm:w-56 shrink-0">
                         <SearchableSelect
                             compact
                             label="Request date"
                             value={period}
                             options={[
-                                { value: 'all', label: 'All dates' },
+                                { value: 'all', label: 'All request dates' },
                                 { value: '7days', label: 'Last 7 days' },
                                 { value: '30days', label: 'Last 30 days' },
                                 { value: 'month', label: 'This month' },
@@ -780,10 +840,11 @@ export default function ConsolidatedOverview({
                     </div>
                 </div>
 
+                {/* Custom Date Pickers */}
                 {period === 'custom' && (
-                    <div className="flex flex-wrap gap-3 items-center text-xs pt-1 border-t border-slate-100 dark:border-[#30363d]/60">
-                        <label className="flex items-center gap-1.5 font-bold text-slate-600 dark:text-slate-300">
-                            From{' '}
+                    <div className="flex flex-wrap gap-3 items-center text-xs p-3 rounded-xl bg-slate-50 dark:bg-[#1c2128] border border-slate-200/60 dark:border-[#30363d]">
+                        <label className="flex items-center gap-2 font-bold text-slate-700 dark:text-slate-300">
+                            <span>From Date:</span>
                             <input
                                 aria-label="From request date"
                                 type="date"
@@ -793,8 +854,8 @@ export default function ConsolidatedOverview({
                                 onChange={e => pick(setFrom)(e.target.value)}
                             />
                         </label>
-                        <label className="flex items-center gap-1.5 font-bold text-slate-600 dark:text-slate-300">
-                            To{' '}
+                        <label className="flex items-center gap-2 font-bold text-slate-700 dark:text-slate-300">
+                            <span>To Date:</span>
                             <input
                                 aria-label="To request date"
                                 type="date"
@@ -805,9 +866,139 @@ export default function ConsolidatedOverview({
                             />
                         </label>
                         {dateError && (
-                            <p role="alert" className="text-rose-600 font-bold">
+                            <p role="alert" className="text-rose-600 font-bold ml-2">
                                 From date must be before or equal to To date.
                             </p>
+                        )}
+                    </div>
+                )}
+
+                {/* Dedicated Dropdown Selectors with Full Organization Options */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-1">
+                    {/* Property Filter */}
+                    <div className="min-w-0">
+                        <SearchableSelect
+                            label="Property"
+                            value={property}
+                            options={[
+                                { value: '', label: `All properties (${allProperties.length})` },
+                                ...allProperties
+                            ]}
+                            onChange={pick(setProperty)}
+                        />
+                    </div>
+
+                    {/* Requester Filter */}
+                    <div className="min-w-0">
+                        <SearchableSelect
+                            label="Requester"
+                            value={requester}
+                            options={[
+                                { value: '', label: `All requesters (${allRequesters.length})` },
+                                ...allRequesters
+                            ]}
+                            onChange={pick(setRequester)}
+                        />
+                    </div>
+
+                    {/* Status Filter */}
+                    <div className="min-w-0">
+                        <SearchableSelect
+                            label="Status"
+                            value={status}
+                            options={[
+                                { value: '', label: 'All statuses' },
+                                ...Object.entries(PC_STATUS_META).map(([value, item]) => ({
+                                    value,
+                                    label: item.label
+                                }))
+                            ]}
+                            onChange={pick(setStatus)}
+                        />
+                    </div>
+
+                    {/* Assigned Actor Filter */}
+                    <div className="min-w-0">
+                        <SearchableSelect
+                            label="Assigned actor"
+                            value={actor}
+                            options={[
+                                { value: '', label: allActors.length ? `All actors (${allActors.length})` : 'All assigned actors' },
+                                ...allActors
+                            ]}
+                            onChange={pick(setActor)}
+                        />
+                    </div>
+                </div>
+
+                {/* Active Filter Chips */}
+                {hasActiveFilters && (
+                    <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-100 dark:border-[#30363d]/60">
+                        <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">
+                            Active Filters:
+                        </span>
+
+                        {search && (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-primary/10 text-primary">
+                                Search: &quot;{search}&quot;
+                                <button onClick={() => pick(setSearch)('')} className="hover:opacity-75">
+                                    <X size={12} />
+                                </button>
+                            </span>
+                        )}
+
+                        {property && (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-indigo-500/10 text-indigo-600 dark:text-indigo-400">
+                                Property: {allProperties.find(p => p.value === property)?.label || property}
+                                <button onClick={() => pick(setProperty)('')} className="hover:opacity-75">
+                                    <X size={12} />
+                                </button>
+                            </span>
+                        )}
+
+                        {requester && (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-purple-500/10 text-purple-600 dark:text-purple-400">
+                                Requester: {allRequesters.find(u => u.value === requester)?.label || requester}
+                                <button onClick={() => pick(setRequester)('')} className="hover:opacity-75">
+                                    <X size={12} />
+                                </button>
+                            </span>
+                        )}
+
+                        {status && (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-amber-500/10 text-amber-600 dark:text-amber-400">
+                                Status: {PC_STATUS_META[status]?.label || status}
+                                <button onClick={() => setStatus('')} className="hover:opacity-75">
+                                    <X size={12} />
+                                </button>
+                            </span>
+                        )}
+
+                        {actor && (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-sky-500/10 text-sky-600 dark:text-sky-400">
+                                Actor: {allActors.find(a => a.value === actor)?.label || actor}
+                                <button onClick={() => setActor('')} className="hover:opacity-75">
+                                    <X size={12} />
+                                </button>
+                            </span>
+                        )}
+
+                        {period !== 'all' && (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+                                Date: {period}
+                                <button onClick={() => { setPeriod('all'); setFrom(''); setTo(''); }} className="hover:opacity-75">
+                                    <X size={12} />
+                                </button>
+                            </span>
+                        )}
+
+                        {attention && (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-rose-500/10 text-rose-600">
+                                Alert: {attention}
+                                <button onClick={() => setAttention(null)} className="hover:opacity-75">
+                                    <X size={12} />
+                                </button>
+                            </span>
                         )}
                     </div>
                 )}
@@ -860,6 +1051,7 @@ export default function ConsolidatedOverview({
                         {properties.map(grp => {
                             const isSelected = property === grp.id;
                             const spentRatio = grp.paid > 0 ? Math.min(100, Math.round((grp.spent / grp.paid) * 100)) : 0;
+                            const cleanName = grp.name.replace(/\s*\.\s*$/, '');
 
                             return (
                                 <div
@@ -879,9 +1071,9 @@ export default function ConsolidatedOverview({
                                                 <button
                                                     onClick={() => pick(setProperty)(isSelected ? '' : grp.id)}
                                                     className="font-black text-slate-900 dark:text-white hover:text-primary transition-colors text-left text-sm truncate block"
-                                                    title={grp.name}
+                                                    title={cleanName}
                                                 >
-                                                    {grp.name}
+                                                    {cleanName}
                                                 </button>
                                                 <div className="flex items-center gap-2 text-xs text-slate-500 mt-0.5">
                                                     <span>{grp.requests} requests</span>
