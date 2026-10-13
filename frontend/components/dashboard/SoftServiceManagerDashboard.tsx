@@ -52,7 +52,7 @@ const SoftServiceManagerDashboard: React.FC<SoftServiceManagerDashboardProps> = 
     const { dashboardContent, navigateDashboard } = useDashboardContent();
     const searchParams = useSearchParams();
     const router = useRouter();
-    const { user, signOut } = useAuth();
+    const { user, signOut, membership } = useAuth();
     const supabase = useMemo(() => createClient(), []);
 
     const isManager = userRole === 'soft_service_manager' || userRole === 'soft_service_supervisor';
@@ -345,7 +345,7 @@ const SoftServiceManagerDashboard: React.FC<SoftServiceManagerDashboardProps> = 
                             )}
 
                             {activeTab === 'grievance' && (
-                                <HRTicketsContent orgId={property?.organization_id || 'org'} />
+                                <HRTicketsContent orgId={property?.organization_id || membership?.org_id || membership?.organization_id || (user as any)?.organization_id || user?.user_metadata?.organization_id || '211e1330-ad83-446d-941f-dcea48396798'} />
                             )}
 
                             {activeTab === 'settings' && (

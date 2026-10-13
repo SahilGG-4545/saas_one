@@ -573,7 +573,7 @@ const OrgAdminDashboard = () => {
                 user_id,
                 role,
                 is_active,
-                user:users (
+                user:users!user_id (
                     id,
                     full_name,
                     email
@@ -597,13 +597,13 @@ const OrgAdminDashboard = () => {
                     organization_id,
                     name
                 ),
-                user:users (
+                user:users!user_id (
                     id,
                     full_name,
                     email
                 )
             `)
-            .eq('properties.organization_id', org.id)
+            .eq('property.organization_id', org.id)
             .eq('is_active', true);
 
         if (propError) console.error('Error fetching property users:', propError);
@@ -843,6 +843,21 @@ const OrgAdminDashboard = () => {
     useEffect(() => {
         if (dashboardContent === undefined) fetchSummaries();
     }, [fetchSummaries, dashboardContent]);
+
+    useEffect(() => {
+        const handleCreated = () => {
+            invalidateCache('org-summaries-');
+            invalidateCache('tickets-');
+            invalidateCache('spoc-dashboard-');
+            fetchSummaries();
+        };
+        window.addEventListener('ticket-created', handleCreated);
+        window.addEventListener('request-created', handleCreated);
+        return () => {
+            window.removeEventListener('ticket-created', handleCreated);
+            window.removeEventListener('request-created', handleCreated);
+        };
+    }, [fetchSummaries, invalidateCache]);
 
     const uploadBase64IfNeeded = async (url: string | undefined) => {
         if (!url || !url.startsWith('data:image/')) return url;
@@ -1781,7 +1796,7 @@ const OrgAdminDashboard = () => {
                             </div>
                         )}
                         {activeTab === 'grievance' && (
-                            <HRTicketsContent orgId={org?.id || membership?.org_id || 'org'} />
+                            <HRTicketsContent orgId={org?.id || membership?.org_id || membership?.organization_id || (user as any)?.organization_id || user?.user_metadata?.organization_id || '211e1330-ad83-446d-941f-dcea48396798'} />
                         )}
                         
                         {activeTab === 'water' && (
@@ -2177,6 +2192,16 @@ const OrgAdminDashboard = () => {
                     propertyId={selectedPropertyId === 'all' ? undefined : selectedPropertyId}
                     isAdminMode={true}
                     showInternalToggle={true}
+                    onSuccess={(ticket) => {
+                        invalidateCache('org-summaries-');
+                        invalidateCache('tickets-');
+                        invalidateCache('spoc-dashboard-');
+                        fetchSummaries();
+                        if (typeof window !== 'undefined') {
+                            window.dispatchEvent(new CustomEvent('ticket-created', { detail: { ticket } }));
+                            window.dispatchEvent(new CustomEvent('request-created', { detail: { ticket } }));
+                        }
+                    }}
                     organizations={(() => {
                         const orgs = org ? [org] : [];
                         // If user is from Autopilot Offices but viewing another org, add Autopilot to the list
@@ -4223,7 +4248,7 @@ const SuperTenantOrgTab = ({ orgId, properties }: { orgId: string; properties: S
         try {
             const { data: stMems } = await supabase
                 .from('organization_memberships')
-                .select('user_id, users(id, full_name, email)')
+                .select('user_id, users!user_id(id, full_name, email)')
                 .eq('organization_id', orgId)
                 .eq('role', 'super_tenant')
                 .eq('is_active', true);
@@ -4241,7 +4266,7 @@ const SuperTenantOrgTab = ({ orgId, properties }: { orgId: string; properties: S
 
             const { data: members } = await supabase
                 .from('organization_memberships')
-                .select('user_id, role, users(id, full_name, email)')
+                .select('user_id, role, users!user_id(id, full_name, email)')
                 .eq('organization_id', orgId)
                 .eq('is_active', true)
                 .neq('role', 'super_tenant');

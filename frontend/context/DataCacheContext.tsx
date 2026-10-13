@@ -80,17 +80,25 @@ export function DataCacheProvider({ children }: { children: React.ReactNode }) {
         }
     }, [getUserKey]);
 
-    const invalidateCache = useCallback((key?: string) => {
-        if (key) {
-            const userSpecificKey = getUserKey(key);
+    const invalidateCache = useCallback((keyOrPrefix?: string) => {
+        if (keyOrPrefix) {
+            const userSpecificKey = getUserKey(keyOrPrefix);
             setCache(prev => {
-                const next = { ...prev };
-                delete next[userSpecificKey];
+                const next: Record<string, CacheEntry> = {};
+                for (const [k, v] of Object.entries(prev)) {
+                    if (k !== userSpecificKey && !k.includes(keyOrPrefix)) {
+                        next[k] = v;
+                    }
+                }
                 return next;
             });
-            if (isPersistentKey(key)) {
-                try { localStorage.removeItem(`cache:${userSpecificKey}`); } catch {}
-            }
+            try {
+                Object.keys(localStorage)
+                    .filter(k => k.startsWith('cache:') && (k === `cache:${userSpecificKey}` || k.includes(keyOrPrefix)))
+                    .forEach(k => {
+                        try { localStorage.removeItem(k); } catch {}
+                    });
+            } catch {}
         } else {
             setCache({});
             // Clear all cache: keys from localStorage (all users/guests) for absolute safety on logout

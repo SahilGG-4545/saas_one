@@ -14,6 +14,7 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import { createClient } from '@/frontend/utils/supabase/client';
 import { useAuth } from '@/frontend/context/AuthContext';
+import { useDataCache } from '@/frontend/context/DataCacheContext';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import SignOutModal from '@/frontend/components/ui/SignOutModal';
 import Image from 'next/image';
@@ -115,7 +116,7 @@ interface Ticket {
 const StaffDashboard = () => {
     usePreloadTabs(TAB_PRELOADS);
     const { dashboardContent, dashboardPropertyId, navigateDashboard } = useDashboardContent();
-    const { user, signOut } = useAuth();
+    const { user, signOut, membership } = useAuth();
     const params = useParams();
     const router = useRouter();
     const propertyId = (params?.propertyId as string) || dashboardPropertyId;
@@ -135,6 +136,8 @@ const StaffDashboard = () => {
     const [sidebarOpen, setSidebarOpen] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
     const searchParams = useSearchParams();
+    const { getCachedData, setCachedData } = useDataCache();
+    const cacheKeyPrefix = `staff-${propertyId}`;
 
     // Edit Modal State
     const [editingTicket, setEditingTicket] = useState<Ticket | null>(null);
@@ -157,7 +160,7 @@ const StaffDashboard = () => {
         type: 'success',
         visible: false
     });
-    const [requestFilter, setRequestFilter] = useState<'all' | 'active' | 'completed' | 'assigned_to_me' | 'completed_by_me'>(
+    const [requestFilter, setRequestFilter] = useState<'all' | 'active' | 'completed' | 'assigned_to_me' | 'completed_by_me' | 'raised_by_me'>(
         (searchParams.get('filter') as any) || 'all'
     );
     const [showScannerModal, setShowScannerModal] = useState(false);
@@ -168,6 +171,15 @@ const StaffDashboard = () => {
 
     useEffect(() => {
         if (propertyId) {
+            // Restore from cache for instant navigation (0ms)
+            const cachedProperty = getCachedData(`${cacheKeyPrefix}-details`);
+            const cachedTickets = getCachedData(`${cacheKeyPrefix}-tickets`);
+            if (cachedProperty) setProperty(cachedProperty);
+            if (cachedTickets) {
+                setIncomingTickets(cachedTickets.incoming);
+                setCompletedTickets(cachedTickets.completed);
+                setIsLoading(false);
+            }
             // Restore shift status from localStorage if available
             let savedShift: string | null = null;
             try {
@@ -302,9 +314,11 @@ const StaffDashboard = () => {
 
     const fetchTickets = async () => {
         if (!user || !propertyId) return;
-        setIsFetching(true);
+        if (incomingTickets.length === 0 && completedTickets.length === 0) {
+            setIsFetching(true);
+        }
 
-        const { data, error } = await supabase
+        const [ticketsResult, { count: totalCount }, { count: closedCountResult }] = await Promise.all([supabase
             .from('tickets')
             .select(`
                 *,
@@ -315,15 +329,19 @@ const StaffDashboard = () => {
             `)
             .eq('property_id', propertyId)
             .order('created_at', { ascending: false })
-            .limit(10000);
-
-        const [
-            { count: totalCount },
-            { count: closedCountResult }
-        ] = await Promise.all([
+            .limit(10000),
             supabase.from('tickets').select('*', { count: 'exact', head: true }).eq('property_id', propertyId),
             supabase.from('tickets').select('*', { count: 'exact', head: true }).eq('property_id', propertyId).in('status', ['resolved', 'closed', 'pending_validation'])
         ]);
+        const { data, error } = ticketsResult;
+
+
+
+
+
+
+
+
 
         if (error) {
             console.error('Error fetching tickets:', error);
@@ -338,6 +356,7 @@ const StaffDashboard = () => {
             const totalExact = totalCount || data?.length || 0;
             const closedExact = closedCountResult || completed.length;
             setTicketStats({ total: totalExact, open: totalExact - closedExact, closed: closedExact });
+            setCachedData(`${cacheKeyPrefix}-tickets`, { incoming: active, completed });
         }
         setIsFetching(false);
     };
@@ -356,6 +375,7 @@ const StaffDashboard = () => {
             setErrorMsg('Property not found.');
         } else {
             setProperty(data);
+            setCachedData(`${cacheKeyPrefix}-details`, data);
         }
         setIsLoading(false);
     };
@@ -854,7 +874,7 @@ const StaffDashboard = () => {
                                 />
                             )}
                             {activeTab === 'grievance' && (
-                                <HRTicketsContent orgId={property?.organization_id || 'org'} />
+                                <HRTicketsContent orgId={property?.organization_id || membership?.org_id || membership?.organization_id || (user as any)?.organization_id || user?.user_metadata?.organization_id || '211e1330-ad83-446d-941f-dcea48396798'} />
                             )}
                             {activeTab === 'settings' && <SettingsView />}
                             {activeTab === 'profile' && (
@@ -1206,11 +1226,16 @@ const ProjectsTab = () => (
 );
 
 // Requests Tab
-const RequestsTab = ({ activeTickets = [], completedTickets = [], onTicketClick, userId, isLoading, propertyName, userName, onEditClick, onDeleteClick, userRole = '', propertyId, onTabChange, filter = 'all', onFilterChange }: { activeTickets?: any[], completedTickets?: any[], onTicketClick?: (id: string) => void, userId: string, isLoading: boolean, propertyName?: string, userName?: string, onEditClick?: (e: React.MouseEvent, t: Ticket) => void, onDeleteClick?: (e: React.MouseEvent, id: string) => void, userRole?: string, propertyId?: string, onTabChange?: (tab: Tab) => void, filter?: 'all' | 'active' | 'completed' | 'assigned_to_me' | 'completed_by_me', onFilterChange?: (filter: any) => void }) => {
+const RequestsTab = ({ activeTickets = [], completedTickets = [], onTicketClick, userId, isLoading, propertyName, userName, onEditClick, onDeleteClick, userRole = '', propertyId, onTabChange, filter = 'all', onFilterChange }: { activeTickets?: any[], completedTickets?: any[], onTicketClick?: (id: string) => void, userId: string, isLoading: boolean, propertyName?: string, userName?: string, onEditClick?: (e: React.MouseEvent, t: Ticket) => void, onDeleteClick?: (e: React.MouseEvent, id: string) => void, userRole?: string, propertyId?: string, onTabChange?: (tab: Tab) => void, filter?: 'all' | 'active' | 'completed' | 'assigned_to_me' | 'completed_by_me' | 'raised_by_me', onFilterChange?: (filter: any) => void }) => {
 
     const getFilteredTickets = () => {
         const uId = userId || '';
         switch (filter) {
+            case 'raised_by_me':
+                return [...activeTickets, ...completedTickets].filter(t =>
+                    String(t.raised_by) === String(uId) ||
+                    (t as any).creator?.id === uId
+                );
             case 'assigned_to_me':
                 return activeTickets.filter(t =>
                     String(t.assigned_to) === String(uId) ||
@@ -1253,6 +1278,7 @@ const RequestsTab = ({ activeTickets = [], completedTickets = [], onTicketClick,
                             <option value="all">All Property Requests</option>
                             <option value="active">All Active Requests</option>
                             <option value="assigned_to_me">Assigned To Me</option>
+                            <option value="raised_by_me">Raised By Me</option>
                             <option value="completed">Completed ({completedTickets.length + completedTickets.filter(t => t.status === 'pending_validation').length})</option>
                             <option value="completed_by_me">Completed By Me</option>
                         </select>
@@ -1274,12 +1300,14 @@ const RequestsTab = ({ activeTickets = [], completedTickets = [], onTicketClick,
                     <h2 className="text-sm font-bold text-text-secondary uppercase tracking-wider flex items-center gap-2">
                         {filter === 'completed' || filter === 'completed_by_me' ? <CheckCircle2 className="w-4 h-4 text-success" /> :
                             filter === 'assigned_to_me' ? <ClipboardList className="w-4 h-4 text-primary" /> :
+                                filter === 'raised_by_me' ? <UserCircle className="w-4 h-4 text-primary" /> :
                                 filter === 'active' ? <Clock className="w-4 h-4 text-info" /> :
                                     <FolderKanban className="w-4 h-4 text-info" />
                         }
                         {filter === 'all' ? 'All Property Activity' :
                             filter === 'active' ? 'All Active Requests' :
                                 filter === 'assigned_to_me' ? 'Assigned To Me' :
+                                    filter === 'raised_by_me' ? 'Raised By Me' :
                                     filter === 'completed_by_me' ? 'Completed By Me' : 'All Completed Requests'}
                         <span className="ml-2 text-[10px] bg-muted px-2 py-0.5 rounded-full text-text-tertiary">{filtered.length}</span>
                     </h2>
