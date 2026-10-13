@@ -21,8 +21,6 @@ import {
     ArrowUpRight,
     Search,
     ChevronLeft,
-    UserCheck,
-    Calendar,
     RotateCcw
 } from 'lucide-react';
 import { inr, PC_STATUS_META } from '@/frontend/lib/pettyCash/roles';
@@ -134,6 +132,8 @@ export default function ConsolidatedOverview({
     const [requester, setRequester] = useState('');
     const [page, setPage] = useState(1);
     const [breakdownTab, setBreakdownTab] = useState<'property' | 'requester'>('property');
+    const [analyzedProperty, setAnalyzedProperty] = useState<string>('');
+    const [analyzedRequester, setAnalyzedRequester] = useState<string>('');
 
     // Full organization metadata
     const [orgUsers, setOrgUsers] = useState<{ id: string; full_name: string; email?: string }[]>([]);
@@ -312,6 +312,8 @@ export default function ConsolidatedOverview({
         setRequester('');
         setPeriod('all');
         setAttention(null);
+        setAnalyzedProperty('');
+        setAnalyzedRequester('');
         setPage(1);
     };
 
@@ -1004,209 +1006,452 @@ export default function ConsolidatedOverview({
                 )}
             </div>
 
-            {/* Grouped Breakdown: By Property & By Requester */}
+            {/* Comparative & Target Analysis: By Property or By Person */}
             <div className="p-6 rounded-3xl bg-white dark:bg-[#161b22] border border-slate-100 dark:border-[#30363d] shadow-sm space-y-4">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
                     <div>
                         <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500">
-                            Comparative Distribution
+                            Comparative & Targeted Breakdown
                         </span>
                         <h3 className="text-base font-black text-slate-900 dark:text-white mt-0.5">
                             Float & Spend Distribution
                         </h3>
                     </div>
 
-                    {/* View Switcher */}
-                    <div className="flex rounded-xl bg-slate-100 dark:bg-[#1c2128] p-1 border border-slate-200/60 dark:border-[#30363d] self-start sm:self-auto">
-                        <button
-                            type="button"
-                            onClick={() => setBreakdownTab('property')}
-                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                                breakdownTab === 'property'
-                                    ? 'bg-white dark:bg-[#21262d] text-slate-900 dark:text-white shadow-sm'
-                                    : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
-                            }`}
-                        >
-                            <Building2 size={13} />
-                            <span>By Property ({properties.length})</span>
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => setBreakdownTab('requester')}
-                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                                breakdownTab === 'requester'
-                                    ? 'bg-white dark:bg-[#21262d] text-slate-900 dark:text-white shadow-sm'
-                                    : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
-                            }`}
-                        >
-                            <User size={13} />
-                            <span>By Requester ({requesters.length})</span>
-                        </button>
+                    {/* View Switcher + Direct Entity Selectors */}
+                    <div className="flex flex-wrap items-center gap-2.5">
+                        <div className="flex rounded-xl bg-slate-100 dark:bg-[#1c2128] p-1 border border-slate-200/60 dark:border-[#30363d]">
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setBreakdownTab('property');
+                                    setAnalyzedRequester('');
+                                }}
+                                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                                    breakdownTab === 'property'
+                                        ? 'bg-white dark:bg-[#21262d] text-slate-900 dark:text-white shadow-sm'
+                                        : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
+                                }`}
+                            >
+                                <Building2 size={13} />
+                                <span>Property Wise</span>
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setBreakdownTab('requester');
+                                    setAnalyzedProperty('');
+                                }}
+                                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                                    breakdownTab === 'requester'
+                                        ? 'bg-white dark:bg-[#21262d] text-slate-900 dark:text-white shadow-sm'
+                                        : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
+                                }`}
+                            >
+                                <User size={13} />
+                                <span>Person Wise</span>
+                            </button>
+                        </div>
+
+                        {/* Interactive Dropdown to pick the exact Property or Person to analyze */}
+                        <div className="w-56 sm:w-64">
+                            {breakdownTab === 'property' ? (
+                                <SearchableSelect
+                                    compact
+                                    label="Select Property"
+                                    value={analyzedProperty}
+                                    options={[
+                                        { value: '', label: `All Properties (${allProperties.length})` },
+                                        ...allProperties
+                                    ]}
+                                    onChange={setAnalyzedProperty}
+                                />
+                            ) : (
+                                <SearchableSelect
+                                    compact
+                                    label="Select Person"
+                                    value={analyzedRequester}
+                                    options={[
+                                        { value: '', label: `All Requesters (${allRequesters.length})` },
+                                        ...allRequesters
+                                    ]}
+                                    onChange={setAnalyzedRequester}
+                                />
+                            )}
+                        </div>
                     </div>
                 </div>
 
-                {/* Breakdown Grid Cards */}
+                {/* Breakdown Display */}
                 {breakdownTab === 'property' ? (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-                        {properties.map(grp => {
-                            const isSelected = property === grp.id;
-                            const spentRatio = grp.paid > 0 ? Math.min(100, Math.round((grp.spent / grp.paid) * 100)) : 0;
-                            const cleanName = grp.name.replace(/\s*\.\s*$/, '');
+                    analyzedProperty ? (
+                        /* Dedicated Single Property Deep Dive */
+                        (() => {
+                            const grp = properties.find(p => p.id === analyzedProperty);
+                            const propLabel = allProperties.find(p => p.value === analyzedProperty)?.label || 'Selected Property';
+                            const spentRatio = grp && grp.paid > 0 ? Math.min(100, Math.round((grp.spent / grp.paid) * 100)) : 0;
 
-                            return (
-                                <div
-                                    key={grp.id}
-                                    className={`p-4 rounded-2xl border transition-all ${
-                                        isSelected
-                                            ? 'bg-primary/5 border-primary/40 ring-1 ring-primary/20'
-                                            : 'bg-slate-50/60 dark:bg-[#1c2128]/60 border-slate-200/60 dark:border-[#30363d] hover:border-slate-300'
-                                    }`}
-                                >
-                                    <div className="flex items-start justify-between gap-3">
-                                        <div className="flex items-center gap-2.5 min-w-0">
-                                            <div className="w-9 h-9 rounded-xl bg-indigo-500/10 flex items-center justify-center text-indigo-500 shrink-0">
-                                                <Building2 size={18} />
-                                            </div>
-                                            <div className="min-w-0">
-                                                <button
-                                                    onClick={() => pick(setProperty)(isSelected ? '' : grp.id)}
-                                                    className="font-black text-slate-900 dark:text-white hover:text-primary transition-colors text-left text-sm truncate block"
-                                                    title={cleanName}
-                                                >
-                                                    {cleanName}
-                                                </button>
-                                                <div className="flex items-center gap-2 text-xs text-slate-500 mt-0.5">
-                                                    <span>{grp.requests} requests</span>
-                                                    <span>·</span>
-                                                    <span>{grp.pending} pending</span>
-                                                    {grp.proofs > 0 && (
-                                                        <span className="text-rose-500 font-bold">· {grp.proofs} proof issues</span>
-                                                    )}
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                        <button
-                                            type="button"
-                                            onClick={() => pick(setProperty)(isSelected ? '' : grp.id)}
-                                            className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all shrink-0 ${
-                                                isSelected
-                                                    ? 'bg-primary text-white'
-                                                    : 'bg-white dark:bg-[#21262d] border border-slate-200 dark:border-[#30363d] text-slate-600 dark:text-slate-300 hover:border-primary/50'
-                                            }`}
+                            if (!grp) {
+                                return (
+                                    <div className="p-8 rounded-2xl border border-dashed border-slate-200 dark:border-[#30363d] text-center space-y-2">
+                                        <Building2 size={32} className="text-slate-400 mx-auto" />
+                                        <h4 className="font-bold text-slate-800 dark:text-white">{propLabel}</h4>
+                                        <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                                            No petty cash requests exist for this property in the currently selected date range or status filters.
+                                        </p>
+                                        <Button
+                                            variant="solid"
+                                            size="sm"
+                                            onClick={() => setAnalyzedProperty('')}
+                                            className="mt-2 rounded-xl font-bold text-xs"
                                         >
-                                            {isSelected ? 'Filtered' : 'Filter'}
-                                        </button>
+                                            View all properties
+                                        </Button>
                                     </div>
-
-                                    {/* Mini Financial Summary */}
-                                    <div className="grid grid-cols-3 gap-2 mt-3 pt-3 border-t border-slate-200/60 dark:border-[#30363d]">
-                                        <div>
-                                            <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">Received</span>
-                                            <span className="text-xs font-black text-slate-900 dark:text-white tabular-nums">{inr(grp.paid)}</span>
-                                        </div>
-                                        <div>
-                                            <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">Spent</span>
-                                            <span className="text-xs font-bold text-emerald-600 tabular-nums">{inr(grp.spent)}</span>
-                                        </div>
-                                        <div>
-                                            <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">Balance</span>
-                                            <span className="text-xs font-black text-sky-600 tabular-nums">{inr(grp.balance)}</span>
-                                        </div>
-                                    </div>
-
-                                    {/* Mini Progress Bar */}
-                                    <div className="mt-2.5 h-1.5 w-full bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden flex">
-                                        <div style={{ width: `${spentRatio}%` }} className="h-full bg-emerald-500" />
-                                        <div style={{ width: `${100 - spentRatio}%` }} className="h-full bg-sky-500" />
-                                    </div>
-                                </div>
-                            );
-                        })}
-                        {!properties.length && (
-                            <p className="p-6 text-xs text-slate-400 text-center col-span-2">No matching properties for this filter.</p>
-                        )}
-                    </div>
-                ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-                        {requesters.map(grp => {
-                            const isSelected = requester === grp.id;
-                            const spentRatio = grp.paid > 0 ? Math.min(100, Math.round((grp.spent / grp.paid) * 100)) : 0;
+                                );
+                            }
 
                             return (
-                                <div
-                                    key={grp.id}
-                                    className={`p-4 rounded-2xl border transition-all ${
-                                        isSelected
-                                            ? 'bg-primary/5 border-primary/40 ring-1 ring-primary/20'
-                                            : 'bg-slate-50/60 dark:bg-[#1c2128]/60 border-slate-200/60 dark:border-[#30363d] hover:border-slate-300'
-                                    }`}
-                                >
-                                    <div className="flex items-start justify-between gap-3">
-                                        <div className="flex items-center gap-2.5 min-w-0">
-                                            <div className="w-9 h-9 rounded-xl bg-purple-500/10 flex items-center justify-center text-purple-500 shrink-0">
-                                                <User size={18} />
+                                <div className="p-5 rounded-2xl bg-indigo-50/40 dark:bg-indigo-950/20 border border-indigo-200/80 dark:border-indigo-900/50 space-y-4">
+                                    <div className="flex flex-wrap items-center justify-between gap-3">
+                                        <div className="flex items-center gap-3">
+                                            <div className="w-11 h-11 rounded-2xl bg-indigo-500/10 flex items-center justify-center text-indigo-500 shrink-0">
+                                                <Building2 size={22} />
                                             </div>
-                                            <div className="min-w-0">
-                                                <button
-                                                    onClick={() => pick(setRequester)(isSelected ? '' : grp.id)}
-                                                    className="font-black text-slate-900 dark:text-white hover:text-primary transition-colors text-left text-sm truncate block"
-                                                    title={grp.name}
-                                                >
+                                            <div>
+                                                <span className="text-[10px] font-black uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
+                                                    Property Deep-Dive
+                                                </span>
+                                                <h4 className="text-lg font-black text-slate-900 dark:text-white">
                                                     {grp.name}
-                                                </button>
-                                                <div className="flex items-center gap-2 text-xs text-slate-500 mt-0.5">
-                                                    <span>{grp.requests} requests</span>
-                                                    <span>·</span>
-                                                    <span>{grp.pending} pending</span>
-                                                    {grp.proofs > 0 && (
-                                                        <span className="text-rose-500 font-bold">· {grp.proofs} proof issues</span>
-                                                    )}
-                                                </div>
+                                                </h4>
                                             </div>
                                         </div>
 
-                                        <button
-                                            type="button"
-                                            onClick={() => pick(setRequester)(isSelected ? '' : grp.id)}
-                                            className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all shrink-0 ${
-                                                isSelected
-                                                    ? 'bg-primary text-white'
-                                                    : 'bg-white dark:bg-[#21262d] border border-slate-200 dark:border-[#30363d] text-slate-600 dark:text-slate-300 hover:border-primary/50'
-                                            }`}
-                                        >
-                                            {isSelected ? 'Filtered' : 'Filter'}
-                                        </button>
-                                    </div>
-
-                                    {/* Mini Financial Summary */}
-                                    <div className="grid grid-cols-3 gap-2 mt-3 pt-3 border-t border-slate-200/60 dark:border-[#30363d]">
-                                        <div>
-                                            <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">Received</span>
-                                            <span className="text-xs font-black text-slate-900 dark:text-white tabular-nums">{inr(grp.paid)}</span>
-                                        </div>
-                                        <div>
-                                            <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">Spent</span>
-                                            <span className="text-xs font-bold text-emerald-600 tabular-nums">{inr(grp.spent)}</span>
-                                        </div>
-                                        <div>
-                                            <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">Balance</span>
-                                            <span className="text-xs font-black text-sky-600 tabular-nums">{inr(grp.balance)}</span>
+                                        <div className="flex items-center gap-2">
+                                            <Button
+                                                variant="solid"
+                                                size="sm"
+                                                onClick={() => pick(setProperty)(grp.id)}
+                                                className="rounded-xl font-bold text-xs"
+                                            >
+                                                Filter Table Below
+                                            </Button>
+                                            <Button
+                                                variant="solid"
+                                                size="sm"
+                                                onClick={() => setAnalyzedProperty('')}
+                                                className="rounded-xl font-bold text-xs bg-white dark:bg-[#161b22] border border-slate-200 dark:border-[#30363d] text-slate-700 dark:text-slate-300"
+                                            >
+                                                View All
+                                            </Button>
                                         </div>
                                     </div>
 
-                                    {/* Mini Progress Bar */}
-                                    <div className="mt-2.5 h-1.5 w-full bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden flex">
-                                        <div style={{ width: `${spentRatio}%` }} className="h-full bg-emerald-500" />
-                                        <div style={{ width: `${100 - spentRatio}%` }} className="h-full bg-sky-500" />
+                                    {/* 4 Financial KPIs for this Property */}
+                                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                                        <div className="p-3.5 rounded-xl bg-white dark:bg-[#161b22] border border-slate-100 dark:border-[#30363d]">
+                                            <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">Total Requests</span>
+                                            <div className="text-lg font-black text-slate-900 dark:text-white tabular-nums mt-0.5">
+                                                {grp.requests}
+                                                <span className="text-xs font-normal text-slate-400 ml-1">({grp.pending} pending)</span>
+                                            </div>
+                                        </div>
+                                        <div className="p-3.5 rounded-xl bg-white dark:bg-[#161b22] border border-slate-100 dark:border-[#30363d]">
+                                            <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">Received Float</span>
+                                            <div className="text-lg font-black text-slate-900 dark:text-white tabular-nums mt-0.5">{inr(grp.paid)}</div>
+                                        </div>
+                                        <div className="p-3.5 rounded-xl bg-white dark:bg-[#161b22] border border-slate-100 dark:border-[#30363d]">
+                                            <span className="text-[10px] font-black uppercase tracking-wider text-emerald-600 block">Verified Spent</span>
+                                            <div className="text-lg font-black text-emerald-700 dark:text-emerald-400 tabular-nums mt-0.5">{inr(grp.spent)}</div>
+                                        </div>
+                                        <div className="p-3.5 rounded-xl bg-white dark:bg-[#161b22] border border-slate-100 dark:border-[#30363d]">
+                                            <span className="text-[10px] font-black uppercase tracking-wider text-sky-600 block">Remaining Balance</span>
+                                            <div className="text-lg font-black text-sky-700 dark:text-sky-400 tabular-nums mt-0.5">{inr(grp.balance)}</div>
+                                        </div>
+                                    </div>
+
+                                    {/* Utilization bar */}
+                                    <div className="space-y-1">
+                                        <div className="flex justify-between text-xs font-semibold text-slate-600 dark:text-slate-300">
+                                            <span>Spend Utilization</span>
+                                            <span>{spentRatio}% spent</span>
+                                        </div>
+                                        <div className="h-2.5 w-full bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden flex">
+                                            <div style={{ width: `${spentRatio}%` }} className="h-full bg-emerald-500" />
+                                            <div style={{ width: `${100 - spentRatio}%` }} className="h-full bg-sky-500" />
+                                        </div>
                                     </div>
                                 </div>
                             );
-                        })}
-                        {!requesters.length && (
-                            <p className="p-6 text-xs text-slate-400 text-center col-span-2">No matching requesters for this filter.</p>
-                        )}
-                    </div>
+                        })()
+                    ) : (
+                        /* Side-by-side Comparative Cards for all Properties */
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                            {properties.map(grp => {
+                                const isSelected = property === grp.id;
+                                const spentRatio = grp.paid > 0 ? Math.min(100, Math.round((grp.spent / grp.paid) * 100)) : 0;
+                                const cleanName = grp.name.replace(/\s*\.\s*$/, '');
+
+                                return (
+                                    <div
+                                        key={grp.id}
+                                        className={`p-4 rounded-2xl border transition-all ${
+                                            isSelected
+                                                ? 'bg-primary/5 border-primary/40 ring-1 ring-primary/20'
+                                                : 'bg-slate-50/60 dark:bg-[#1c2128]/60 border-slate-200/60 dark:border-[#30363d] hover:border-slate-300'
+                                        }`}
+                                    >
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div className="flex items-center gap-2.5 min-w-0">
+                                                <div className="w-9 h-9 rounded-xl bg-indigo-500/10 flex items-center justify-center text-indigo-500 shrink-0">
+                                                    <Building2 size={18} />
+                                                </div>
+                                                <div className="min-w-0">
+                                                    <button
+                                                        onClick={() => pick(setProperty)(isSelected ? '' : grp.id)}
+                                                        className="font-black text-slate-900 dark:text-white hover:text-primary transition-colors text-left text-sm truncate block"
+                                                        title={cleanName}
+                                                    >
+                                                        {cleanName}
+                                                    </button>
+                                                    <div className="flex items-center gap-2 text-xs text-slate-500 mt-0.5">
+                                                        <span>{grp.requests} requests</span>
+                                                        <span>·</span>
+                                                        <span>{grp.pending} pending</span>
+                                                        {grp.proofs > 0 && (
+                                                            <span className="text-rose-500 font-bold">· {grp.proofs} proof issues</span>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            <button
+                                                type="button"
+                                                onClick={() => pick(setProperty)(isSelected ? '' : grp.id)}
+                                                className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all shrink-0 ${
+                                                    isSelected
+                                                        ? 'bg-primary text-white'
+                                                        : 'bg-white dark:bg-[#21262d] border border-slate-200 dark:border-[#30363d] text-slate-600 dark:text-slate-300 hover:border-primary/50'
+                                                }`}
+                                            >
+                                                {isSelected ? 'Filtered' : 'Filter'}
+                                            </button>
+                                        </div>
+
+                                        {/* Mini Financial Summary */}
+                                        <div className="grid grid-cols-3 gap-2 mt-3 pt-3 border-t border-slate-200/60 dark:border-[#30363d]">
+                                            <div>
+                                                <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">Received</span>
+                                                <span className="text-xs font-black text-slate-900 dark:text-white tabular-nums">{inr(grp.paid)}</span>
+                                            </div>
+                                            <div>
+                                                <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">Spent</span>
+                                                <span className="text-xs font-bold text-emerald-600 tabular-nums">{inr(grp.spent)}</span>
+                                            </div>
+                                            <div>
+                                                <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">Balance</span>
+                                                <span className="text-xs font-black text-sky-600 tabular-nums">{inr(grp.balance)}</span>
+                                            </div>
+                                        </div>
+
+                                        {/* Mini Progress Bar */}
+                                        <div className="mt-2.5 h-1.5 w-full bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden flex">
+                                            <div style={{ width: `${spentRatio}%` }} className="h-full bg-emerald-500" />
+                                            <div style={{ width: `${100 - spentRatio}%` }} className="h-full bg-sky-500" />
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                            {!properties.length && (
+                                <p className="p-6 text-xs text-slate-400 text-center col-span-2">No matching properties for this filter.</p>
+                            )}
+                        </div>
+                    )
+                ) : (
+                    analyzedRequester ? (
+                        /* Dedicated Single Person Deep Dive */
+                        (() => {
+                            const grp = requesters.find(r => r.id === analyzedRequester);
+                            const userLabel = allRequesters.find(u => u.value === analyzedRequester)?.label || 'Selected Person';
+                            const spentRatio = grp && grp.paid > 0 ? Math.min(100, Math.round((grp.spent / grp.paid) * 100)) : 0;
+
+                            if (!grp) {
+                                return (
+                                    <div className="p-8 rounded-2xl border border-dashed border-slate-200 dark:border-[#30363d] text-center space-y-2">
+                                        <User size={32} className="text-slate-400 mx-auto" />
+                                        <h4 className="font-bold text-slate-800 dark:text-white">{userLabel}</h4>
+                                        <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                                            No petty cash requests have been filed by this user in the currently selected date range or status filters.
+                                        </p>
+                                        <Button
+                                            variant="solid"
+                                            size="sm"
+                                            onClick={() => setAnalyzedRequester('')}
+                                            className="mt-2 rounded-xl font-bold text-xs"
+                                        >
+                                            View all requesters
+                                        </Button>
+                                    </div>
+                                );
+                            }
+
+                            return (
+                                <div className="p-5 rounded-2xl bg-purple-50/40 dark:bg-purple-950/20 border border-purple-200/80 dark:border-purple-900/50 space-y-4">
+                                    <div className="flex flex-wrap items-center justify-between gap-3">
+                                        <div className="flex items-center gap-3">
+                                            <div className="w-11 h-11 rounded-2xl bg-purple-500/10 flex items-center justify-center text-purple-500 shrink-0">
+                                                <User size={22} />
+                                            </div>
+                                            <div>
+                                                <span className="text-[10px] font-black uppercase tracking-wider text-purple-600 dark:text-purple-400">
+                                                    Person Deep-Dive
+                                                </span>
+                                                <h4 className="text-lg font-black text-slate-900 dark:text-white">
+                                                    {grp.name}
+                                                </h4>
+                                            </div>
+                                        </div>
+
+                                        <div className="flex items-center gap-2">
+                                            <Button
+                                                variant="solid"
+                                                size="sm"
+                                                onClick={() => pick(setRequester)(grp.id)}
+                                                className="rounded-xl font-bold text-xs"
+                                            >
+                                                Filter Table Below
+                                            </Button>
+                                            <Button
+                                                variant="solid"
+                                                size="sm"
+                                                onClick={() => setAnalyzedRequester('')}
+                                                className="rounded-xl font-bold text-xs bg-white dark:bg-[#161b22] border border-slate-200 dark:border-[#30363d] text-slate-700 dark:text-slate-300"
+                                            >
+                                                View All
+                                            </Button>
+                                        </div>
+                                    </div>
+
+                                    {/* 4 Financial KPIs for this Person */}
+                                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                                        <div className="p-3.5 rounded-xl bg-white dark:bg-[#161b22] border border-slate-100 dark:border-[#30363d]">
+                                            <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">Total Requests</span>
+                                            <div className="text-lg font-black text-slate-900 dark:text-white tabular-nums mt-0.5">
+                                                {grp.requests}
+                                                <span className="text-xs font-normal text-slate-400 ml-1">({grp.pending} pending)</span>
+                                            </div>
+                                        </div>
+                                        <div className="p-3.5 rounded-xl bg-white dark:bg-[#161b22] border border-slate-100 dark:border-[#30363d]">
+                                            <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">Received Float</span>
+                                            <div className="text-lg font-black text-slate-900 dark:text-white tabular-nums mt-0.5">{inr(grp.paid)}</div>
+                                        </div>
+                                        <div className="p-3.5 rounded-xl bg-white dark:bg-[#161b22] border border-slate-100 dark:border-[#30363d]">
+                                            <span className="text-[10px] font-black uppercase tracking-wider text-emerald-600 block">Verified Spent</span>
+                                            <div className="text-lg font-black text-emerald-700 dark:text-emerald-400 tabular-nums mt-0.5">{inr(grp.spent)}</div>
+                                        </div>
+                                        <div className="p-3.5 rounded-xl bg-white dark:bg-[#161b22] border border-slate-100 dark:border-[#30363d]">
+                                            <span className="text-[10px] font-black uppercase tracking-wider text-sky-600 block">Remaining Balance</span>
+                                            <div className="text-lg font-black text-sky-700 dark:text-sky-400 tabular-nums mt-0.5">{inr(grp.balance)}</div>
+                                        </div>
+                                    </div>
+
+                                    {/* Utilization bar */}
+                                    <div className="space-y-1">
+                                        <div className="flex justify-between text-xs font-semibold text-slate-600 dark:text-slate-300">
+                                            <span>Spend Utilization</span>
+                                            <span>{spentRatio}% spent</span>
+                                        </div>
+                                        <div className="h-2.5 w-full bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden flex">
+                                            <div style={{ width: `${spentRatio}%` }} className="h-full bg-emerald-500" />
+                                            <div style={{ width: `${100 - spentRatio}%` }} className="h-full bg-sky-500" />
+                                        </div>
+                                    </div>
+                                </div>
+                            );
+                        })()
+                    ) : (
+                        /* Side-by-side Comparative Cards for all Requesters */
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                            {requesters.map(grp => {
+                                const isSelected = requester === grp.id;
+                                const spentRatio = grp.paid > 0 ? Math.min(100, Math.round((grp.spent / grp.paid) * 100)) : 0;
+
+                                return (
+                                    <div
+                                        key={grp.id}
+                                        className={`p-4 rounded-2xl border transition-all ${
+                                            isSelected
+                                                ? 'bg-primary/5 border-primary/40 ring-1 ring-primary/20'
+                                                : 'bg-slate-50/60 dark:bg-[#1c2128]/60 border-slate-200/60 dark:border-[#30363d] hover:border-slate-300'
+                                        }`}
+                                    >
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div className="flex items-center gap-2.5 min-w-0">
+                                                <div className="w-9 h-9 rounded-xl bg-purple-500/10 flex items-center justify-center text-purple-500 shrink-0">
+                                                    <User size={18} />
+                                                </div>
+                                                <div className="min-w-0">
+                                                    <button
+                                                        onClick={() => pick(setRequester)(isSelected ? '' : grp.id)}
+                                                        className="font-black text-slate-900 dark:text-white hover:text-primary transition-colors text-left text-sm truncate block"
+                                                        title={grp.name}
+                                                    >
+                                                        {grp.name}
+                                                    </button>
+                                                    <div className="flex items-center gap-2 text-xs text-slate-500 mt-0.5">
+                                                        <span>{grp.requests} requests</span>
+                                                        <span>·</span>
+                                                        <span>{grp.pending} pending</span>
+                                                        {grp.proofs > 0 && (
+                                                            <span className="text-rose-500 font-bold">· {grp.proofs} proof issues</span>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            <button
+                                                type="button"
+                                                onClick={() => pick(setRequester)(isSelected ? '' : grp.id)}
+                                                className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all shrink-0 ${
+                                                    isSelected
+                                                        ? 'bg-primary text-white'
+                                                        : 'bg-white dark:bg-[#21262d] border border-slate-200 dark:border-[#30363d] text-slate-600 dark:text-slate-300 hover:border-primary/50'
+                                                }`}
+                                            >
+                                                {isSelected ? 'Filtered' : 'Filter'}
+                                            </button>
+                                        </div>
+
+                                        {/* Mini Financial Summary */}
+                                        <div className="grid grid-cols-3 gap-2 mt-3 pt-3 border-t border-slate-200/60 dark:border-[#30363d]">
+                                            <div>
+                                                <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">Received</span>
+                                                <span className="text-xs font-black text-slate-900 dark:text-white tabular-nums">{inr(grp.paid)}</span>
+                                            </div>
+                                            <div>
+                                                <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">Spent</span>
+                                                <span className="text-xs font-bold text-emerald-600 tabular-nums">{inr(grp.spent)}</span>
+                                            </div>
+                                            <div>
+                                                <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">Balance</span>
+                                                <span className="text-xs font-black text-sky-600 tabular-nums">{inr(grp.balance)}</span>
+                                            </div>
+                                        </div>
+
+                                        {/* Mini Progress Bar */}
+                                        <div className="mt-2.5 h-1.5 w-full bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden flex">
+                                            <div style={{ width: `${spentRatio}%` }} className="h-full bg-emerald-500" />
+                                            <div style={{ width: `${100 - spentRatio}%` }} className="h-full bg-sky-500" />
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                            {!requesters.length && (
+                                <p className="p-6 text-xs text-slate-400 text-center col-span-2">No matching requesters for this filter.</p>
+                            )}
+                        </div>
+                    )
                 )}
             </div>
 
