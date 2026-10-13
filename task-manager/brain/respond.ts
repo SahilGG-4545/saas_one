@@ -1,5 +1,5 @@
 import type { ReplyFacts } from './domain';
-import { BrainLlm, extractJson, withModelFallback } from './llm';
+import { BrainLlm, HEDGE_REPLY_MS, extractJson, withModelFallback } from './llm';
 import { replySystemPrompt, replyUserPrompt } from './prompt';
 
 /**
@@ -18,6 +18,7 @@ const EMOJI = /\p{Extended_Pictographic}/gu;
 // "Nothing has been updated yet" is exactly what should be said, so a sentence that negates or says "yet" is not a false claim.
 const NEGATION = /\b(nothing|not|no|never|yet|until|won't|will)\b|n['’]t\b/i;
 const claimsDone = (text: string) => text.split(/(?<=[.!?])\s+|\n/).some(s => CLAIMS_DONE.test(s) && !NEGATION.test(s));
+const YES_NO_QUESTION = /\b(should i|shall i|do you want me to|would you like me to|want me to|(?:could|can) you (?:please )?confirm|confirm (?:if|whether|that)|is that (?:right|correct|ok|okay)|did you mean to)\b/i;
 const ALWAYS_OK_WORDS = new Set([
     'whatsapp', 'task', 'tasks', 'manager', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
     'january', 'february', 'march', 'april', 'june', 'july', 'august', 'september', 'october', 'november', 'december',
@@ -46,6 +47,8 @@ export function checkReply(text: unknown, facts: ReplyFacts, known: ReadonlySet<
     if (/^#{1,6}\s/m.test(bare) || /```|\*\*/.test(bare)) problems.push('formatting not allowed');
     if (facts.claimsNothingDone && claimsDone(bare)) problems.push('claims something already happened');
     if (facts.asksQuestion && (bare.match(/\?/g) || []).length !== 1) problems.push('must contain exactly one question');
+    // Part B: a "should I…?" with nothing waiting for the yes is exactly what left Harsh's "Yes add this task" unanswered.
+    if (facts.noYesNoQuestion && YES_NO_QUESTION.test(bare)) problems.push('asks a yes/no question nothing is waiting for');
 
     // A capitalised word must be one the AI was given (a name, a task title, a department, the person's own words).
     // An invented one is rejected. The facts that matter (counts, lists) must come through a placeholder.
@@ -69,19 +72,23 @@ export interface ComposedReply { text: string; source: 'ai' | 'fallback'; model:
 
 export async function composeReply(p: {
     llm: BrainLlm; models: readonly string[]; facts: ReplyFacts; userMessage: string; known?: ReadonlySet<string>;
+    /** Part B5: the latest chat lines, so the wording follows the conversation. Never a source of what happened. */
+    conversation?: string[];
+    /** Group 2: start the backup model after this long (0 = strictly one after another). */
+    hedgeMs?: number;
 }): Promise<ComposedReply> {
     const started = Date.now();
     const problems: string[] = [];
     let tokensIn = 0, tokensOut = 0;
     try {
         const { value, trace } = await withModelFallback(p.models, async model => {
-            const res = await p.llm.complete({ model, system: replySystemPrompt(), user: replyUserPrompt(p.facts, p.userMessage), json: true, maxTokens: 800 });
+            const res = await p.llm.complete({ model, system: replySystemPrompt(), user: replyUserPrompt(p.facts, p.userMessage, p.conversation), json: true, maxTokens: 800 });
             tokensIn += res.tokensIn; tokensOut += res.tokensOut;
             const text = (extractJson(res.text) as { text?: unknown })?.text;
             const found = checkReply(text, p.facts, p.known);
             if (found.length) { problems.push(...found.map(f => `${model}: ${f}`)); throw new Error(found.join('; ')); }
             return text as string;
-        }, 'reply');
+        }, 'reply', { hedgeMs: p.hedgeMs ?? HEDGE_REPLY_MS });
         return { text: renderReply(value, p.facts.values), source: 'ai', model: trace.model, problems, tokensIn, tokensOut, ms: Date.now() - started };
     } catch (err) {
         // Keep WHY every model failed (an error is as important to see as a failed check).

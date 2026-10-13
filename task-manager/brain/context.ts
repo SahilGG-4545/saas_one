@@ -14,22 +14,27 @@ export async function buildBrainContext(emp: Employee, phone: string, opts: { pe
     const { todayInIndia } = await import('../TaskImportParser');
 
     const person = (e: Employee): BrainPerson => ({ id: e.id, name: e.name, department: e.department_name, role: e.role });
-    const pool = await TaskDatabaseService.getAllEmployees();
+    const today = todayInIndia();
+    // Group 2 "faster replies" (2026-10-13): the three reads do not depend on each other → side by side (were one by one).
+    // Older open tasks first, then today's: the same numbers as the person's morning / overdue messages.
+    const [pool, rows, departments] = await Promise.all([
+        TaskDatabaseService.getAllEmployees(),
+        TaskDatabaseService.getNumberedList({ employeeId: emp.id, date: today }),
+        TaskDatabaseService.getDepartments(),
+    ]);
     const permitted = await PermissionService.visibleAndAssignable(emp, pool);
     const isSuper = emp.role === 'superuser';
 
     const people = new Map<string, BrainPerson>();
     for (const e of isSuper ? pool : [emp, ...permitted, ...pool.filter(x => x.role === 'superuser')]) people.set(e.id, person(e));
 
-    const today = todayInIndia();
-    const rows = await TaskDatabaseService.getDailyAssignments({ employeeId: emp.id, date: today });
     return {
         today,
         sender: person(emp),
         people: [...people.values()],
         assignableIds: (isSuper ? pool : permitted).map(e => e.id).filter(id => id !== emp.id),
-        tasks: rows.map((t, i) => ({ n: i + 1, id: t.id, title: t.title, status: t.status })),
-        departments: (await TaskDatabaseService.getDepartments()).map(d => d.name),
+        tasks: rows.map(t => ({ n: t.listNumber, id: t.id, title: t.title, status: t.status, ...(t.isCarriedForward ? { from: t.assigned_date } : {}) })),
+        departments: departments.map(d => d.name),
         pending: opts.pending,
         recent: opts.recent ?? [],
         ...(opts.conversation?.length ? { conversation: opts.conversation } : {}),

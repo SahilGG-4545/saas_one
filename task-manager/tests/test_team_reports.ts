@@ -34,7 +34,8 @@ async function run() {
     const on = P.interpretSystemPrompt([D.tasksDomainWithTeam, facilityDomain]);
     check('the original instructions do not mention a team scope', !/"team"/.test(off) && !/my team/i.test(off));
     const diff = on.split('\n').filter((l, i) => l !== off.split('\n')[i]);
-    check('with Team reports ON, ONLY the view_tasks lines change', off.split('\n').length === on.split('\n').length && diff.length === 2 && diff.every(l => /view_tasks|"team"/.test(l)), diff);
+    // 2026-10-13: the find_tasks form also gains its "team" choice with the switch (it is gated the same way).
+    check('with Team reports ON, ONLY the view_tasks lines and the find_tasks "team" choice change', off.split('\n').length === on.split('\n').length && diff.length === 3 && diff.every(l => /view_tasks|"team"/.test(l)), diff);
 
     console.log('\n2. Reading and deciding');
     const ctx: any = world('default');

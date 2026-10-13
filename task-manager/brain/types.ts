@@ -13,6 +13,9 @@ export const TASK_INTENTS = [
     'create_tasks',      // "remind me to call the vendor", "assign Lohit a task about RFID …"
     'hand_over_task',    // "give task 2 to Vidya"
     'answer_pending',    // "yes", "no", "the second one", "make it tomorrow" — answers to a question the bot asked
+    'delete_tasks',      // "delete task 2", "remove the carpet one" — always previewed, then YES (owner request 2026-10-13)
+    'rename_task',       // "rename task 2 to Vendor follow-up" — always previewed, then YES (owner request 2026-10-13)
+    'find_tasks',        // any other QUESTION about tasks: "what did I finish yesterday", "anything about AMC", "how many did Lohit finish this week" (read-only)
     'help',
     'smalltalk',
     'unknown',
@@ -31,13 +34,18 @@ export type ViewScope = 'self' | 'person' | 'team' | 'department' | 'org' | 'pen
 export interface Which { all: boolean; numbers: number[]; hints: string[] }
 
 export type Slots =
-    | { intent: 'view_tasks'; scope: ViewScope; person: string | null; department: string | null }
+    | { intent: 'view_tasks'; scope: ViewScope; person: string | null; department: string | null; /** only tasks carried over from earlier days (own list) */ carriedOnly?: boolean }
     | { intent: 'complete_tasks'; which: Which }
     | { intent: 'progress_update'; state: ProgressState; which: Which; note: string | null }
-    | { intent: 'create_tasks'; assignee: string; tasks: Array<{ title: string; details: string | null }>; date: string | null }
+    | { intent: 'create_tasks'; assignee: string; tasks: Array<{ title: string; details: string | null }>; date: string | null;
+        /** A GROUP the AI read from the message ("everyone", "my team", "all of Tech except Harsh"). Code turns it into people. */
+        group?: { whose: 'team' | 'department' | 'everyone'; department: string | null; except: string[] } | null }
     | { intent: 'hand_over_task'; which: Which; to: string | null }
     | { intent: 'answer_pending'; answer: 'yes' | 'no' | 'pick' | 'edit' | 'unsure'; pick: number | null; instruction: string | null }
     | { intent: 'facility_request'; service: 'room' | 'ticket' | 'other' }
+    | { intent: 'find_tasks'; query: import('./findTasks').TaskQuery }
+    | { intent: 'delete_tasks'; which: Which }
+    | { intent: 'rename_task'; which: Which; newTitle: string | null }
     | { intent: 'help' | 'smalltalk' | 'unknown' };
 
 export interface Interpretation {
@@ -53,7 +61,14 @@ export interface Interpretation {
     summary: string;
     /** False when wording the AI produced (a task title, a note) is not really in the person's message. */
     grounded: boolean;
+    /** Part B (2026-10-13): the OTHER requests in the same message ("done 1 and add …"), each validated like the first. */
+    also?: ExtraRequest[];
+    /** Parts of the message the AI tried to read as a request but that did not validate (told to the person, never acted on). */
+    unclear?: string[];
 }
+
+/** One more request from the same message. Only changes are ever combined (see tasksDomain.decide). */
+export interface ExtraRequest { intent: Intent; slots: Slots; summary: string; grounded: boolean }
 
 export type PendingState =
     | { kind: 'confirm'; summary: string }
@@ -64,7 +79,8 @@ export type PendingState =
 export type Role = 'employee' | 'reporting_manager' | 'superuser';
 
 export interface BrainPerson { id: string; name: string; department: string | null; role: Role }
-export interface BrainTask { n: number; id: string; title: string; status: 'pending' | 'in_progress' | 'completed' }
+/** `n` is the number from the person's numbered list (same as in their messages); `from` = the day an older open task was given. */
+export interface BrainTask { n: number; id: string; title: string; status: 'pending' | 'in_progress' | 'completed'; from?: string }
 
 export interface BrainContext {
     today: string;                     // YYYY-MM-DD
@@ -85,13 +101,21 @@ export interface BrainContext {
 }
 
 export type Action =
-    | { type: 'view_tasks'; scope: ViewScope; personId: string | null; department: string | null }
+    | { type: 'view_tasks'; scope: ViewScope; personId: string | null; department: string | null; /** own list: only tasks carried over from earlier days */ carriedOnly?: boolean }
     | { type: 'complete_tasks'; taskIds: string[] }
     | { type: 'progress_update'; state: ProgressState; taskIds: string[]; note: string | null }
     | { type: 'create_tasks'; assigneeId: string; tasks: Array<{ title: string; details: string | null }>; date: string }
     | { type: 'hand_over_task'; taskId: string; toId: string }
     | { type: 'answer_pending'; answer: 'yes' | 'no' | 'pick' | 'edit'; pick: number | null; instruction: string | null }
-    | { type: 'chat'; kind: 'help' | 'smalltalk' };
+    | { type: 'chat'; kind: 'help' | 'smalltalk' }
+    /** Flexible "look up tasks" (read-only): the form, already resolved to allowed people and exact dates by code. */
+    | { type: 'find_tasks'; query: import('./findTasks').ResolvedQuery }
+    /** Delete tasks from the person's own list (checked again by the same function the Tasks tab uses). */
+    | { type: 'delete_tasks'; taskIds: string[] }
+    /** Rename one task on the person's own list. */
+    | { type: 'rename_task'; taskId: string; title: string }
+    /** Several changes from ONE message, shown in one preview and carried out after one YES. `unclear` = parts not understood. */
+    | { type: 'batch'; actions: Action[]; unclear: string[] };
 
 export type ClarifyReason =
     | 'low_confidence' | 'ai_flagged_ambiguity' | 'unknown_intent'
@@ -123,4 +147,6 @@ export const DEFAULT_CONFIRM_POLICY: ConfirmPolicy = { confirmProgressUpdates: f
 export const CHANGE_CONFIDENCE_MIN = 0.8;
 export const READ_CONFIDENCE_MIN = 0.55;
 export const MAX_TASKS_PER_MESSAGE = 15;
+/** Extra requests read from one message on top of the first ("done 1 and add …"): at most this many. */
+export const MAX_EXTRA_REQUESTS = 4;
 export const MAX_TITLE_LENGTH = 200;

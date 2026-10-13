@@ -281,7 +281,8 @@ All migrations are written as files only; **you** apply them. No live database w
    Head-to-head vs. the deterministic path `[BAA pp.94–95, 99]`: Phase 0 baseline vs. Phase 3 shadow on the same real messages. Not yet run. Current offline numbers are in TASK_BRAIN_SPEC.md (tuned, not held-out).
 
 **2. Context** `[BAA p.112]`
-   Knows: sender's name/role/department, today, names of people they may work with, their own tasks, the last 10 turns (Phase 2), any open question/flow, and — through read tools only — team data they are already allowed to see on the web. Does not know: other departments' data outside their permission, phone numbers, ids, credentials.
+   Part B (2026-10-13): the REPLY step also sees the last 10 chat lines (the understand step already saw up to 20); words from the person's OWN earlier lines may ground a new task title, never the assistant's lines `[BAA p.112]`.
+   Knows: sender's name/role/department, today, names of people they may work with, their own **numbered task list** (open tasks from the last 7 days first, oldest first, each with the day it was given; then today's tasks — the same numbers as their morning / midday / evening / overdue messages, added 2026-10-12 so a number in a reply means the task the person saw `[BAA p.112]`), the last 10 turns (Phase 2), any open question/flow, and — through read tools only — team data they are already allowed to see on the web. Does not know: other departments' data outside their permission, phone numbers, ids, credentials.
 
 **3. Cost of a false positive** `[BAA p.112]`
    **High** for understanding (wrong task/person changed) → the most careful model (`glm-5.3-flash`, fallback `qwen3.8-27b`) plus code checks plus confirmation before every write. **Low** for reply wording → faster model with a checker and plain-text fallback.
@@ -289,13 +290,16 @@ All migrations are written as files only; **you** apply them. No live database w
 **4. Tools**
    | tool | description reviewed for when-not-to-use? `[BAA p.107]` | returns errors as text? `[BAA p.94]` | args validated? `[BAA p.93]` | MCP? `[BAA p.106]` |
    |---|---|---|---|---|
-   | existing task intents (view / complete / progress / create / hand over) | yes (TASK_BRAIN_SPEC) | yes → `ai_unavailable` / plain fallback | yes, re-checked against real data | no |
+   | existing task intents (view / complete / progress / create / hand over) | yes (TASK_BRAIN_SPEC) | yes → `ai_unavailable` / plain fallback | yes, re-checked against real data; task numbers resolve against the same numbered list the person's messages use (`getNumberedList`), a number not on it goes back to the AI to explain `[BAA p.93]` | no |
+   | `find_tasks` (read, 2026-10-13) | yes — "NEVER for a change"; today's own list stays `view_tasks` `[BAA p.107]` | yes — "couldn't look that up" / "not allowed" `[BAA p.94]` | yes — fixed form, names resolved by code, permission checked at decide AND at read, words plain text, ≤ 92 days, ≤ 500 rows `[BAA p.93]` | no `[BAA p.106]` |
+   | `delete_tasks` / `rename_task` (change, 2026-10-13) | yes — own tasks only; "delete all" never; delete ≠ done `[BAA p.107]` | yes — refusals from the checked function become plain text `[BAA p.94]` | yes — task by number / words, never guessed; new name must be in the message; same checked functions as the Tasks tab (permission, locked-task rule, audit `via: whatsapp`); preview + YES always `[BAA p.93]` | no `[BAA p.106]` |
    | `team_progress_today` (new, read) | to do in Phase 4 | to do — error becomes a polite "couldn't fetch" reply | to do — permission + department scope checked in code | no |
    | `person_tasks` (new, read) | to do in Phase 4 | to do | to do — only people the sender may see | no |
    | `overdue_tasks` (new, read) | to do in Phase 4 | to do | to do | no |
 
 **5. Prompt** `[BAA pp.105, 114]`
    Numbered ordered steps: yes (existing understand prompt, 9 steps) | Explicit no-skip clause: yes | Single-shot examples: yes; Phase 4 adds one Hinglish and one reports example | Terminal state written to data: yes — ledger `replied_at` + audit row per message (Phase 1).
+   Part B (2026-10-13): two FIXED rules outside the tunable steps — A "several requests → `also`", B "a yes to an earlier request → classify that request" — so a tuned prompt version can never drop them `[BAA pp.105, 114]`. The reply prompt adds rule 8 (no yes/no question when nothing waits for a yes; enforced by the reply checker, not only asked) and rule 9 (the recent chat shapes wording only; the facts stay the only source of what happened) `[BAA p.105]`.
 
 **6. Memory** `[BAA pp.100–103]`
    Does this workload repeat? **no** for the model → no agent write-tool. The Phase 2 "conversation memory" is short-lived **session state** (last turns, open question), written by code, not by the model — not agent memory in the doctrine's sense. `[BAA pp.100–102]`
@@ -306,7 +310,7 @@ All migrations are written as files only; **you** apply them. No live database w
 **8. Evaluation — all four axes** `[BAA pp.118–119]`
    System: Phase 0 + Phase 5 Bot health — reply rate, apology rate, AI failure rate, p50/p90 latency.
    Quality assurance (rubric: family **none yet**, tier **none**, scale **none**, manual audit **0 %**) `[BAA pp.96–98]`: Phase 5 adds a weekly manual read of 30 replies; LLM rubric deferred (see 10).
-   Tool interaction (expected tool + order; measured call count) `[BAA p.95]`: Phase 4 eval cases name the expected read tool; scored per case.
+   Tool interaction (expected tool + order; measured call count) `[BAA p.95]`: Phase 4 eval cases name the expected read tool; scored per case. Right arguments: `test_numbered_list.ts` checks that "done N" picks the task shown as N in each message (overdue, midday, morning) on both the smart-chat and old paths `[BAA p.95]`.
    Agent efficiency (tokens, steps, cost per message) `[BAA p.119]`: existing brain trace (≈ 2.2k tokens, ≈ $0.34 / 1,000 messages) plus memory adds an estimated 300–600 tokens per message; measured in Phase 2.
 
 **9. Trace** `[BAA pp.119–120]`
@@ -319,6 +323,8 @@ All migrations are written as files only; **you** apply them. No live database w
    - **L13 (don't hand-roll)** — no LangGraph; a seconds-long chat turn does not need a durable graph. Revisit if a flow must pause for days.
    - **Raw text in memory (Phase 2)** — departs from the brain's current "never store original words" rule only if the owner approves, with 24 h deletion.
    - **English only** until Phase 4 measures Hinglish.
+   - **L5 agent-efficiency axis, Part B (2026-10-13)** — the reply prompt now carries up to 10 chat lines; measured on 3 synthetic messages: reply 0.6–1.3 s with vs 1.1–1.2 s without (no measurable cost) `[BAA p.119]`. Not yet on the Bot health numbers.
+   - **L5 agent-efficiency axis (2026-10-12)** — the context now carries up to 7 days of older open tasks; the extra tokens per message are not measured yet `[BAA p.119]`. Reason: wrong-task completions are a correctness bug, fixed first; measure on the next Bot health read.
 
 ---
 
@@ -606,3 +612,87 @@ help no longer names a fixed number. Tests: rollout 45/45; regression unchanged.
   panel (stored with the other switches, takes effect within ~30 s, no redeploy). `VOICE_NOTES_ENABLED=true` still forces it
   ON. Leave `VOICE_NOTES_ALLOWED_PHONES` empty so everyone unlocked for the Task Manager can use it; with sandbox ON only
   sandbox numbers can. Needs `GROQ_VOICE_API_KEY` in Vercel. Tests: `test_template_rollout.ts` 71/71, voice tests green.
+
+**Added 2026-10-12 (4) — one numbered list (fix: "done 1" could close the wrong task):**
+- Before: the bot numbered only TODAY's tasks, while the overdue alert numbered only overdue tasks and the morning list put
+  carried tasks last. So "done 1" after an overdue alert closed today's task 1 instead of the overdue one.
+- Now every person has ONE numbered list (`TaskDatabaseService.getNumberedList`): open tasks from the last 7 days first
+  (oldest first), then today's tasks. Morning, midday, evening, overdue messages and the bot (Smart chat AND the old router)
+  all use its numbers. A message that hides some tasks keeps the numbers (midday may show 1, 2, 4).
+- Effects: carried tasks now show at the TOP of the morning list, for up to 7 days (was 1 day for morning/midday, 3 for
+  evening); "done all" also closes older open tasks; "tasks" shows "(from 10 Oct)" next to older ones. An earlier copy of a
+  task that is on today's list too (e.g. yesterday's daily fixed task) is shown once — today's copy — also in the overdue alert.
+- Agent change: the brain's context now includes older open tasks (`from` date); prompt line shows "open since". No new
+  tools or actions.
+- Tests: new `test_numbered_list.ts` 23/23; offline regression green except the old `SuperuserPanel.tsx` check; type check clean.
+- **Superuser evening summary + active departments only (2026-10-12):** superusers now get the all-departments evening
+  summary from ANY team / company evening rule (like midday; once a day; a personal rule never adds others). The superuser
+  digest (midday + evening) and "how is my team doing" now cover only departments where the Task Manager is ON
+  (`TaskAccessService.activeDepartmentIds`, fail-closed). Tests: `test_template_rollout.ts` 76/76.
+- **Re-delivered messages dropped (2026-10-13, Part A):** the "never silent" ledger write now also says whether this
+  WhatsApp message id was received before; the webhook drops a re-delivery first (before voice, import, Smart chat), so
+  nobody gets a reply to nothing (2026-10-12: Lohit's 7:28 PM message re-arrived at 9:59 PM). Any doubt (switch OFF,
+  database error) → handled as before. Works while "Never silent" is ON; ledger rows are kept 14 days.
+  **Part C:** each ledger row also records the KIND of message (text / audio / button / +reply), never content —
+  migration `20261013000001_whatsapp_inbound_message_type.sql` (additive; code works before it is applied).
+  Tests: `test_never_silent.ts` 45/45.
+- **Part B — the bot stops losing track (2026-10-13, uncommitted):** from the real chats of 2026-10-12.
+  (1) A question the bot asks stays answerable for **2 hours** (was 15 min — Priyanka's late "yes"), and an unclear answer
+  keeps it open. (2) The bot can no longer ask a yes/no question nothing waits for: the reply checker rejects "should I…?",
+  "could you confirm…?" on any reply that is not a real preview, and the safe text is sent instead (Harsh's "Yes add this
+  task" → "nothing waiting"). (3) "Yes add this task" with nothing pending → the request is taken from the person's OWN
+  earlier words and shown as the normal preview; nothing changes without YES. (4) **Several requests in one message**
+  ("done 1 and add …") → one preview, one YES; an unclear part is named and never acted on; never while replying to
+  someone's request; "undo" reverses every part. (5) No bare "not sure": unclear / already-done / nothing-pending replies
+  show the real open tasks and a "done N" hint (Lohit). (6) The reply step sees the last 10 chat lines, so "what did I just
+  ask?" gets a real answer; it shapes wording only. Kept as approved: "done" still asks YES; while a question is open, an
+  exact "done 1" goes to the AI. Tests: new `test_part_b_context.ts` 29/29; all brain / voice / notification tests green;
+  `test_conversation_memory` check updated (the rules now contain the fixed "yes to an earlier request" rule).
+  Real-AI speed check (synthetic data): reply step no slower with the chat; separately, the understand step sometimes
+  takes ~17 s on a first call (provider) — for the speed work.
+- **Group 2 — faster replies, part 1 (2026-10-13, uncommitted):** (1) a slow AI no longer holds the reply: if the model
+  has not answered in 5 s (understand) / 4 s (reply), the backup model starts too and the first good answer wins (before:
+  up to 15 s wait, then the backup). An error starts the backup at once. Extra calls only when a model is slow. (2) Reads
+  that do not depend on each other now run side by side (Smart chat entry: 9 reads in ~3 rounds; the AI context: 3 reads
+  at once; the per-message setup; the learning note and the state save). The state is still saved before the reply is sent.
+  (3) Each audit row records step times (`steps`: load / understand / act / reply / save / send, ms; never content).
+  Same models, same answers. Tests: new `test_speed_group2.ts` 13/13; all brain tests green; one source-pattern check in
+  `test_conversation_memory` widened (same order, more lines between). Next: read the real `steps` numbers after a day.
+- **Carried-forward tasks in plain language (2026-10-13, uncommitted):** "what are my carry forward tasks?" / "pending from
+  yesterday" → ONLY the open tasks carried over from earlier days, each with its real number and "(from 12 Oct)"; none →
+  says so. The full list now marks carried tasks the same way. "Mark my carry forward tasks as done" → the usual preview of
+  exactly those tasks, then YES. (Live today only lists today's tasks: the numbered list with older open tasks is in the
+  uncommitted numbered-list work.) Tests: `test_part_b_context.ts` 35/35; real AI (synthetic data) picked carriedOnly for
+  both wordings and only the carried task for "mark … done".
+- **Group 3 — small fixes from real chats (2026-10-13, uncommitted):** (1) A photo with NO caption (from a Task Manager
+  person, no ticket conversation open) → "📷 Got your photo. Is this your task list? Reply *yes* … If it's a facility issue
+  instead, reply *ticket*." yes → the same photo is read as a task list (preview + YES as usual); ticket → the same photo is
+  handed to the facility assistant as if just received; no → left alone; anything else → handled as usual. A caption about
+  something else, or an open ticket conversation → the facility assistant, exactly as before. (2) The old bot's idle
+  markers (`ACTIVE_SESSION` after an old "tasks", the old "1. Tasks / 2. Facility" menu) no longer send messages to the old
+  bot for 30 minutes — Harsh's "add HR grievance module task also" got the old menu; a plain "1"/"2" still answers that
+  menu. (3) The old "tasks" no longer overwrites a conversation in progress (Priyanka's photo preview was lost) and reminds
+  "your task list preview is still waiting". Not changed (owner decisions): exact "done 2" is instant, "2nd task done" in
+  plain words asks YES. Tests: import stage 2 94/94 (9 new), `test_part_b_context` 40/40 (5 new); all bot tests green.
+- **Flexible "look up tasks" (2026-10-13, uncommitted):** see docs/TASK_LOOKUP_PLAN.md §8. One read-only search the AI
+  fills as a fixed form (whose, given by, days, finished when, status, overdue / N days old, fixed or one-off, words,
+  count / grouped, sort, limit); code checks it, applies the permission rule twice, writes the answer from real rows and
+  echoes the filters. Own open tasks keep their numbers; everything else is bullets. Also from the real-AI run: two new
+  tasks for the same person in one message → one "add 2 tasks"; a side remark ("thanks", "what do you mean?") no longer
+  cancels a waiting question. Tests: `test_find_tasks.ts` 36/36, `test_part_b_context.ts` 43/43; real AI 40/40 lookups,
+  136/140 base set, unsafe 0.
+- **Delete and rename from WhatsApp (2026-10-13, uncommitted, owner request):** "delete task 2", "remove the carpet one",
+  "task 5 hata do", "rename task 1 to …", "change the name of the lift task to …" → a preview, then YES. Own tasks only;
+  never "delete all"; two tasks fit → asks which; a repeating (locked) task is refused with the reason; the new name must
+  come from the message. Uses `WorkspaceService.deleteTask` and the new `WorkspaceService.renameTask` (same permission and
+  locked-task rule as delete, audit `task_renamed`, `via: whatsapp`). Also from the real-AI runs: a new task's person must
+  be NAMED by the sender (the AI turned "everyone" into a list of names), and a non-superuser's "company / who has pending"
+  reading shows their OWN list instead of "you can't see that". Eval cases safety-04/05 and hi-safety-01 now expect a
+  delete preview. Tests: new `test_delete_rename.ts` 17/17; all bot tests green. Real AI (synthetic): base set 135/139 and
+  117/119 answered, Hinglish 36/37 answered, lookups 40/40, unsafe 0 every run. The provider failed to answer up to 21 of
+  140 calls in one run (both models) — to watch in Bot health.
+- **Assigning to a group (2026-10-13, uncommitted, owner request):** "assign everyone …", "my whole team …", "everyone in
+  Tech except Harsh …", "sabko … de do" → the AI only DESCRIBES the group (`create_tasks.group`: team / department /
+  everyone + except); code turns it into people, ONLY those the sender may give work to (max 40), and shows one preview
+  listing every name → one YES. The AI never lists names itself. Tests: `test_part_b_context.ts` 48/48; real AI: all six
+  phrasings tried gave the right people.
