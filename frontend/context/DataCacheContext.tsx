@@ -1,7 +1,8 @@
 'use client';
 
-import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 import { useAuth } from './AuthContext';
+import { clearSessionCaches } from '@/frontend/lib/dashboard/sessionCaches';
 
 interface CacheEntry {
     data: any;
@@ -102,6 +103,14 @@ export function DataCacheProvider({ children }: { children: React.ReactNode }) {
             } catch {}
         }
     }, [getUserKey]);
+
+    // Another user signed in (or the user logged out): empty the module-level caches too (dashboard cards, Task Manager).
+    const lastUserId = useRef<string | null | undefined>(undefined);
+    useEffect(() => {
+        const current = user?.id ?? null;
+        if (lastUserId.current !== undefined && lastUserId.current !== current) clearSessionCaches();
+        lastUserId.current = current;
+    }, [user?.id]);
 
     // Handle logout: clear cache when user becomes null
     useEffect(() => {

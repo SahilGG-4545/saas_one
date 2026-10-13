@@ -5,6 +5,7 @@ import {
     EmployeeProfile,
     TaskTemplate,
     TaskAssignment,
+    NumberedAssignment,
     ConversationContext,
     ContextSystem,
     TaskStatus,
@@ -16,7 +17,30 @@ import {
     WhatsAppKillSwitches,
 } from './types';
 
-const isBotAlertAdmin = (value: unknown): value is { name: string; phone: string } => {
+/** How many days back an unfinished task stays on a person's list. One window for every message and the bot. */
+export const CARRY_LOOKBACK_DAYS = 7;
+
+/** Builds the numbered list from raw rows (pure, so it can be tested without the database). See NumberedAssignment. */
+export function buildNumberedList(today: TaskAssignment[], earlierOpen: TaskAssignment[]): NumberedAssignment[] {
+    const key = (t: TaskAssignment) => t.title.trim().toLowerCase();
+    const seen = new Set(today.map(key));
+    // Newest copy first, so when the same title is open on several days only the latest copy is kept.
+    const newestFirst = [...earlierOpen].sort((a, b) => b.assigned_date.localeCompare(a.assigned_date) || a.created_at.localeCompare(b.created_at));
+    const carried: TaskAssignment[] = [];
+    for (const t of newestFirst) {
+        if (t.status === 'completed' || seen.has(key(t))) continue;
+        seen.add(key(t));
+        carried.push(t);
+    }
+    carried.sort((a, b) => a.assigned_date.localeCompare(b.assigned_date) || a.created_at.localeCompare(b.created_at));
+    const todaySorted = [...today].sort((a, b) => a.created_at.localeCompare(b.created_at));
+    return [
+        ...carried.map(t => ({ ...t, isCarriedForward: true })),
+        ...todaySorted.map(t => ({ ...t, isCarriedForward: false })),
+    ].map((t, i) => ({ ...t, listNumber: i + 1 }));
+}
+
+const isBotAlertAdmin =(value: unknown): value is { name: string; phone: string } => {
     if (!value || typeof value !== 'object') return false;
     const recipient = value as Record<string, unknown>;
     return typeof recipient.name === 'string' && /^\+?\d{10,15}$/.test(String(recipient.phone || '').replace(/[\s()-]/g, ''));
@@ -337,87 +361,92 @@ export class TaskDatabaseService {
     }
 
     /**
-     * Phase 2: Fetches assignments applying task selection filters and carry-forward rules.
-     * Safely includes uncompleted tasks from yesterday or previous days without creating DB duplicates.
+     * A person's numbered list for `date`: open tasks from the last CARRY_LOOKBACK_DAYS days first (oldest first), then all of
+     * today's tasks. The bot and every scheduled message number tasks from THIS list, so "done 1" means the same task everywhere.
+     */
+    /**
+     * Flexible "look up tasks" (docs/TASK_LOOKUP_PLAN.md, 2026-10-13): ONE read-only, parameterised select — no raw SQL.
+     * Every value comes from code-checked filters (people already permission-filtered by the caller); search words are plain
+     * letters / digits / spaces / hyphens only. At most 500 rows.
+     */
+    static async searchAssignments(q: {
+        employeeIds: string[]; assignedBy?: string | null; from: string; to: string; dateField: 'assigned' | 'finished';
+        statuses?: TaskStatus[] | null; assignedBefore?: string | null; assignedOnOrBefore?: string | null;
+        kind?: 'any' | 'fixed' | 'one_off'; words?: string[]; newestFirst?: boolean; limit?: number;
+    }): Promise<TaskAssignment[]> {
+        if (!q.employeeIds.length) return [];
+        let query = supabaseAdmin
+            .from('task_assignments')
+            .select('id, title, employee_id, assigned_date, status, assigned_by, completed_at, task_template_id, created_at')
+            .in('employee_id', q.employeeIds.slice(0, 500));
+        if (q.dateField === 'finished') {
+            // "finished yesterday" = completed during that India day.
+            query = query.gte('completed_at', `${q.from}T00:00:00+05:30`).lte('completed_at', `${q.to}T23:59:59.999+05:30`);
+        } else {
+            query = query.gte('assigned_date', q.from).lte('assigned_date', q.to);
+        }
+        if (q.statuses?.length) query = query.in('status', q.statuses);
+        if (q.assignedBy) query = query.eq('assigned_by', q.assignedBy);
+        if (q.assignedBefore) query = query.lt('assigned_date', q.assignedBefore);
+        if (q.assignedOnOrBefore) query = query.lte('assigned_date', q.assignedOnOrBefore);
+        if (q.kind === 'fixed') query = query.not('task_template_id', 'is', null);
+        if (q.kind === 'one_off') query = query.is('task_template_id', null);
+        for (const w of (q.words ?? []).slice(0, 5)) {
+            const safe = String(w).toLowerCase().replace(/[^a-z0-9 -]/g, '').trim().slice(0, 30);
+            if (safe) query = query.or(`title.ilike."%${safe}%",description.ilike."%${safe}%"`);
+        }
+        const { data, error } = await query
+            .order(q.dateField === 'finished' ? 'completed_at' : 'assigned_date', { ascending: !q.newestFirst })
+            .limit(Math.min(q.limit ?? 500, 500));
+        if (error) {
+            console.error('[TaskDatabaseService] Error searching assignments:', error);
+            throw error;
+        }
+        return (data || []) as TaskAssignment[];
+    }
+
+    static async getNumberedList(params: { employeeId: string; date?: string }): Promise<NumberedAssignment[]> {
+        const targetDate = params.date || new Date().toISOString().slice(0, 10);
+        const start = new Date(`${targetDate}T12:00:00Z`);
+        start.setUTCDate(start.getUTCDate() - CARRY_LOOKBACK_DAYS);
+
+        const [today, earlier] = await Promise.all([
+            supabaseAdmin.from('task_assignments').select('*, template:task_templates(*)')
+                .eq('employee_id', params.employeeId).eq('assigned_date', targetDate),
+            supabaseAdmin.from('task_assignments').select('*, template:task_templates(*)')
+                .eq('employee_id', params.employeeId).gte('assigned_date', start.toISOString().slice(0, 10)).lt('assigned_date', targetDate)
+                .neq('status', 'completed'),
+        ]);
+        if (today.error || earlier.error) {
+            console.error('[TaskDatabaseService] Error fetching numbered task list:', today.error || earlier.error);
+            throw today.error || earlier.error;
+        }
+        return buildNumberedList((today.data || []) as TaskAssignment[], (earlier.data || []) as TaskAssignment[]);
+    }
+
+    /**
+     * What one scheduled message shows: a part of the numbered list (getNumberedList), keeping each task's number.
+     * `lookbackDays` is no longer used: every message carries tasks from the same window, so the numbers always match.
      */
     static async getFilteredAssignments(params: {
         employeeId: string;
         date?: string; // YYYY-MM-DD
         filters?: NotificationTaskFilters;
-    }): Promise<Array<TaskAssignment & { isCarriedForward?: boolean }>> {
-        const targetDate = params.date || new Date().toISOString().slice(0, 10);
+    }): Promise<NumberedAssignment[]> {
         const filters = params.filters || {
             includeTodayFixed: true,
             includeTodayAssigned: true,
             includeYesterdayPending: false
         };
-
-        const assignments: Array<TaskAssignment & { isCarriedForward?: boolean }> = [];
-
-        // 1. Fetch Today's Tasks
-        const todayQuery = supabaseAdmin
-            .from('task_assignments')
-            .select(`
-                *,
-                template:task_templates(*)
-            `)
-            .eq('employee_id', params.employeeId)
-            .eq('assigned_date', targetDate);
-
-        const { data: rawToday, error: todayErr } = await todayQuery.order('created_at', { ascending: true });
-        if (todayErr) {
-            console.error('[TaskDatabaseService] Error fetching today assignments in filter:', todayErr);
-            throw todayErr;
-        }
-
-        const todayTasks = (rawToday || []) as TaskAssignment[];
-        for (const t of todayTasks) {
+        const list = await this.getNumberedList({ employeeId: params.employeeId, date: params.date });
+        return list.filter(t => {
+            if (t.isCarriedForward) return Boolean(filters.includeYesterdayPending);
             const isFixed = Boolean(t.task_template_id);
-            if (isFixed && filters.includeTodayFixed === false) continue;
-            if (!isFixed && filters.includeTodayAssigned === false) continue;
-            if (filters.onlyPending && t.status === 'completed') continue;
-            assignments.push(t);
-        }
-
-        // 2. Fetch Carried-Forward Pending Tasks from Previous Days
-        if (filters.includeYesterdayPending) {
-            const lookbackDays = Math.max(1, filters.lookbackDays || 1);
-            const targetD = new Date(targetDate);
-            const startD = new Date(targetD);
-            startD.setDate(startD.getDate() - lookbackDays);
-            const startDateStr = startD.toISOString().slice(0, 10);
-
-            const { data: rawPrevious, error: prevErr } = await supabaseAdmin
-                .from('task_assignments')
-                .select(`
-                    *,
-                    template:task_templates(*)
-                `)
-                .eq('employee_id', params.employeeId)
-                .gte('assigned_date', startDateStr)
-                .lt('assigned_date', targetDate)
-                .neq('status', 'completed')
-                .order('assigned_date', { ascending: false });
-
-            if (prevErr) {
-                console.error('[TaskDatabaseService] Error fetching carried-forward assignments:', prevErr);
-                throw prevErr;
-            }
-
-            const prevTasks = (rawPrevious || []) as TaskAssignment[];
-            for (const pt of prevTasks) {
-                // Avoid duplicate if task with same title is already present today
-                const alreadyHasToday = assignments.some(at => at.title.trim().toLowerCase() === pt.title.trim().toLowerCase());
-                if (!alreadyHasToday) {
-                    assignments.push({
-                        ...pt,
-                        isCarriedForward: true
-                    });
-                }
-            }
-        }
-
-        return assignments;
+            if (isFixed && filters.includeTodayFixed === false) return false;
+            if (!isFixed && filters.includeTodayAssigned === false) return false;
+            if (filters.onlyPending && t.status === 'completed') return false;
+            return true;
+        });
     }
 
     static async updateAssignmentStatus(params: {

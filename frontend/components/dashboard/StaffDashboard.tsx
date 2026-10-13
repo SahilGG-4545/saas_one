@@ -1,14 +1,14 @@
 'use client';
 import { useDashboardContent } from '@/frontend/components/layout/DashboardContentSlot';
 import PettyCashNavLink from '@/frontend/components/pettyCash/PettyCashNavLink';
-import HRTicketsContent from '@/frontend/components/hr/HRTicketsContent';
 
 import React, { useState, useEffect } from 'react';
 import {
     LayoutDashboard, Ticket, Clock, CheckCircle2, AlertCircle, Plus,
     LogOut, Settings, Search, UserCircle, Coffee, Fuel, UsersRound,
     ClipboardList, FolderKanban, Moon, Sun, ChevronRight, RefreshCw, Cog, X,
-    AlertOctagon, BarChart3, FileText, Camera, Menu, Pencil, Loader2, Zap, Activity, Filter, Calendar, Package, Scan, Droplets,
+    AlertOctagon, BarChart3, FileText, Camera, Menu, Pencil, Loader2, Zap, Activity, Filter, Calendar, Package, Scan, Droplets
+,
   MessageSquarePlus, ShieldCheck, Wrench
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -17,31 +17,53 @@ import { useAuth } from '@/frontend/context/AuthContext';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import SignOutModal from '@/frontend/components/ui/SignOutModal';
 import Image from 'next/image';
-import DieselStaffDashboard from '@/frontend/components/diesel/DieselStaffDashboard';
-import ElectricityStaffDashboard from '@/frontend/components/electricity/ElectricityStaffDashboard';
-import VMSAdminDashboard from '@/frontend/components/vms/VMSAdminDashboard';
-import TenantTicketingDashboard from '@/frontend/components/tickets/TenantTicketingDashboard';
 import { useTheme } from '@/frontend/context/ThemeContext';
-import SettingsView from './SettingsView';
 import { ShiftToast } from '@/frontend/components/mst/ShiftStatus';
 import { checkInResolver } from '@/frontend/utils/resolver';
 import NavbarShiftStatus from '@/frontend/components/mst/NavbarShiftStatus';
-import TicketFlowMap from '@/frontend/components/ops/TicketFlowMap';
 import TicketCard from '@/frontend/components/shared/TicketCard';
 import NotificationBell from './NotificationBell';
 import PendingActionsBell from './PendingActionsBell';
-import AdminRoomManager from '@/frontend/components/meeting-rooms/AdminRoomManager';
-import StockDashboard from '@/frontend/components/stock/StockDashboard';
 import StockMovementModal from '@/frontend/components/stock/StockMovementModal';
-import SOPDashboard from '@/frontend/components/sop/SOPDashboard';
-import AssetsModule from '@/frontend/components/assets/AssetsModule';
 import dynamic from 'next/dynamic';
 import type { QRScanResult } from '@/frontend/components/shared/UniversalQRScannerModal';
 const UniversalQRScannerModal = dynamic(() => import('@/frontend/components/shared/UniversalQRScannerModal'), { ssr: false });
 
-import { WaterDashboard } from '@/frontend/components/water/WaterDashboard';
-import GuestExperienceDashboard from '@/frontend/components/guest-experience/GuestExperienceDashboard';
 import FeedbackModal from '@/frontend/components/ui/FeedbackModal';
+import { usePreloadTabs } from '@/frontend/lib/dashboard/preloadTabs';
+import TabLoading from './TabLoading';
+
+const HRTicketsContent = dynamic(() => import('@/frontend/components/hr/HRTicketsContent'), { loading: TabLoading });
+const DieselStaffDashboard = dynamic(() => import('@/frontend/components/diesel/DieselStaffDashboard'), { loading: TabLoading });
+const ElectricityStaffDashboard = dynamic(() => import('@/frontend/components/electricity/ElectricityStaffDashboard'), { loading: TabLoading });
+const VMSAdminDashboard = dynamic(() => import('@/frontend/components/vms/VMSAdminDashboard'), { loading: TabLoading });
+const TenantTicketingDashboard = dynamic(() => import('@/frontend/components/tickets/TenantTicketingDashboard'), { loading: TabLoading });
+const SettingsView = dynamic(() => import('./SettingsView'), { loading: TabLoading });
+const TicketFlowMap = dynamic(() => import('@/frontend/components/ops/TicketFlowMap'), { loading: TabLoading });
+const SOPDashboard = dynamic(() => import('@/frontend/components/sop/SOPDashboard'), { loading: TabLoading });
+const AssetsModule = dynamic(() => import('@/frontend/components/assets/AssetsModule'), { loading: TabLoading });
+const GuestExperienceDashboard = dynamic(() => import('@/frontend/components/guest-experience/GuestExperienceDashboard'), { loading: TabLoading });
+const AdminRoomManager = dynamic(() => import('@/frontend/components/meeting-rooms/AdminRoomManager'), { loading: TabLoading });
+const StockDashboard = dynamic(() => import('@/frontend/components/stock/StockDashboard'), { loading: TabLoading });
+const WaterDashboard = dynamic(() => import('@/frontend/components/water/WaterDashboard').then(m => m.WaterDashboard), { loading: TabLoading });
+
+// Tabs live in their own files so the dashboard opens faster; once it is on screen they are downloaded quietly in
+// the background (usePreloadTabs), so opening a tab shows no extra spinner (performance plan Phase 1).
+const TAB_PRELOADS = [
+    () => import('@/frontend/components/hr/HRTicketsContent'),
+    () => import('@/frontend/components/diesel/DieselStaffDashboard'),
+    () => import('@/frontend/components/electricity/ElectricityStaffDashboard'),
+    () => import('@/frontend/components/vms/VMSAdminDashboard'),
+    () => import('@/frontend/components/tickets/TenantTicketingDashboard'),
+    () => import('./SettingsView'),
+    () => import('@/frontend/components/ops/TicketFlowMap'),
+    () => import('@/frontend/components/sop/SOPDashboard'),
+    () => import('@/frontend/components/assets/AssetsModule'),
+    () => import('@/frontend/components/guest-experience/GuestExperienceDashboard'),
+    () => import('@/frontend/components/meeting-rooms/AdminRoomManager'),
+    () => import('@/frontend/components/stock/StockDashboard'),
+    () => import('@/frontend/components/water/WaterDashboard'),
+];
 
 // Types
 type Tab = 'dashboard' | 'requests' | 'guest_experience' | 'create_request' | 'visitors' | 'rooms' | 'diesel' | 'electricity' | 'stock' | 'checklist' | 'settings' | 'profile' | 'flow-map' | 'water' | 'grievance' | 'assets';
@@ -91,6 +113,7 @@ interface Ticket {
 
 
 const StaffDashboard = () => {
+    usePreloadTabs(TAB_PRELOADS);
     const { dashboardContent, dashboardPropertyId, navigateDashboard } = useDashboardContent();
     const { user, signOut } = useAuth();
     const params = useParams();

@@ -132,6 +132,17 @@ export class TaskAccessService {
         return this.decide(snapshot || await this.getSnapshot(), person);
     }
 
+    /**
+     * Departments where the Task Manager is switched ON (same rule as `decide`): not provisioned → Tech only; unreadable
+     * settings → none (fail closed). Used to keep team / company progress to active departments only.
+     */
+    static async activeDepartmentIds(snapshot?: AccessSnapshot): Promise<Set<string>> {
+        const snap = snapshot || await this.getSnapshot();
+        if (!snap.readable) return new Set();
+        if (!snap.provisioned) return new Set([TECH_DEPARTMENT_ID]);
+        return new Set([...snap.departmentEnabled].filter(([, on]) => on).map(([id]) => id));
+    }
+
     /** Splits a list of employees into unlocked and locked, using ONE snapshot read. */
     static async partition<T extends { id: string; department_id: string | null }>(
         employees: T[],

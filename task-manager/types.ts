@@ -91,6 +91,13 @@ export interface TaskAssignment {
     template?: TaskTemplate | null;
 }
 
+/**
+ * One line of a person's numbered task list: open tasks from earlier days first (oldest first), then today's tasks.
+ * `listNumber` is the SAME in every message (morning, midday, evening, overdue) and in the bot, so "done 1" always means
+ * the task shown as 1.
+ */
+export type NumberedAssignment = TaskAssignment & { listNumber: number; isCarriedForward?: boolean };
+
 export interface ConversationContext {
     id: string;
     phone_number: string;

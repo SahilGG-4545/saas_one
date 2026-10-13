@@ -226,7 +226,11 @@ async function run() {
     d = decide(interp('view_tasks', { scope: 'person', person: 'Vidya', department: null }));
     check('a teammate I may work with → ACT with their id', d.outcome === 'ACT' && d.action.personId === 'u2');
     check('someone I may not see → REFUSE', (decide(interp('view_tasks', { scope: 'person', person: 'Neha', department: null })) as any).reason === 'not_allowed_to_view');
-    check('department / company overviews are for superusers only → REFUSE for others', (decide(interp('view_tasks', { scope: 'department', person: null, department: 'Procurement' })) as any).reason === 'not_allowed_to_view' && (decide(interp('view_tasks', { scope: 'org', person: null, department: null })) as any).reason === 'not_allowed_to_view');
+    // 2026-10-13: a non-superuser's "company" reading is most likely about their own work ("any tasks left?") → their OWN list
+    // (never company data); a named department is still refused.
+    const orgD: any = decide(interp('view_tasks', { scope: 'org', person: null, department: null }));
+    check('department overviews are for superusers only → REFUSE; a company reading → only their OWN list', (decide(interp('view_tasks', { scope: 'department', person: null, department: 'Procurement' })) as any).reason === 'not_allowed_to_view'
+        && orgD.outcome === 'ACT' && orgD.action.scope === 'self');
     const su = mkCtx({ sender: P('u9', 'Saniel Mehta', 'Management', 'superuser') as any });
     d = decide(interp('view_tasks', { scope: 'department', person: null, department: 'procurment' }), su);
     check('a superuser asking about "procurment" (typo) → the Procurement department', d.outcome === 'ACT' && d.action.department === 'Procurement', d);

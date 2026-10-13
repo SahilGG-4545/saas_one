@@ -5,6 +5,10 @@ import { TaskAccessService } from './TaskAccessService';
 import { Employee, TaskAssignment, NotificationRule } from './types';
 import { firstName, formatDate, oneLine, sendTeamDigest } from './taskAlerts';
 
+/** A task as messages show it. `listNumber` comes from the person's numbered list (getNumberedList); old callers without it
+ *  fall back to the position in the message. */
+type ListTask = TaskAssignment & { isCarriedForward?: boolean; listNumber?: number };
+
 export interface MorningNotificationOptions {
     date?: string; // YYYY-MM-DD
     departmentId?: string;
@@ -40,7 +44,7 @@ export class TaskNotificationService {
     /**
      * Formats the morning task digest message with numbering and quick-reply instructions.
      */
-    static buildMorningDigest(employeeName: string, tasks: Array<TaskAssignment & { isCarriedForward?: boolean }>): string {
+    static buildMorningDigest(employeeName: string, tasks: Array<ListTask>): string {
         const firstName = employeeName.trim().split(' ')[0] || 'there';
 
         if (tasks.length === 0) {
@@ -51,7 +55,7 @@ export class TaskNotificationService {
             const statusIcon = task.status === 'completed' ? '✅' : '⏳';
             const statusText = task.status === 'completed' ? 'Completed' : 'Pending';
             const carryPrefix = task.isCarriedForward ? '🔄 [Carried Forward] ' : '';
-            return `${index + 1}. ${carryPrefix}${task.title} [${statusText} ${statusIcon}]`;
+            return `${task.listNumber ?? index + 1}. ${carryPrefix}${task.title} [${statusText} ${statusIcon}]`;
         }).join('\n');
 
         return [
@@ -70,7 +74,7 @@ export class TaskNotificationService {
     /**
      * Formats the midday progress check-in message focusing on remaining uncompleted tasks.
      */
-    static buildMiddayReminder(employeeName: string, tasks: Array<TaskAssignment & { isCarriedForward?: boolean }>): string {
+    static buildMiddayReminder(employeeName: string, tasks: Array<ListTask>): string {
         const firstName = employeeName.trim().split(' ')[0] || 'there';
         const pendingTasks = tasks.filter(t => t.status !== 'completed');
 
@@ -80,7 +84,7 @@ export class TaskNotificationService {
 
         const taskLines = pendingTasks.map((task, index) => {
             const carryPrefix = task.isCarriedForward ? '🔄 [Carried Forward] ' : '';
-            return `${index + 1}. ${carryPrefix}${task.title} [Pending ⏳]`;
+            return `${task.listNumber ?? index + 1}. ${carryPrefix}${task.title} [Pending ⏳]`;
         }).join('\n');
 
         return [
@@ -99,7 +103,7 @@ export class TaskNotificationService {
     /**
      * Formats the end-of-day summary message showing accomplishments and uncompleted items.
      */
-    static buildEODSummary(employeeName: string, tasks: Array<TaskAssignment & { isCarriedForward?: boolean }>): string {
+    static buildEODSummary(employeeName: string, tasks: Array<ListTask>): string {
         const firstName = employeeName.trim().split(' ')[0] || 'there';
         const completed = tasks.filter(t => t.status === 'completed');
         const pending = tasks.filter(t => t.status !== 'completed');
@@ -108,7 +112,7 @@ export class TaskNotificationService {
             const statusIcon = task.status === 'completed' ? '✅' : '⏳';
             const statusText = task.status === 'completed' ? 'Completed' : 'Pending';
             const carryPrefix = task.isCarriedForward ? '🔄 [Carried Forward] ' : '';
-            return `${index + 1}. ${carryPrefix}${task.title} [${statusText} ${statusIcon}]`;
+            return `${task.listNumber ?? index + 1}. ${carryPrefix}${task.title} [${statusText} ${statusIcon}]`;
         }).join('\n');
 
         return [
@@ -155,7 +159,7 @@ export class TaskNotificationService {
      */
     static buildOverdueAlert(
         employeeName: string,
-        tasks: Array<TaskAssignment & { isCarriedForward?: boolean }>,
+        tasks: Array<ListTask>,
         targetDate: string
     ): string {
         const firstName = employeeName.trim().split(' ')[0] || 'there';
@@ -167,7 +171,7 @@ export class TaskNotificationService {
 
         const taskLines = overdue.map((task, index) => {
             const daysOverdue = Math.max(1, Math.round((new Date(targetDate).getTime() - new Date(task.assigned_date).getTime()) / (1000 * 60 * 60 * 24)));
-            return `${index + 1}. ${task.title} [⚠️ ${daysOverdue}d overdue]`;
+            return `${task.listNumber ?? index + 1}. ${task.title} [⚠️ ${daysOverdue}d overdue]`;
         }).join('\n');
 
         return [
@@ -186,7 +190,7 @@ export class TaskNotificationService {
     static buildFormattedDigest(
         rule: NotificationRule | undefined,
         employeeName: string,
-        tasks: Array<TaskAssignment & { isCarriedForward?: boolean }>,
+        tasks: Array<ListTask>,
         targetDate: string
     ): string {
         const firstName = employeeName.trim().split(' ')[0] || 'there';
@@ -216,7 +220,7 @@ export class TaskNotificationService {
                 const statusIcon = task.status === 'completed' ? '✅' : '⏳';
                 const statusText = task.status === 'completed' ? 'Completed' : 'Pending';
                 const carryPrefix = task.isCarriedForward ? '🔄 [Carried Forward] ' : '';
-                return `${index + 1}. ${carryPrefix}${task.title} [${statusText} ${statusIcon}]`;
+                return `${task.listNumber ?? index + 1}. ${carryPrefix}${task.title} [${statusText} ${statusIcon}]`;
             }).join('\n');
 
             const footer = rule.customTemplate.footerInstruction
@@ -259,15 +263,20 @@ export class TaskNotificationService {
             .filter((r: { details?: { date?: string; kind?: string } }) => r?.details?.date === date && (r?.details?.kind ?? 'evening') === kind).map((r: { target_employee_id?: string }) => r.target_employee_id as string));
         const { TaskProgressService } = await import('./TaskProgressService');
         let org: Awaited<ReturnType<typeof TaskProgressService.getOrganisationProgress>> | null = null;
+        let active: Set<string> | null = null;
         const depts = new Map<string, Awaited<ReturnType<typeof TaskProgressService.getDepartmentProgress>>>();
         let sent = 0;
         for (const m of managers) {
             if (already.has(m.id)) continue;
             let input: Parameters<typeof sendTeamDigest>[1];
             if (m.role === 'superuser') {
+                // Only departments where the Task Manager is switched ON (owner 2026-10-12).
                 org = org ?? await TaskProgressService.getOrganisationProgress(date);
-                input = { recipientName: m.name, scope: 'All Active Departments', date, members: org.totalEmployees, completed: org.completed, pending: Math.max(0, org.total - org.completed),
-                    rows: org.departmentProgress.map(d => ({ label: d.departmentName, done: d.completed, total: d.total })) };
+                active = active ?? await TaskAccessService.activeDepartmentIds();
+                const live = org.departmentProgress.filter(d => active!.has(d.departmentId));
+                const sum = (f: (d: typeof live[number]) => number) => live.reduce((a, d) => a + f(d), 0);
+                input = { recipientName: m.name, scope: 'All Active Departments', date, members: sum(d => d.activeEmployeeCount), completed: sum(d => d.completed), pending: Math.max(0, sum(d => d.total) - sum(d => d.completed)),
+                    rows: live.map(d => ({ label: d.departmentName, done: d.completed, total: d.total })) };
             } else {
                 if (!m.department_id) continue;
                 const d = depts.get(m.department_id) ?? await TaskProgressService.getDepartmentProgress(m.department_id, date);
@@ -311,10 +320,10 @@ export class TaskNotificationService {
      * task_morning_kickoff_v2 ("Daily Task Standup"): [first name, "12 Oct 2026", one-line summary]. The summary is the
      * task list on ONE line ("You have 3 tasks today: 1. X ⏳ | 2. Y 🔄 | 3. Z ✅") or, with no tasks, a nudge to add them.
      */
-    static buildMorningV2Params(employeeName: string, tasks: Array<TaskAssignment & { isCarriedForward?: boolean }>, targetDate: string): [string, string, string] {
+    static buildMorningV2Params(employeeName: string, tasks: Array<ListTask>, targetDate: string): [string, string, string] {
         if (!tasks.length) return [firstName(employeeName), formatDate(targetDate), this.MORNING_NO_TASKS];
         const mark = (s: string) => (s === 'completed' ? '✅' : s === 'in_progress' ? '🔄' : '⏳');
-        const items = tasks.map((t, i) => `${i + 1}. ${t.isCarriedForward ? '🔄 ' : ''}${oneLine(t.title, 120)} ${mark(t.status)}`);
+        const items = tasks.map((t, i) => `${t.listNumber ?? i + 1}. ${t.isCarriedForward ? '🔄 ' : ''}${oneLine(t.title, 120)} ${mark(t.status)}`);
         let list = '';
         for (let i = 0; i < items.length; i++) {
             const next = list ? `${list} | ${items[i]}` : items[i];
@@ -329,7 +338,7 @@ export class TaskNotificationService {
     }
 
     /** Open tasks from an earlier day than `targetDate`. */
-    static overdueTasks(tasks: Array<TaskAssignment & { isCarriedForward?: boolean }>, targetDate: string) {
+    static overdueTasks(tasks: Array<ListTask>, targetDate: string) {
         return tasks.filter(t => t.status !== 'completed' && t.assigned_date < targetDate);
     }
 
@@ -337,10 +346,10 @@ export class TaskNotificationService {
      * task_overdue_alert_v1: [first name, how many, "1. DG Meter Log (Due: 10 Oct) | 2. Chiller Filter Check (Due: 9 Oct)"].
      * One line only — Meta rejects line breaks inside a template blank. Oldest first; long lists end with "…and N more".
      */
-    static buildOverdueTemplateParams(employeeName: string, tasks: Array<TaskAssignment & { isCarriedForward?: boolean }>, targetDate: string): [string, string, string] {
+    static buildOverdueTemplateParams(employeeName: string, tasks: Array<ListTask>, targetDate: string): [string, string, string] {
         const overdue = this.overdueTasks(tasks, targetDate).sort((a, b) => a.assigned_date.localeCompare(b.assigned_date));
         const short = (d: string) => formatDate(d).replace(/ \d{4}$/, '');   // "10 Oct"
-        const items = overdue.map((t, i) => `${i + 1}. ${oneLine(t.title, 120)} (Due: ${short(t.assigned_date)})`);
+        const items = overdue.map((t, i) => `${t.listNumber ?? i + 1}. ${oneLine(t.title, 120)} (Due: ${short(t.assigned_date)})`);
         let list = '';
         for (let i = 0; i < items.length; i++) {
             const next = list ? `${list} | ${items[i]}` : items[i];
@@ -355,15 +364,15 @@ export class TaskNotificationService {
      * Since the Meta templates already have fixed headers (e.g. "☀️ Good Morning! Here is your daily task kickoff:")
      * and footers, {{1}} receives just the formatted task items list.
      */
-    static buildTemplateTaskParam(ruleType: string | undefined, tasks: Array<TaskAssignment & { isCarriedForward?: boolean }>): string {
+    static buildTemplateTaskParam(ruleType: string | undefined, tasks: Array<ListTask>): string {
         if (tasks.length === 0) {
             return 'No tasks assigned for today.';
         }
 
         // ONE line: Meta rejects line breaks, tabs and long runs of spaces inside a template variable.
         const clean = (s: string) => String(s ?? '').replace(/\s+/g, ' ').trim();
-        const item = (task: TaskAssignment & { isCarriedForward?: boolean }, idx: number, status: string) =>
-            `${idx + 1}. ${task.isCarriedForward ? '🔄 ' : ''}${clean(task.title).slice(0, 120)} ${status}`;
+        const item = (task: ListTask, idx: number, status: string) =>
+            `${task.listNumber ?? idx + 1}. ${task.isCarriedForward ? '🔄 ' : ''}${clean(task.title).slice(0, 120)} ${status}`;
         // Keep the whole message well under WhatsApp's 1,024-character body limit.
         const join = (items: string[], max = 700) => {
             let out = '';
@@ -517,7 +526,7 @@ export class TaskNotificationService {
                     date: targetDate,
                     filters: options.rule.taskFilters
                 })
-                : await TaskDatabaseService.getDailyAssignments({
+                : await TaskDatabaseService.getFilteredAssignments({
                     employeeId: emp.id,
                     date: targetDate
                 });
@@ -698,8 +707,13 @@ export class TaskNotificationService {
             }
             catch (err) { console.error('[TaskNotificationService] midday team digest skipped:', err instanceof Error ? err.message : err); }
         }
+        // Evening: superusers also get the all-company summary from ANY team or company evening rule, like midday (owner
+        // 2026-10-12), so they get it even with no personal tasks. Once a day (audit dedupe in sendTeamDigests).
         if (options.rule?.ruleType === 'eod_summary' && !options.dryRun) {
-            try { await this.sendTeamDigests(employees, targetDate, 'evening'); }
+            try {
+                const extra = options.rule.ownerUserId ? [] : await this.eligibleSuperusers();
+                await this.sendTeamDigests([...employees, ...extra.filter(s => !employees.some(e => e.id === s.id))], targetDate, 'evening');
+            }
             catch (err) { console.error('[TaskNotificationService] team digest skipped:', err instanceof Error ? err.message : err); }
         }
 

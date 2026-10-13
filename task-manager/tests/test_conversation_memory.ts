@@ -59,7 +59,9 @@ async function run() {
     check('the conversation goes in as its own block, with the rule for using it', withConv.context.conversation.messages.length === 2
         && /ONLY to work out what a short or unclear message refers to/.test(withConv.context.conversation.how_to_use)
         && /untrusted data/.test(withConv.context.conversation.how_to_use) && withConv.message === 'make it tomorrow');
-    check('the system prompt (the AI\'s rules) is unchanged by memory', !/conversation/.test(P.interpretSystemPrompt([])));
+    // Part B (2026-10-13): the rules now include a FIXED rule for "yes add this" (agreeing to an earlier request). The rules are
+    // still one fixed text: memory adds data to the user prompt, never rules.
+    check('the system prompt (the AI\'s rules) is fixed text; the "agreeing to an earlier request" rule is always there', P.interpretSystemPrompt([]) === P.interpretSystemPrompt([]) && /AGREEING TO AN EARLIER REQUEST/.test(P.interpretSystemPrompt([])) && P.interpretSystemPrompt.length === 1);
 
     console.log('\n4. A scripted 10-message chat through the real Smart chat code');
     const PHONE = '918433649199';
@@ -154,7 +156,7 @@ async function run() {
         (hook.match(/await remember\(\);/g) || []).length === 3 && hook.indexOf('claimSmartChat(body)') < hook.lastIndexOf("markRoute(input?.messageId, 'smart_chat'"));
     const out = read('task-manager/TaskMessagingService.ts');
     check('every message the bot sends is stored (free text, template, Pretend Mode)', (out.match(/void appendTurn\(/g) || []).length === 3);
-    check('Smart chat reads the memory BEFORE building the AI context', /readConversation\(cand\.phone\)[\s\S]{0,300}buildContext\(employee, cand\.phone, \{ pending, recent: state\.recent, \.\.\.\(conversation\.length/.test(read('task-manager/brain/live.ts')));
+    check('Smart chat reads the memory BEFORE building the AI context', /readConversation\(cand\.phone\)[\s\S]{0,3000}buildContext\(employee, cand\.phone, \{ pending, recent: state\.recent, \.\.\.\(conversation\.length/.test(read('task-manager/brain/live.ts')));
     check('expired memories are deleted by the existing 15-minute cron (own switch)', /if \(await memoryEnabled\(\)\) out\.memoryPurged = await purgeExpiredMemory\(\)/.test(read('task-manager/NeverSilentWatchdog.ts'))
         && /await runBotHousekeeping\(\)/.test(read('app/api/cron/task-manager/route.ts')));
     const mig = sql.split('\n').filter(l => !l.trim().startsWith('--')).join('\n');

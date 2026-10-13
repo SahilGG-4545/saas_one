@@ -69,6 +69,9 @@ export function changeFromAction(action: Action, ctx: BrainContext, now = new Da
             if (t) items = [{ kind: 'handover', title: t.title, toName: ctx.people.find(p => p.id === action.toId)?.name || 'the person you gave it to' }];
             break;
         }
+        case 'batch':
+            // Part B: "undo" after a combined change reverses every part of it.
+            items = action.actions.flatMap(a => changeFromAction(a, ctx, now)?.items ?? []); break;
         default:
             return null;
     }
@@ -95,7 +98,8 @@ export type ExactPlan =
     | { kind: 'reply'; text: string }
     | { kind: 'undo'; change: LastChange | null };
 
-const list = (tasks: BrainTask[]) => tasks.map(t => `${t.n}. ${t.title} ${t.status === 'completed' ? '✅' : t.status === 'in_progress' ? '🔄' : '⏳'}`).join('\n');
+const since = (d: string) => new Date(`${d}T12:00:00Z`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' });   // "10 Oct"
+const list = (tasks: BrainTask[]) => tasks.map(t => `${t.n}. ${t.title}${t.from ? ` (from ${since(t.from)})` : ''} ${t.status === 'completed' ? '✅' : t.status === 'in_progress' ? '🔄' : '⏳'}`).join('\n');
 
 /** null = not something code should answer → the AI handles it as before (e.g. "done 7" when there is no task 7). */
 export function planExact(cmd: ExactCommand, ctx: BrainContext): ExactPlan | null {

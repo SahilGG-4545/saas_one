@@ -134,6 +134,36 @@ async function run() {
         && !/\b(text_body|message_text|body)\b/i.test(sql) && /REVOKE ALL ON public\.whatsapp_inbound_ledger FROM anon, authenticated/.test(sql));
     check('the watchdog never re-runs a message (no task code is called from it)', !/WorkspaceService|TaskCommandHandler|runBrain|routeInboundMessage/.test(read('task-manager/NeverSilentWatchdog.ts')));
 
+    console.log('\n5. Re-delivered messages are dropped (2026-10-12: Lohit got a reply to nothing, 2.5 h later)');
+    const { supabaseAdmin } = await import('@/backend/lib/supabase/admin');
+    const origFrom = (supabaseAdmin as any).from;
+    const table = new Map<string, any>(); let typeColumn = false; const writes: any[] = [];
+    (supabaseAdmin as any).from = () => ({ upsert: (row: any) => ({ select: async () => {
+        writes.push(row);
+        if ('message_type' in row && !typeColumn) return { data: null, error: { message: 'Could not find the \'message_type\' column of \'whatsapp_inbound_ledger\'' } };
+        if (table.has(row.message_id)) return { data: [], error: null };
+        table.set(row.message_id, row); return { data: [{ message_id: row.message_id }], error: null };
+    } }) });
+    const quiet = console.warn; console.warn = () => {};
+    check('first delivery → new', (await L.recordInbound('wamid.A', '919100256500', 'text')) === 'new');
+    check('the same message id again (even hours later) → duplicate', (await L.recordInbound('wamid.A', '919100256500', 'text')) === 'duplicate');
+    check('a different message → new', (await L.recordInbound('wamid.B', '919100256500', 'text')) === 'new');
+    check('before the message-type migration: written without the kind, still works', writes.some(w => 'message_type' in w) && !('message_type' in writes[writes.length - 1]));
+    (supabaseAdmin as any).from = () => ({ upsert: () => ({ select: async () => ({ data: null, error: { message: 'db down' } }) }) });
+    check('database error → unknown (handled as before, never dropped)', (await L.recordInbound('wamid.C', '919100256500')) === 'unknown');
+    (supabaseAdmin as any).from = () => ({ upsert: () => ({ select: async () => { throw new Error('boom'); } }) });
+    check('crash → unknown (never dropped)', (await L.recordInbound('wamid.D', '919100256500')) === 'unknown');
+    console.warn = quiet;
+    (supabaseAdmin as any).from = origFrom;
+    delete process.env.WHATSAPP_NEVER_SILENT_ENABLED; S.resetBotSwitchCache(); settings = { neverSilentEnabled: false };
+    check('switch OFF → unknown (handled as before)', (await L.recordInbound('wamid.A', '919100256500')) === 'unknown');
+    check('the webhook drops a duplicate FIRST — before voice notes, task import or Smart chat — and only a duplicate',
+        /if \(seen === 'duplicate'\) \{[\s\S]{0,200}return NextResponse\.json\(\{ success: true, ignored: 'duplicate' \}\);/.test(hook)
+        && hook.indexOf("seen === 'duplicate'") < hook.indexOf('claimVoiceNote(body)') && (hook.match(/await recordInbound\(/g) || []).length === 1);
+    check('only the kind of message is logged, never its content', /function messageKind\(input: \{ mediaType\?: string; quotedIds\?: string\[\] \}\)/.test(hook));
+    const sql2 = read('supabase/migrations/20261013000001_whatsapp_inbound_message_type.sql').split('\n').filter(l => !l.trim().startsWith('--')).join('\n');
+    check('message-type migration is one additive nullable column', /ADD COLUMN IF NOT EXISTS message_type TEXT;/.test(sql2) && !/\b(DROP|DELETE|UPDATE|INSERT|TRUNCATE|NOT NULL)\b/i.test(sql2));
+
     delete process.env.WHATSAPP_NEVER_SILENT_ENABLED;
     console.log(failures === 0 ? '\n🎉 NEVER-SILENT TESTS PASSED\n' : `\n❌ ${failures} FAILED\n`);
     process.exit(failures === 0 ? 0 : 1);

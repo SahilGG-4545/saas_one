@@ -100,14 +100,19 @@ async function run() {
     (DB as any).logAudit = async (e: any) => { logged.push(e); };
     (P as any).getDepartmentProgress = async (id: string) => ({ departmentName: id === 'd1' ? 'Tech' : 'Ops', activeEmployeeCount: 2, total: 5, completed: 3,
         employeeProgress: [{ employeeName: 'Vidya Nair', completed: 2, total: 2 }, { employeeName: 'Harsh Patel', completed: 1, total: 3 }] });
-    (P as any).getOrganisationProgress = async () => ({ totalEmployees: 28, total: 34, completed: 31, departmentProgress: [{ departmentName: 'Tech', completed: 12, total: 12 }, { departmentName: 'Ops', completed: 19, total: 22 }] });
+    (P as any).getOrganisationProgress = async () => ({ totalEmployees: 90, total: 40, completed: 31, departmentProgress: [{ departmentId: 'd1', departmentName: 'Tech', activeEmployeeCount: 10, completed: 12, total: 12 }, { departmentId: 'd2', departmentName: 'Ops', activeEmployeeCount: 18, completed: 19, total: 22 }, { departmentId: 'dOff', departmentName: 'Sales', activeEmployeeCount: 62, completed: 0, total: 6 }] });
+    const { TaskAccessService: TA0 } = await import('../TaskAccessService');
+    const realActiveIds = TA0.activeDepartmentIds.bind(TA0);
+    (TA0 as any).activeDepartmentIds = async () => new Set(['d1', 'd2']);
     const emp = (id: string, role: string, dept: string | null, phone = `90000000${id.length}${id.length}`) => ({ id, name: `${id} Person`, role, department_id: dept, phone_number: phone }) as any;
     const n = await N.sendTeamDigests([emp('staff', 'employee', 'd1'), emp('mgr1', 'reporting_manager', 'd1'), emp('mgr2', 'reporting_manager', 'd2'), emp('boss', 'superuser', 'd9')], '2026-10-11');
     check('only managers / superusers get it; someone already sent today is skipped', n === 2 && sent.length === 2, sent);
     check('a manager gets their department, one line per person', sent[0].campaign === 'task_manager_team_digest_v1' && sent[0].templateOnly === true && sent[0].params[1] === 'Tech Department' && sent[0].params[6] === '• Vidya Nair: 2/2 Done (100% ✅) | • Harsh Patel: 1/3 Done (2 Pending ⏳)', sent[0]);
     check('a superuser gets all departments', sent[1].params[1] === 'All Active Departments' && sent[1].params[3] === '28' && sent[1].params[4] === '31' && sent[1].params[5] === '3', sent[1]);
+    check('…but ONLY departments where the Task Manager is ON (Sales is OFF → not listed, not counted)', !/Sales/.test(sent[1].params[6]) && /Tech/.test(sent[1].params[6]) && /Ops/.test(sent[1].params[6]), sent[1].params[6]);
     check('each digest is recorded so a second evening rule does not repeat it', logged.filter(e => e.eventType === 'team_digest_sent').length === 2);
-    check('it rides on the Evening summary rule (no new rule) and never fails it', /ruleType === 'eod_summary' && !options\.dryRun\) \{\s*try \{ await this\.sendTeamDigests\(employees, targetDate, 'evening'\)/.test(read('task-manager/TaskNotificationService.ts')));
+    check('it rides on the Evening summary rule (no new rule) and never fails it; superusers added from any team / company evening rule, never a personal one',
+        /ruleType === 'eod_summary' && !options\.dryRun\) \{\s*try \{\s*const extra = options\.rule\.ownerUserId \? \[\] : await this\.eligibleSuperusers\(\);\s*await this\.sendTeamDigests\(\[\.\.\.employees, \.\.\.extra\.filter/.test(read('task-manager/TaskNotificationService.ts')));
 
     console.log('\n6. The "Overdue alert" rule');
     const def = R.defaultsFor('overdue_alert' as any);
@@ -155,11 +160,11 @@ async function run() {
     (DB as any).getAuditLogs = async () => [{ event_type: 'team_digest_sent', target_employee_id: 'mgr1', details: { date: '2026-10-12', kind: 'evening' } }];
     const deptPending: Record<string, number> = { d1: 2, d2: 0 };
     (P as any).getDepartmentProgress = async (id: string) => ({ departmentName: id, activeEmployeeCount: 2, total: 5, completed: 5 - deptPending[id], employeeProgress: [{ employeeName: 'A', completed: 5 - deptPending[id], total: 5 }] });
-    (P as any).getOrganisationProgress = async () => ({ totalEmployees: 10, total: 20, completed: 20, departmentProgress: [{ departmentName: 'Tech', completed: 10, total: 10 }] });
+    (P as any).getOrganisationProgress = async () => ({ totalEmployees: 10, total: 20, completed: 20, departmentProgress: [{ departmentId: 'd1', departmentName: 'Tech', activeEmployeeCount: 10, completed: 10, total: 10 }, { departmentId: 'dOff', departmentName: 'Sales', activeEmployeeCount: 5, completed: 0, total: 4 }] });
     const mid = await N.sendTeamDigests([emp('mgr1', 'reporting_manager', 'd1'), emp('mgr2', 'reporting_manager', 'd2'), emp('boss', 'superuser', 'd9')], '2026-10-12', 'midday');
     check('manager with pending work in their department → gets it (an EVENING record does not block midday)', mid === 1 && sent.length === 1 && sent[0].params[1] === 'd1 Department' && sent[0].params[5] === '2', sent);
     check('manager whose department has nothing pending → nothing sent', !sent.some((s: any) => s.params[1] === 'd2 Department'));
-    check('superuser when the whole company has nothing pending → nothing sent', !sent.some((s: any) => s.params[1] === 'All Active Departments'));
+    check('superuser when the ACTIVE departments have nothing pending → nothing sent (pending work in an OFF department does not count)', !sent.some((s: any) => s.params[1] === 'All Active Departments'));
     check('recorded as a MIDDAY digest (so it never blocks the evening one)', logged.some(e => e.eventType === 'team_digest_sent' && e.details.kind === 'midday'));
     (DB as any).getAuditLogs = async () => [{ event_type: 'team_digest_sent', target_employee_id: 'mgr1', details: { date: '2026-10-12', kind: 'midday' } }];
     sent.length = 0;
@@ -236,6 +241,14 @@ async function run() {
     check('the old env VOICE_NOTES_ENABLED still forces it ON; no allow-list needed (empty = everyone recognised)', /voiceNotes: 'VOICE_NOTES_ENABLED'/.test(read('task-manager/BotSwitches.ts')) && /Unset \/ empty → no limit/.test(read('task-manager/voice/VoiceIntake.ts')));
     check('voice intake reads the switch (not only the env)', /botSwitchOn\('voiceNotes'\)/.test(read('task-manager/voice/VoiceIntake.ts')) && !/process\.env\.VOICE_NOTES_ENABLED !== 'true'/.test(read('task-manager/voice/VoiceIntake.ts')));
     check('the panel and the admin API know it', /key: 'voiceNotes', title: 'Voice notes'/.test(read('frontend/components/task-manager/TaskAccessPanel.tsx')) && /'voiceNotes'\]\.includes\(body\.feature\)/.test(read('app/api/task-manager/access/route.ts')));
+
+    console.log('\n13. Active departments only: the helper and "how is my team doing"');
+    const snap = (provisioned: boolean, readable: boolean, on: Array<[string, boolean]>) => ({ provisioned, readable, departmentEnabled: new Map(on), onboarded: new Map() }) as any;
+    const ids = async (x: any) => [...(await realActiveIds(x))].sort().join();
+    check('ON departments only', (await ids(snap(true, true, [['d1', true], ['d2', false], ['d3', true]]))) === 'd1,d3');
+    check('settings unreadable → none (fail closed)', (await ids(snap(true, false, [['d1', true]]))) === '');
+    check('access not set up yet → Tech only (same as the access rule)', (await ids(snap(false, true, []))) === '94a74961-2dd8-453d-9728-f6f2b9ade99b');
+    check('"how is my team doing" lists only people in ON departments', /active\.has\(e\.department_id\)/.test(read('task-manager/brain/live.ts')) && /TaskAccessService\.activeDepartmentIds\(\)/.test(read('task-manager/brain/live.ts')));
 
     check('no network used', net.length === 0, net);
     console.log(failures === 0 ? '\n🎉 TEMPLATE ROLLOUT TESTS PASSED\n' : `\n❌ ${failures} FAILED\n`);

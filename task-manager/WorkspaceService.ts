@@ -453,7 +453,45 @@ export class WorkspaceService {
         return (data?.[0]?.id as string | undefined) ?? null;
     }
 
-    static async deleteTask(actorUserId: string, input: { taskId?: string }): Promise<{ id: string }> {
+    /**
+     * Renames a task (WhatsApp "rename task 2 to …", owner request 2026-10-13). The SAME rule as deleting: your own task, a
+     * task of someone below you, a superuser, or a task you gave. A task that repeats every working day is refused (its
+     * name comes from the repeating task; unlock it first), exactly like delete.
+     */
+    static async renameTask(actorUserId: string, input: { taskId?: string; title?: string; via?: string }): Promise<{ id: string; from: string; to: string }> {
+        if (!input.taskId) throw new WorkspaceError(400, 'Missing task.');
+        const title = String(input.title ?? '').replace(/\s+/g, ' ').trim();
+        if (!title) throw new WorkspaceError(400, 'The new name is empty.');
+        if (title.length > 200) throw new WorkspaceError(400, 'The new name is too long (200 characters at most).');
+        const actor = await this.requireUnlockedActor(actorUserId);
+
+        const { data: row, error } = await supabaseAdmin.from('task_assignments').select('*').eq('id', input.taskId).maybeSingle();
+        if (error || !row) throw new WorkspaceError(404, 'Task not found.');
+        if (row.assigned_by !== actor.id) await PermissionService.assertCanCompleteTask(actor.id, row as TaskAssignment);
+        if (row.task_template_id) {
+            const info = (await this.templateInfo([row.task_template_id])).get(row.task_template_id as string);
+            if (isLockedFor(info, row.employee_id as string)) {
+                throw new WorkspaceError(409, 'This task repeats every working day. Unlock it first, then rename it.', 'LOCKED');
+            }
+        }
+        if (row.title === title) return { id: row.id as string, from: row.title as string, to: title };
+
+        const { error: upError } = await supabaseAdmin.from('task_assignments').update({ title, updated_at: new Date().toISOString() }).eq('id', row.id);
+        if (upError) {
+            console.error('[WorkspaceService] rename failed:', upError);
+            throw new WorkspaceError(500, 'Could not rename the task just now. Please try again.');
+        }
+        await TaskDatabaseService.logAudit({
+            eventType: 'task_renamed',
+            actorId: actor.id,
+            targetEmployeeId: row.employee_id,
+            taskId: row.id,
+            details: { from: row.title, to: title, assignedDate: row.assigned_date, via: input.via ?? 'web_tasks_tab' },
+        });
+        return { id: row.id as string, from: row.title as string, to: title };
+    }
+
+    static async deleteTask(actorUserId: string, input: { taskId?: string; via?: string }): Promise<{ id: string }> {
         if (!input.taskId) throw new WorkspaceError(400, 'Missing task.');
         const actor = await this.requireUnlockedActor(actorUserId);
 
@@ -476,7 +514,7 @@ export class WorkspaceService {
             actorId: actor.id,
             targetEmployeeId: row.employee_id,
             taskId: row.id,
-            details: { title: row.title, assignedDate: row.assigned_date, status: row.status, via: 'web_tasks_tab' },
+            details: { title: row.title, assignedDate: row.assigned_date, status: row.status, via: input.via ?? 'web_tasks_tab' },
         });
 
         const { error: delError } = await supabaseAdmin.from('task_assignments').delete().eq('id', row.id);

@@ -6,7 +6,7 @@ import { BRAIN_INTERPRET_MODELS, BRAIN_REPLY_MODELS, BrainLlm } from './llm';
 import { composeReply, ComposedReply, knownWordsFrom } from './respond';
 import { tasksDomain } from './tasksDomain';
 import { BrainContext, ConfirmPolicy, DEFAULT_CONFIRM_POLICY, Decision, Interpretation } from './types';
-import type { PromptSections } from './prompt';
+import { REPLY_CONVERSATION_LINES, type PromptSections } from './prompt';
 
 /**
  * The language brain — the six fixed steps, in one call:
@@ -116,10 +116,16 @@ export async function composeBrainReply(p: {
     const domains = p.deps.domains ?? DEFAULT_DOMAINS;
     const owner = domains.find(d => d.intents.some(i => i.name === p.interpretation.intent));
     if (!owner) return null;
-    const facts = owner.replyFacts(p.decision, p.ctx, p.result ?? p.deps.result);
-    if (!facts) return null;
+    const raw = owner.replyFacts(p.decision, p.ctx, p.result ?? p.deps.result);
+    if (!raw) return null;
+    // Part B1: only a CONFIRM leaves a yes waiting. Every other reply must not ask "should I…?" (a domain may say otherwise
+    // explicitly, e.g. an unclear answer to a question that still stands).
+    const facts = raw.noYesNoQuestion === undefined && p.decision.outcome !== 'CONFIRM' ? { ...raw, noYesNoQuestion: true } : raw;
     const ctx = p.ctx;
-    const known = knownWordsFrom([p.text, ctx.sender.name, ...ctx.people.map(x => x.name), ...ctx.tasks.map(t => t.title), ...ctx.departments,
+    // Part B5: the reply writer also sees the latest chat lines, so its words follow the conversation; their words count as
+    // "given" (it may quote them). What HAPPENED still comes only from `facts`, and the checker still guards every claim.
+    const conversation = (ctx.conversation ?? []).slice(-REPLY_CONVERSATION_LINES);
+    const known = knownWordsFrom([p.text, ctx.sender.name, ...ctx.people.map(x => x.name), ...ctx.tasks.map(t => t.title), ...ctx.departments, ...conversation,
         ...(ctx.pending?.kind === 'ping_reply' ? [ctx.pending.assigner, ...ctx.pending.taskTitles] : []), ...(ctx.pending?.kind === 'pick' ? ctx.pending.options : [])]);
-    return composeReply({ llm: p.deps.llm, models: p.deps.replyModels ?? BRAIN_REPLY_MODELS, facts, userMessage: p.text, known });
+    return composeReply({ llm: p.deps.llm, models: p.deps.replyModels ?? BRAIN_REPLY_MODELS, facts, userMessage: p.text, known, conversation });
 }

@@ -55,7 +55,30 @@ async function main() {
 
     let cases = source.filter(c => !only || c.group === only);
     if (limit) cases = cases.slice(0, limit);
-    const llm = engyBrainLlm({ thinking });
+    const engy = engyBrainLlm({ thinking });
+    // "gemini-*" models go to Google with the learning-loop key (GEMINI_AUTOTUNE_API_KEY first); everything else to Engy.
+    // Free-tier keys allow only a few calls a minute, so Gemini calls are spaced out and a 429 waits and tries again.
+    const { geminiLlm } = await import('../geminiLlm');
+    const gemini = geminiLlm();
+    const gap = Number(arg('gemini-gap-ms', '6500'));
+    let lastGemini = 0;
+    let waitedMs = 0;   // time spent waiting for the rate limit, taken out of the timings (exact with --concurrency 1)
+    const llm: import('../llm').BrainLlm = {
+        async complete(req) {
+            if (!req.model.startsWith('gemini-')) return engy.complete(req);
+            if (!gemini) throw new Error('no Gemini key configured');
+            for (let attempt = 0; ; attempt++) {
+                const wait = lastGemini + gap - Date.now();
+                lastGemini = Math.max(Date.now(), lastGemini + gap);
+                if (wait > 0) { waitedMs += wait; await new Promise(r => setTimeout(r, wait)); }
+                try { return await gemini.complete(req); }
+                catch (e) {
+                    if (attempt < 2 && /429|quota|rate/i.test(String((e as Error)?.message))) { waitedMs += 30_000; await new Promise(r => setTimeout(r, 30_000)); continue; }
+                    throw e;
+                }
+            }
+        },
+    };
     console.log(`Running ${cases.length} ${set} cases × ${models.length} model(s), concurrency ${concurrency}, thinking ${thinking}\n`);
 
     const all: Record<string, unknown> = {};
@@ -70,6 +93,7 @@ async function main() {
                 const c = cases[i];
                 const ctx = world(c.world || 'default', c.pending ?? null);
                 const started = Date.now();
+                const waited0 = waitedMs;
                 const warn = console.warn; console.warn = () => undefined;
                 let result;
                 try { result = await runBrain(c.message, ctx, { llm, interpretModels: [model], replyModels: [replyModel || model], ...(domains ? { domains } : {}) }); }
@@ -81,7 +105,7 @@ async function main() {
                     intent: result.interpretation?.intent ?? null, confidence: result.interpretation?.confidence ?? null,
                     outcome: result.decision?.outcome ?? null, reason: (result.decision as any)?.reason ?? null,
                     reply: result.reply ? { text: result.reply.text, source: result.reply.source, problems: result.reply.problems } : null,
-                    ms: Date.now() - started, interpretMs: result.trace.interpretMs, replyMs: result.trace.replyMs,
+                    ms: Date.now() - started - (waitedMs - waited0), interpretMs: result.trace.interpretMs, replyMs: result.trace.replyMs,
                     tokensIn: result.trace.tokensIn, tokensOut: result.trace.tokensOut, failures: result.trace.failures, fastPath: result.trace.fastPath,
                 };
             }

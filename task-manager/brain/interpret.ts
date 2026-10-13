@@ -1,7 +1,7 @@
 import type { DomainHandler } from './domain';
-import { BrainLlm, FallbackTrace, extractJson, withModelFallback } from './llm';
+import { BrainLlm, FallbackTrace, HEDGE_UNDERSTAND_MS, extractJson, withModelFallback } from './llm';
 import { interpretSystemPromptWithSections, interpretUserPrompt, type PromptSections, BUILTIN_PROMPT_SECTIONS } from './prompt';
-import { BrainContext, Intent, Interpretation } from './types';
+import { BrainContext, ExtraRequest, Intent, Interpretation, MAX_EXTRA_REQUESTS } from './types';
 import { clip } from './text';
 
 /**
@@ -30,6 +30,21 @@ export function validateInterpretation(raw: unknown, domains: DomainHandler[], c
         .filter((a): a is string => typeof a === 'string' && a.trim().length > 0)
         .map(a => clip(a, 160)).slice(0, 5);
 
+    // Part B: wording may come from the message OR the person's OWN earlier messages ("yes add this task" agrees to a task they
+    // named a minute ago). Never from the assistant's lines. Every change is still shown and confirmed before it happens.
+    const groundText = [message, ...(ctx.conversation ?? []).filter(l => l.startsWith('Person: ')).map(l => l.slice(8))].join('\n');
+
+    // Part B: the other requests in the same message. A bad one never fails the whole reading: it is reported as unclear.
+    const also: ExtraRequest[] = []; const unclear: string[] = [];
+    for (const item of (Array.isArray(r.also) ? r.also : []).slice(0, MAX_EXTRA_REQUESTS)) {
+        const it = item && typeof item === 'object' && !Array.isArray(item) ? (item as Record<string, unknown>) : null;
+        const label = it && typeof it.summary === 'string' && it.summary.trim() ? clip(it.summary, 120) : 'one part of your message';
+        const o = it ? domains.find(d => d.intents.some(i => i.name === it.intent)) : undefined;
+        const s = it && o ? o.validateSlots(it.intent as Intent, it.slots && typeof it.slots === 'object' && !Array.isArray(it.slots) ? it.slots as Record<string, unknown> : {}, ctx) : null;
+        if (!it || !o || !s) { unclear.push(label); continue; }
+        also.push({ intent: it.intent as Intent, slots: s, summary: label, grounded: o.checkGrounding(s, groundText) });
+    }
+
     return {
         intent,
         confidence,
@@ -38,7 +53,9 @@ export function validateInterpretation(raw: unknown, domains: DomainHandler[], c
         ambiguities,
         clarifyQuestion: typeof r.clarify_question === 'string' && r.clarify_question.trim() ? clip(r.clarify_question, 200) : null,
         summary: typeof r.summary === 'string' ? clip(r.summary, 200) : '',
-        grounded: owner.checkGrounding(slots, message),
+        grounded: owner.checkGrounding(slots, groundText),
+        ...(also.length ? { also } : {}),
+        ...(unclear.length ? { unclear } : {}),
     };
 }
 
@@ -52,6 +69,8 @@ export interface InterpretResult {
 
 export async function interpretMessage(p: {
     llm: BrainLlm; models: readonly string[]; message: string; ctx: BrainContext; domains: DomainHandler[]; promptSections?: PromptSections;
+    /** Group 2: start the backup model after this long (0 = strictly one after another). */
+    hedgeMs?: number;
 }): Promise<InterpretResult> {
     const system = interpretSystemPromptWithSections(p.domains, p.promptSections ?? BUILTIN_PROMPT_SECTIONS);
     const user = interpretUserPrompt(p.message, p.ctx);
@@ -62,7 +81,7 @@ export async function interpretMessage(p: {
         const res = await p.llm.complete({ model, system, user, json: true, maxTokens: 1500 });
         tokensIn += res.tokensIn; tokensOut += res.tokensOut;
         return validateInterpretation(extractJson(res.text), p.domains, p.ctx, p.message);
-    }, 'understand');
+    }, 'understand', { hedgeMs: p.hedgeMs ?? HEDGE_UNDERSTAND_MS });
 
     return { interpretation: value, trace, tokensIn, tokensOut, ms: Date.now() - started };
 }
