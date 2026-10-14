@@ -116,21 +116,34 @@ export async function GET(request: NextRequest) {
 
                 const { dateStr, currentMinutes } = getZonedDateAndMinutes(ctx.timezone);
 
+                // Fetch property names map for this org to avoid PostgREST relationship errors
+                const { data: properties } = await supabaseAdmin
+                    .from('properties')
+                    .select('id, name')
+                    .eq('organization_id', ctx.organizationId);
+                const propertyMap = new Map((properties || []).map((p: any) => [p.id, p.name]));
+
                 // Fetch all confirmed bookings for today in this organization
                 const { data: bookings, error: bookingsErr } = await supabaseAdmin
                     .from('meeting_room_bookings')
                     .select(`
                         id, meeting_room_id, property_id, user_id, booking_date, start_time, end_time,
                         status, comment, attendee_email, start_reminder_sent_at, end_reminder_sent_at,
+                        created_at,
                         room:meeting_rooms(name),
-                        property:properties(name),
                         booker:users!user_id(id, full_name, email, phone)
                     `)
                     .eq('organization_id', ctx.organizationId)
                     .eq('booking_date', dateStr)
                     .eq('status', 'confirmed');
 
-                if (bookingsErr || !bookings || bookings.length === 0) {
+                if (bookingsErr) {
+                    console.error('[cron/meeting-room-reminders] Error fetching bookings:', bookingsErr);
+                    summary.errors.push(`Bookings fetch error: ${bookingsErr.message}`);
+                    continue;
+                }
+
+                if (!bookings || bookings.length === 0) {
                     continue;
                 }
 
@@ -151,12 +164,14 @@ export async function GET(request: NextRequest) {
                         // With up to 5 mins leeway in case cron fires on a 5-minute interval
                         if (currentMinutes >= targetTriggerMin && currentMinutes < startMin) {
                             const remaining = Math.max(1, startMin - currentMinutes);
+                            const propertyName = propertyMap.get(b.property_id) || 'Your Property';
                             await dispatchMeetingReminder({
                                 ctx,
                                 booking: b,
                                 reminderType: 'start',
                                 rule: startRule,
                                 remainingMinutes: remaining,
+                                propertyName
                             });
                             await supabaseAdmin
                                 .from('meeting_room_bookings')
@@ -176,12 +191,14 @@ export async function GET(request: NextRequest) {
                         // Trigger if within the window: current time >= trigger time and before end time
                         if (currentMinutes >= targetTriggerMin && currentMinutes < endMin) {
                             const remaining = Math.max(1, endMin - currentMinutes);
+                            const propertyName = propertyMap.get(b.property_id) || 'Your Property';
                             await dispatchMeetingReminder({
                                 ctx,
                                 booking: b,
                                 reminderType: 'end',
                                 rule: endRule,
                                 remainingMinutes: remaining,
+                                propertyName
                             });
                             await supabaseAdmin
                                 .from('meeting_room_bookings')
@@ -210,18 +227,20 @@ async function dispatchMeetingReminder({
     reminderType,
     rule,
     remainingMinutes,
+    propertyName: propNameOverride,
 }: {
     ctx: OrgContext;
     booking: any;
     reminderType: 'start' | 'end';
     rule: any;
     remainingMinutes: number;
+    propertyName?: string;
 }) {
     const isEnd = reminderType === 'end';
     const featureKey = isEnd ? 'meeting_room_end_reminder' : 'meeting_room_start_reminder';
 
     const roomName = (booking.room as any)?.name || 'Meeting Room';
-    const propertyName = (booking.property as any)?.name || 'Your Property';
+    const propertyName = propNameOverride || (booking.property as any)?.name || 'Your Property';
     const booker = (booking.booker as any) || {};
     const bookerName = booker.full_name || 'Valued Member';
     const bookerEmail = booker.email || '';
