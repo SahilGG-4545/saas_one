@@ -695,13 +695,11 @@ export default function ProcurementDashboard() {
                                         {item.label}
                                     </button>
                                 ))}
+                            <PettyCashNavLink onNavigate={() => setSidebarOpen(false)} />
                             </div>
                         </div>
 
-                    <div className="mb-6" data-navigation-section="management-hub">
-                        <p className="px-4 mb-3 text-[10px] font-bold uppercase tracking-widest text-text-secondary">Management Hub</p>
-                        <PettyCashNavLink onNavigate={() => setSidebarOpen(false)} />
-                    </div>
+
 </nav>
 
                     <div className="px-6 py-6 border-t border-slate-100 mt-auto flex-shrink-0 bg-slate-50/50">
