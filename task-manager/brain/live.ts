@@ -5,7 +5,8 @@ import type { ExecutionResult } from './domain';
 import { ExecIO, executeAction, needsExecution } from './execute';
 import { BrainDeps, BrainResult, composeBrainReply, runBrain } from './index';
 import { shadowDetails } from './shadow';
-import { clip } from './text';
+import { addDays, clip } from './text';
+import { FIND_MAX_ROWS, type FoundTask } from './findTasks';
 import type { Action, BrainContext, PendingState } from './types';
 import { AI_DOWN_HELP, ExactPlan, LastChange, UNDO_HINT, UndoIO, changeFromAction, normalizeChange, parseExactCommand, planExact, runUndo } from './frontDoor';
 import { isExplicitTaskCommand } from '@/backend/lib/whatsapp/interpreter/coordinator.mjs';
@@ -28,7 +29,9 @@ import { buildTeamReport } from './teamReport';
  */
 
 export const LIVE_STATE_TYPE = 'BRAIN_STATE';
-const STATE_TTL_MIN = 15;
+/** How long a question the bot asked stays answerable. Part B (2026-10-13): 15 → 120 minutes — Priyanka's "yes" 15 minutes
+ *  after "should I mark … as done?" found nothing waiting. A late yes is still safe: the change is re-checked when carried out. */
+export const STATE_TTL_MIN = 120;
 
 export interface LiveState {
     /** Short memory of the last turns (interpretation + the bot's own replies), newest last. */
@@ -129,37 +132,50 @@ export async function claimSmartChat(body: unknown, io?: LiveIO, opts: LiveOptio
 
     try {
         const real = io ?? await defaultLiveIO();
-        // One small read first: while no department has Smart chat ON (the default) nothing else is read.
-        const departments = await real.getSmartChatDepartments();
+        // Group 2 "faster replies" (2026-10-13): reads that do not depend on each other run side by side (they used to run one
+        // after another). The same checks, in the same order of meaning: any "no" still means the old bot answers.
+        const t0 = Date.now();
+        const [departments, employee] = await Promise.all([real.getSmartChatDepartments(), real.getEmployee(cand.phone)]);
         if (departments.size === 0) return NOT_HANDLED;
-        const employee = await real.getEmployee(cand.phone);
         if (!employee?.department_id || !departments.has(employee.department_id)) return NOT_HANDLED;
-        const access = await real.checkAccess(employee);
-        const config = await real.getConfig();
+        const [access, config] = await Promise.all([real.checkAccess(employee), real.getConfig()]);
         // Same people as the Task Manager itself, in a department with the switch ON, inside the sandbox while it is ON.
         if (!decideImportEligibility(config, cand.phone, employee, access, departments).ok) return NOT_HANDLED;
 
-        const row = await real.getState(cand.phone);
-        if (row && row.type !== LIVE_STATE_TYPE) return NOT_HANDLED;      // an older conversation is still open: let it finish
-        if (await real.facilityActive(cand.phone)) return NOT_HANDLED;    // a room / ticket conversation is open
+        // Read BEFORE this message is stored, so the transcript holds only EARLIER messages (the new one is "message").
+        const conversationP = real.readConversation ? real.readConversation(cand.phone).catch(() => [] as string[]) : Promise.resolve([] as string[]);
+        const switchesP = Promise.all([
+            real.frontDoorOn ? real.frontDoorOn().catch(() => false) : Promise.resolve(false),
+            real.teamReportsOn ? real.teamReportsOn().catch(() => false) : Promise.resolve(false),
+        ]);
+        conversationP.catch(() => undefined); switchesP.catch(() => undefined);
+        const [row, facility] = await Promise.all([real.getState(cand.phone), real.facilityActive(cand.phone)]);
+        // An older conversation still in progress (a task-list preview, an old confirmation) finishes first. The old bot's IDLE
+        // markers do not count (group 3, 2026-10-13): "ACTIVE_SESSION" (set for 30 min by an old "tasks") and the old
+        // "1. Tasks / 2. Facility" menu sent everything to the old bot for half an hour — Harsh's "add HR grievance module task
+        // also" got the menu. Only a plain "1" / "2" still answers that menu.
+        const idleOld = row?.type === 'ACTIVE_SESSION' || (row?.type === 'DISAMBIGUATION' && !/^\s*[12]\s*$/.test(cand.text));
+        if (row && row.type !== LIVE_STATE_TYPE && !idleOld) return NOT_HANDLED;
+        if (facility) return NOT_HANDLED;                                  // a room / ticket conversation is open
         if (cand.messageId && real.seenBefore(cand.messageId)) return { handled: true }; // repeat delivery of one we already took
 
-        const state = normalizeState(row?.data);
+        const state = normalizeState(row?.type === LIVE_STATE_TYPE ? row.data : null);   // an old idle marker → start fresh
         // A superuser with a reminder waiting for a reply: their "working on it" / "done" answers THAT request.
         let pending = state.pending; let titles: Record<string, string> = state.titles;
         if (!pending && employee.role === 'superuser') {
             const waiting = await real.openPingPending(employee);
             if (waiting) { pending = waiting.pending; titles = waiting.titles; }
         }
-        // Read BEFORE this message is stored, so the transcript holds only EARLIER messages (the new one is "message").
-        const conversation = real.readConversation ? await real.readConversation(cand.phone).catch(() => [] as string[]) : [];
+        const conversation = await conversationP;
         const ctx = await real.buildContext(employee, cand.phone, { pending, recent: state.recent, ...(conversation.length ? { conversation } : {}) });
+        const [frontDoorSwitch, teamReportsSwitch] = await switchesP;
+        const loadMs = Date.now() - t0;
         if (real.beginLearning) await real.beginLearning({ messageId: cand.messageId, phone: cand.phone, text: cand.text, context: ctx }).catch(() => undefined);
         const started = Date.now();
         const phone0 = cand.phone, messageId0 = cand.messageId;
 
         // Phase 3 "One front door" (switch OFF → skipped entirely): exact commands are answered by code, no AI call.
-        const frontDoor = real.frontDoorOn ? await real.frontDoorOn().catch(() => false) : false;
+        const frontDoor = frontDoorSwitch;
         if (frontDoor && !ctx.pending) {
             const cmd = parseExactCommand(cand.text);
             const plan = cmd ? planExact(cmd, ctx) : null;
@@ -170,7 +186,7 @@ export async function claimSmartChat(body: unknown, io?: LiveIO, opts: LiveOptio
         }
 
         // Phase 4 "Team reports" (switch OFF → the domains, and so the AI's instructions, are exactly as before).
-        const teamReports = real.teamReportsOn ? await real.teamReportsOn().catch(() => false) : false;
+        const teamReports = teamReportsSwitch;
         const brainIO = teamReports ? { ...real, brain: { ...real.brain, domains: [tasksDomainWithTeam, facilityDomain] } } : real;
         const result = await runBrain(cand.text, ctx, { ...brainIO.brain, skipReply: true });
         if (result.status !== 'ok' || !result.decision || !result.interpretation) {
@@ -184,7 +200,7 @@ export async function claimSmartChat(body: unknown, io?: LiveIO, opts: LiveOptio
 
         if (cand.messageId) real.markSeen(cand.messageId);
         const phone = cand.phone, text = cand.text, messageId = cand.messageId;
-        return { handled: true, background: () => respond({ io: brainIO, employee, phone, text, messageId, ctx, result, state, depth: 0, started, relay: ctx.pending?.kind === 'ping_reply', titles, opts, frontDoor }) };
+        return { handled: true, background: () => respond({ io: brainIO, employee, phone, text, messageId, ctx, result, state, depth: 0, started, relay: ctx.pending?.kind === 'ping_reply', titles, opts, frontDoor, loadMs }) };
     } catch (err) {
         console.warn('[TaskBrainLive] not handled, the old bot answers instead:', err instanceof Error ? err.message : err);
         return NOT_HANDLED;
@@ -199,6 +215,8 @@ interface Turn {
     opts?: LiveOptions;
     /** Phase 3: remember executed changes so "undo" can reverse them (only while the front door is on). */
     frontDoor?: boolean;
+    /** Group 2: how long loading the person's data took (ms), for the per-step timings in the audit row. */
+    loadMs?: number;
 }
 
 const prefixedText = (opts: LiveOptions | undefined, text: string): string => (opts?.replyPrefix ? `${opts.replyPrefix}\n\n${text}` : text);
@@ -262,12 +280,21 @@ async function handle(t: Turn): Promise<void> {
     const decision = t.result.decision!;
 
     const say = async (result: BrainResult, exec: ExecutionResult | null, next: LiveState | 'clear', extra: Record<string, unknown> = {}) => {
+        const r0 = Date.now();
         const reply = await composeBrainReply({ text: t.text, ctx, interpretation: result.interpretation!, decision: result.decision!, deps: io.brain, result: exec ?? undefined });
-        if (io.observeLearning) await io.observeLearning({ messageId: t.messageId, phone, text: t.text, context: ctx, intent: result.interpretation!.intent, outcome: result.decision!.outcome, previousOutcome: t.state.lastOutcome ?? null, interpretation: { intent: result.interpretation!.intent, outcome: result.decision!.outcome, summary: result.interpretation!.summary } }).catch(() => undefined);
-        if (next === 'clear') await io.clearState(phone);
-        else await io.setState(phone, { ...next, lastOutcome: result.decision!.outcome, recent: remember(t.state.recent, result.interpretation!.summary || 'a message', reply?.text ?? null) });
+        const s0 = Date.now();
+        // Group 2: the learning note and saving the conversation do not depend on each other → side by side. The state is
+        // still saved BEFORE the reply is sent, so a quick "yes" always finds the question.
+        await Promise.all([
+            io.observeLearning ? io.observeLearning({ messageId: t.messageId, phone, text: t.text, context: ctx, intent: result.interpretation!.intent, outcome: result.decision!.outcome, previousOutcome: t.state.lastOutcome ?? null, interpretation: { intent: result.interpretation!.intent, outcome: result.decision!.outcome, summary: result.interpretation!.summary } }).catch(() => undefined) : undefined,
+            next === 'clear' ? io.clearState(phone) : io.setState(phone, { ...next, lastOutcome: result.decision!.outcome, recent: remember(t.state.recent, result.interpretation!.summary || 'a message', reply?.text ?? null) }),
+        ]);
+        const w0 = Date.now();
         if (reply) await io.reply(phone, prefixed(t, reply.text));
-        await io.audit({ ...shadowDetails({ phone, messageId: t.messageId, messageChars: t.text.length, result: { ...result, reply }, ms: Date.now() - t.started }), live: true, executed: exec?.summary ?? null, ...(t.opts?.via ? { via: t.opts.via } : {}), ...extra }, employee);
+        // Group 2: how long each step took (ms) — times only, never content. Read on the Bot health numbers.
+        const steps = { load: t.loadMs ?? null, understand: result.trace.fastPath ? 0 : result.trace.interpretMs, act: extra.actMs ?? null, reply: s0 - r0, save: w0 - s0, send: Date.now() - w0 };
+        const { actMs: _actMs, ...rest } = extra; void _actMs;
+        await io.audit({ ...shadowDetails({ phone, messageId: t.messageId, messageChars: t.text.length, result: { ...result, reply }, ms: Date.now() - t.started }), steps, live: true, executed: exec?.summary ?? null, ...(t.opts?.via ? { via: t.opts.via } : {}), ...rest }, employee);
     };
 
     // ── an answer to a question the bot asked ───────────────────────────────
@@ -276,8 +303,9 @@ async function handle(t: Turn): Promise<void> {
         if (a.answer === 'no') return say(t.result, null, 'clear');
         if (a.answer === 'yes' && t.state.action) {
             const change = t.frontDoor ? changeFromAction(t.state.action, ctx) : null;   // read BEFORE it changes
+            const a0 = Date.now();
             const exec = await executeAction(t.state.action, ctx, io.exec, { relay: t.state.relay, titles: t.state.titles });
-            return say(t.result, exec, { ...EMPTY, recent: t.state.recent, ...(t.frontDoor ? carry(t.state, change) : {}) }, { confirmedAction: t.state.action.type });
+            return say(t.result, exec, { ...EMPTY, recent: t.state.recent, ...(t.frontDoor ? carry(t.state, change) : {}) }, { confirmedAction: t.state.action.type, actMs: Date.now() - a0 });
         }
         if ((a.answer === 'pick' || a.answer === 'edit') && t.depth === 0 && t.state.originalSummary) {
             const label = a.answer === 'pick' ? t.state.pickOptions[(a.pick ?? 0) - 1] : null;
@@ -300,9 +328,12 @@ async function handle(t: Turn): Promise<void> {
     // ── everything else: carry out if it is a read / a note, then reply and remember ────
     let exec: ExecutionResult | null = null;
     let change: LastChange | null = null;
+    let actMs: number | null = null;
     if (decision.outcome === 'ACT' && needsExecution(decision.action)) {
         if (t.frontDoor) change = changeFromAction(decision.action, ctx);              // read BEFORE it changes
+        const a0 = Date.now();
         exec = await executeAction(decision.action, ctx, io.exec, { relay: t.relay, titles: t.titles });
+        actMs = Date.now() - a0;
     }
 
     const next: LiveState = { ...EMPTY, recent: t.state.recent, ...(t.frontDoor ? carry(t.state, change) : {}) };
@@ -316,8 +347,14 @@ async function handle(t: Turn): Promise<void> {
         next.pickOptions = decision.options;
         next.originalSummary = interp.summary || null;
         next.relay = t.relay; next.titles = t.relay ? t.titles : {};
+    } else if (t.state.pending && ((decision.outcome === 'CLARIFY' && (decision.reason === 'unsure_answer' || decision.reason === 'bad_pick'))
+        || (decision.outcome === 'ACT' && decision.action.type === 'chat'))) {
+        // A side remark ("thanks", "what do you mean?") does not cancel a question that is still waiting.
+        // Part B: an unclear answer to a question that still stands keeps that question (and its change) open, so the next
+        // clear "yes" / "2" still works. Before, the question was dropped and the yes found nothing waiting.
+        Object.assign(next, { pending: t.state.pending, action: t.state.action, originalSummary: t.state.originalSummary, pickOptions: t.state.pickOptions, relay: t.state.relay, titles: t.state.titles });
     }
-    return say(t.result, exec, next);
+    return say(t.result, exec, next, actMs !== null ? { actMs } : {});
 }
 
 // ── the real wiring (loaded lazily so tests never touch the database) ───────
@@ -341,7 +378,8 @@ export async function defaultLiveIO(): Promise<LiveIO> {
     const { botSwitchOn } = await import('../BotSwitches');
     const { activePromptSections, beginObservation, observeTurn } = await import('../BotLearningService');
     const llm = engyBrainLlm();
-    const relayIO = await defaultRelayIO();
+    // Group 2: two independent setup reads side by side.
+    const [relayIO, promptSections] = await Promise.all([defaultRelayIO(), activePromptSections()]);
 
     const STATUS: Record<string, string> = { pending: 'To do', in_progress: 'In progress', completed: 'Done' };
 
@@ -351,6 +389,8 @@ export async function defaultLiveIO(): Promise<LiveIO> {
         async assign(actorId, i) { await WorkspaceService.assign(actorId, { targetUserId: i.targetUserId, title: i.title, description: i.description, date: i.date, notify: i.notify }); },
         async alertAssigned(actorId, targetUserId, titles, date) { await WorkspaceService.alertAssigned(actorId, targetUserId, titles, date); },
         async handOver(actorId, taskId, toId) { const r = await WorkspaceService.handOver(actorId, { taskId, targetUserId: toId }); return { toName: r.toName }; },
+        async deleteTask(actorId, taskId) { await WorkspaceService.deleteTask(actorId, { taskId, via: 'whatsapp' }); },
+        async renameTask(actorId, taskId, title) { await WorkspaceService.renameTask(actorId, { taskId, title, via: 'whatsapp' }); },
         async readPerson(actorId, personId) {
             const [actor, target] = await Promise.all([TaskDatabaseService.getEmployeeById(actorId), TaskDatabaseService.getEmployeeById(personId)]);
             if (!actor || !target) return null;
@@ -363,12 +403,33 @@ export async function defaultLiveIO(): Promise<LiveIO> {
             // "My team" = the people this person may give work to — the same rule assigning uses, re-checked here.
             const actor = await TaskDatabaseService.getEmployeeById(actorId);
             if (!actor) return null;
-            const pool = await TaskDatabaseService.getAllEmployees();
-            const team = (await PermissionService.visibleAndAssignable(actor, pool)).filter(e => e.id !== actor.id && e.active !== false).slice(0, 40);
+            // Only departments where the Task Manager is switched ON (owner 2026-10-12): a superuser no longer sees all 86 people.
+            const [pool, active] = await Promise.all([TaskDatabaseService.getAllEmployees(), TaskAccessService.activeDepartmentIds()]);
+            const team = (await PermissionService.visibleAndAssignable(actor, pool))
+                .filter(e => e.id !== actor.id && e.active !== false && !!e.department_id && active.has(e.department_id)).slice(0, 40);
             if (!team.length) return null;
             const date = todayIST();
             const members = await Promise.all(team.map(async e => ({ name: e.name, tasks: await TaskDatabaseService.getDailyAssignments({ employeeId: e.id, date }) })));
             return buildTeamReport(members);
+        },
+        async findTasks(actorId, q) {
+            // Flexible "look up tasks": the permission rule is applied AGAIN here, at the moment of reading — your own tasks,
+            // people you may give work to (superuser: everyone), only in departments where the Task Manager is ON.
+            const actor = await TaskDatabaseService.getEmployeeById(actorId);
+            if (!actor) return null;
+            const [pool, active] = await Promise.all([TaskDatabaseService.getAllEmployees(), TaskAccessService.activeDepartmentIds()]);
+            const inActive = (e: Employee) => !!e.department_id && active.has(e.department_id);
+            const seeable = actor.role === 'superuser' ? pool.filter(inActive) : (await PermissionService.visibleAndAssignable(actor, pool)).filter(inActive);
+            const allowed = new Set([actor.id, ...seeable.map(e => e.id)]);
+            const ids = q.employeeIds.filter(id => allowed.has(id));
+            if (!ids.length) return null;
+            const statuses = q.overdueOnly || q.status === 'open' ? ['pending', 'in_progress'] as const
+                : q.status === 'not_started' ? ['pending'] as const : q.status === 'in_progress' ? ['in_progress'] as const : q.status === 'done' ? ['completed'] as const : null;
+            return TaskDatabaseService.searchAssignments({
+                employeeIds: ids, assignedBy: q.givenById, from: q.from, to: q.to, dateField: q.dateField, statuses: statuses ? [...statuses] : null,
+                assignedBefore: q.overdueOnly ? q.today : null, assignedOnOrBefore: q.minDaysOld ? addDays(q.today, -q.minDaysOld) : null,
+                kind: q.kind, words: q.words, newestFirst: q.sort === 'newest', limit: FIND_MAX_ROWS,
+            }) as unknown as Promise<FoundTask[]>;
         },
         async readInsight(actorId, kind, subject) {
             const actor = await TaskDatabaseService.getEmployeeById(actorId);
@@ -418,7 +479,7 @@ export async function defaultLiveIO(): Promise<LiveIO> {
             findCreated: (actorId, assigneeId, title, date, since) => WorkspaceService.findRecentlyCreated(actorId, assigneeId, title, date, since),
             async deleteTask(actorId, taskId) { await WorkspaceService.deleteTask(actorId, { taskId }); },
         },
-        brain: { llm, promptSections: await activePromptSections() },
+        brain: { llm, promptSections },
         beginLearning: beginObservation,
         observeLearning: observeTurn,
         exec,

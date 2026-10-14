@@ -5,6 +5,7 @@ import { AlertTriangle, CheckCircle2, Loader2, RefreshCw, Trash2 } from 'lucide-
 import Board from '@/frontend/components/procurement/tasks/Board';
 import NotificationsView from '@/frontend/components/procurement/tasks/NotificationsView';
 import { Status, WTask } from '@/frontend/components/procurement/tasks/types';
+import { registerSessionCache } from '@/frontend/lib/dashboard/sessionCaches';
 
 /**
  * The superuser's own Task Manager view across ALL departments:
@@ -30,6 +31,8 @@ export interface ConsoleData {
 // Kept for the whole page load, so coming back to the tab shows the last data at once and refreshes quietly.
 let cache: ConsoleData | null = null;
 let cachedNotSuperuser = false;
+// …but never across users: emptied when the signed-in user changes or logs out.
+registerSessionCache(() => { cache = null; cachedNotSuperuser = false; });
 
 export type ConsoleState = ReturnType<typeof useConsoleTasks>;
 

@@ -31,6 +31,11 @@ function payloadShape(value: unknown, depth = 0): unknown {
         .map(([key, item]) => [key, payloadShape(item, depth + 1)]));
 }
 
+/** The kind of message for the ledger — never its content: "text", "audio", "button", … plus "+reply" when it quotes one. */
+function messageKind(input: { mediaType?: string; quotedIds?: string[] }): string {
+    return `${input.mediaType || 'text'}${input.quotedIds?.length ? '+reply' : ''}`;
+}
+
 export async function GET() {
     return NextResponse.json({ status: 'ok', service: 'AiSensy inbound webhook',
         assistantEnabled: process.env.AISENSY_ASSISTANT_ENABLED === 'true',
@@ -44,6 +49,16 @@ export async function POST(req: NextRequest) {
     let body: unknown;
     try { body = await req.json(); }
     catch { return NextResponse.json({ error: 'Invalid JSON payload' }, { status: 400 }); }
+    // "Never silent" ledger (switch OFF → returns 'unknown' at once, nothing written): note the message BEFORE any route
+    // runs, so a reply sent while routing is matched to it. No message text is stored. Never throws.
+    // The same write spots a RE-DELIVERY of a message already received (same WhatsApp id, even hours later): it is
+    // dropped here, before voice / routing, so nobody gets a second reply or a repeated action.
+    const arrived = normalizeInbound(body);
+    const seen = await recordInbound(arrived?.messageId, arrived?.phone, arrived && messageKind(arrived));
+    if (seen === 'duplicate') {
+        console.info('[AiSensyWebhook] Duplicate delivery ignored', JSON.stringify({ type: arrived && messageKind(arrived) }));
+        return NextResponse.json({ success: true, ignored: 'duplicate' });
+    }
     // Voice notes (switch VOICE_NOTES_ENABLED, OFF by default → returns at once, nothing loaded). A voice note is turned into
     // tidy text in the background. A YES to "🎙️ I heard …" carries on below as that text, exactly as if it had been typed.
     const voice = await claimVoiceNote(body);
@@ -52,7 +67,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ success: true, routedTo: 'VOICE_NOTE' });
     }
     if (voice.kind === 'rewrite') body = voice.body;
-    const input = normalizeInbound(body);
+    let input = normalizeInbound(body);
     console.info('[AiSensyWebhook] Payload inspected', JSON.stringify({
         assistantEnabled: enabled,
         normalized: !!input,
@@ -61,9 +76,6 @@ export async function POST(req: NextRequest) {
         hasMedia: !!input?.mediaUrl,
         shape: payloadShape(body),
     }));
-    // "Never silent" (WHATSAPP_NEVER_SILENT_ENABLED, OFF by default → returns at once): note the message BEFORE any route
-    // runs, so a reply sent while routing is matched to it. No message text is stored. Never throws.
-    await recordInbound(input?.messageId, input?.phone);
     // Conversation memory (WHATSAPP_MEMORY_ENABLED, OFF by default → returns at once): the person's message is stored only once a
     // Task Manager route has taken it — for Smart chat AFTER the AI has read the memory, so it never sees this message twice.
     const remember = () => appendTurn(input?.phone, 'person', input?.text, receivedAt);
@@ -87,6 +99,9 @@ export async function POST(req: NextRequest) {
         }
         return NextResponse.json({ success: true, routedTo: 'TASK_IMPORT' });
     }
+    // Group 3 (2026-10-13): a caption-less photo the person said is for a facility issue ("ticket") → carry on with THAT
+    // photo, exactly as if it had just arrived, so the facility assistant handles it as before.
+    if (taskImport.rewrite) { body = taskImport.rewrite; input = normalizeInbound(body); }
 
     // Smart chat (Phase 4): for people in a department with Smart chat ON, the brain answers plain-language messages. Anything it
     // does not take (rooms / tickets, the AI being down, an older conversation still open) comes back handled:false and the old

@@ -80,13 +80,57 @@ export function extractJson(text: string): unknown {
 
 export interface FallbackTrace { model: string; failures: Array<{ model: string; error: string }> }
 
-/** Try each model in order; the first that returns a usable value wins. Throws the last error if all fail. */
+/**
+ * Group 2 "faster replies" (2026-10-13): how long the first model may take before the next one is ALSO started. The first
+ * usable answer wins; the slower call is simply ignored. Measured: the understand model usually answers in ~1–4 s but
+ * sometimes stalls for 15+ s — the whole bot then waited. Now a stall costs ~5 s at most. Extra calls happen only when a
+ * model is slow, so the extra cost is small.
+ */
+export const HEDGE_UNDERSTAND_MS = 5_000;
+export const HEDGE_REPLY_MS = 4_000;
+
+/**
+ * Try each model in order; the first that returns a usable value wins. Throws the last error if all fail.
+ * With `hedgeMs`: if a model has not answered by then, the next one starts too (an ERROR starts the next one at once);
+ * whichever gives a usable value first wins. Without it: strictly one after another, exactly as before.
+ */
 export async function withModelFallback<T>(
     models: readonly string[],
     run: (model: string) => Promise<T>,
-    label = 'brain'
+    label = 'brain',
+    opts: { hedgeMs?: number } = {}
 ): Promise<{ value: T; trace: FallbackTrace }> {
     const failures: Array<{ model: string; error: string }> = [];
+    if (opts.hedgeMs && models.length > 1) {
+        return new Promise((resolve, reject) => {
+            let next = 0; let running = 0; let settled = false;
+            let timer: ReturnType<typeof setTimeout> | null = null;
+            const stopTimer = () => { if (timer) clearTimeout(timer); timer = null; };
+            const start = () => {
+                if (settled || next >= models.length) return;
+                const model = models[next++]; running++;
+                stopTimer();
+                if (next < models.length) timer = setTimeout(start, opts.hedgeMs);
+                run(model).then(value => {
+                    if (settled) return;
+                    settled = true; stopTimer();
+                    resolve({ value, trace: { model, failures } });
+                }, err => {
+                    running--;
+                    const error = err instanceof Error ? err.message : String(err);
+                    if (settled) return;
+                    failures.push({ model, error });
+                    console.warn(`[TaskBrain] ${label} failed on ${model}: ${error}`);
+                    if (next < models.length) start();
+                    else if (running === 0) {
+                        settled = true; stopTimer();
+                        reject(new Error(`${label}: every model failed (${failures.map(f => `${f.model}: ${f.error}`).join('; ')})`));
+                    }
+                });
+            };
+            start();
+        });
+    }
     for (const model of models) {
         try {
             return { value: await run(model), trace: { model, failures } };

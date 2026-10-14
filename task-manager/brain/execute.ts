@@ -1,5 +1,6 @@
 import type { ExecutionResult } from './domain';
 import type { Action, BrainContext, ProgressState } from './types';
+import { FoundTask, ResolvedQuery, formatFound, viewFor } from './findTasks';
 
 /**
  * The language brain — step 6: EXECUTE a decision that is already approved (a change that was confirmed, a status note, a read).
@@ -20,12 +21,18 @@ export interface ExecIO {
      *  assign sends its own alert). */
     alertAssigned?(actorId: string, targetUserId: string, titles: string[], date: string): Promise<void>;
     handOver(actorId: string, taskId: string, toId: string): Promise<{ toName: string }>;
+    /** Delete / rename one of the actor's tasks (the same checked functions as the Tasks tab). Optional: absent → "not available". */
+    deleteTask?(actorId: string, taskId: string): Promise<void>;
+    renameTask?(actorId: string, taskId: string, title: string): Promise<void>;
     /** Another person's tasks as text, or null when the actor may not see them. */
     readPerson(actorId: string, personId: string): Promise<string | null>;
     /** Phase 4 "Team reports": today's progress of the people this person may give work to, as text (null = not available). */
     readTeam?(actorId: string): Promise<string | null>;
     /** Superuser overviews (department / pending / whole company) as text. */
     readInsight(actorId: string, kind: 'department_progress' | 'pending_tasks' | 'org_overview', subject: string | null): Promise<string>;
+    /** Flexible "look up tasks" (read-only): rows matching the form, for people the actor may see — checked AGAIN here
+     *  (null = not allowed / not available). */
+    findTasks?(actorId: string, query: ResolvedQuery): Promise<FoundTask[] | null>;
     /** Tell each person who gave these tasks what the reply MEANT (a summary, never the exact words). Only used for replies to a request. */
     relay?(actorId: string, input: { taskIds: string[]; state: ProgressState; note: string | null; titles?: Record<string, string> }): Promise<{ told: string[]; couldNot: string[] }>;
 }
@@ -146,6 +153,48 @@ export async function executeAction(action: Action, ctx: BrainContext, io: ExecI
             } catch (err) {
                 return { summary: `I could not look that up. ${reason(err)}`, values: {} };
             }
+        }
+
+        case 'delete_tasks': {
+            if (!io.deleteTask) return { summary: 'Deleting tasks from WhatsApp is not available right now.', values: {} };
+            const r = await each(action.taskIds, id => io.deleteTask!(me, id), titleOf);
+            return outcome('Deleted', 'delete', { one: 'task', many: 'tasks' }, r.done, r.failed);
+        }
+
+        case 'rename_task': {
+            if (!io.renameTask) return { summary: 'Renaming tasks from WhatsApp is not available right now.', values: {} };
+            const from = titleOf(action.taskId);
+            try {
+                await io.renameTask(me, action.taskId, action.title);
+                return { summary: 'Renamed the task.', values: { details: `• ${from} → ${action.title}` } };
+            } catch (err) {
+                return { summary: `I could not rename it. ${reason(err)}`, values: { details: `• ${from}` } };
+            }
+        }
+
+        case 'find_tasks': {
+            try {
+                const rows = io.findTasks ? await io.findTasks(me, action.query) : null;
+                if (rows === null) return { summary: 'You are not allowed to see that.', values: {} };
+                const f = formatFound(rows, action.query, viewFor(ctx), me);
+                return { summary: f.summary, values: { data: f.text } };
+            } catch (err) {
+                return { summary: `I could not look that up just now. ${reason(err)}`, values: {} };
+            }
+        }
+
+        case 'batch': {
+            // Part B: several changes confirmed with ONE yes. Each part runs through the same code as on its own (permissions
+            // re-checked, failures reported per part); one failing part never stops the others.
+            const parts: ExecutionResult[] = [];
+            for (const sub of action.actions) {
+                if (sub.type === 'batch') continue;                                   // never nested
+                try { const r = await executeAction(sub, ctx, io, opts); if (r) parts.push(r); }
+                catch (err) { parts.push({ summary: `One part could not be done. ${reason(err)}`, values: {} }); }
+            }
+            const details = parts.map(p => p.values.details).filter(Boolean).join('\n');
+            const left = action.unclear.length ? ` I couldn't work out: ${action.unclear.join('; ')}. Please send it again on its own.` : '';
+            return { summary: `${parts.map(p => p.summary).join(' ')}${left}`.trim(), values: details ? { details } : {} };
         }
 
         default:

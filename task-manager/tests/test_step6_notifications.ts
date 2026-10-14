@@ -70,6 +70,7 @@ async function run() {
     db.getEmployeesByDepartment = async (d: string) => Object.values(people).filter((p: any) => p.department_id === d);
     db.getFilteredAssignments = async () => [{ id: 't', title: 'Call vendor', status: 'pending', assigned_date: '2026-10-07' }];
     db.getDailyAssignments = db.getFilteredAssignments;
+    db.getNumberedList = db.getFilteredAssignments;
     db.getSendControls = async () => ({ killSwitches: db.getDefaultKillSwitches(), pretendMode: true });
     access.isNotificationsDelegated = async () => delegated;
     access.getSnapshot = async () => ({

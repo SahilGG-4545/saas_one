@@ -23,15 +23,33 @@ export const phoneKey = (phone: string) => String(phone || '').replace(/\D/g, ''
 const warn = (what: string, err: unknown) =>
     console.warn(`[InboundLedger] ${what} skipped:`, err instanceof Error ? err.message : (err as { message?: string })?.message || err);
 
-/** A message arrived. Call BEFORE any route runs, so a reply sent during routing finds the row. Duplicates are ignored. */
-export async function recordInbound(messageId: string | null | undefined, phone: string | null | undefined): Promise<void> {
-    if (!messageId || !phone || phoneKey(phone).length < 10) return;
-    if (!(await neverSilentEnabled())) return;
+/** 'new' = first time seen; 'duplicate' = this message id is already in the ledger; 'unknown' = could not tell (switch OFF, no id, error). */
+export type InboundSeen = 'new' | 'duplicate' | 'unknown';
+
+/** Is the "message_type" column there yet? (migration 20261013000001; until applied, rows are written without it.) */
+let typeColumn = true;
+
+/**
+ * A message arrived. Call BEFORE any route runs, so a reply sent during routing finds the row.
+ * The SAME write also tells whether WhatsApp / AiSensy delivered this message id before (a re-delivery can come hours
+ * later; 2026-10-12 Lohit got a reply to nothing). The caller drops a 'duplicate'. Only 'duplicate' is ever acted on:
+ * any doubt → 'unknown' → handled as before. `messageType` is the provider's kind (text / audio / button …), never content.
+ */
+export async function recordInbound(messageId: string | null | undefined, phone: string | null | undefined, messageType?: string | null): Promise<InboundSeen> {
+    if (!messageId || !phone || phoneKey(phone).length < 10) return 'unknown';
+    if (!(await neverSilentEnabled())) return 'unknown';
+    const row: Record<string, string> = { message_id: messageId, phone, phone_key: phoneKey(phone) };
+    const type = messageType ? String(messageType).slice(0, 40) : null;
     try {
-        const { error } = await supabaseAdmin.from(LEDGER_TABLE)
-            .upsert({ message_id: messageId, phone, phone_key: phoneKey(phone) }, { onConflict: 'message_id', ignoreDuplicates: true });
-        if (error) warn('record', error);
-    } catch (err) { warn('record', err); }
+        const write = (withType: boolean) => supabaseAdmin.from(LEDGER_TABLE)
+            .upsert(withType && type ? { ...row, message_type: type } : row, { onConflict: 'message_id', ignoreDuplicates: true })
+            .select('message_id');
+        let { data, error } = await write(typeColumn);
+        if (error && typeColumn && /message_type/.test(error.message || '')) { typeColumn = false; ({ data, error } = await write(false)); }
+        if (error) { warn('record', error); return 'unknown'; }
+        // With ignoreDuplicates, an id already in the table is skipped and NOT returned.
+        return Array.isArray(data) && data.length === 0 ? 'duplicate' : Array.isArray(data) ? 'new' : 'unknown';
+    } catch (err) { warn('record', err); return 'unknown'; }
 }
 
 /** A Task Manager route took the message: observe eligible Smart-chat turns and let the watchdog expect a reply. */

@@ -13,7 +13,7 @@ function load(path,imports){const exports={};vm.runInNewContext(ts.transpileModu
 function setup({facilityActive=false,choice=false,testingConfig=null}={}){
     const contexts=new Map([['TASK_MANAGER',{context_data:choice?{state:'AWAITING_SYSTEM_CHOICE'}:{}}]]),tasks=[{id:'task-1',title:'Review report',status:'pending'}],messages=[],events=[],callbacks=[],audits=[];
     const db={getConversationContext:async(_phone,system)=>contexts.get(system)||null,
-        getEmployeeByPhone:async()=>({id:'employee',name:'User',role:'employee'}),getDailyAssignments:async()=>tasks,
+        getEmployeeByPhone:async()=>({id:'employee',name:'User',role:'employee'}),getDailyAssignments:async()=>tasks,getNumberedList:async()=>tasks,
         setConversationContext:async params=>contexts.set(params.system,{context_data:params.contextData||{}}),
         clearConversationContext:async(_phone,system)=>contexts.delete(system),getTestingConfig:async()=>testingConfig,
         updateAssignmentStatus:async params=>{const task=tasks.find(t=>t.id===params.assignmentId);task.status=params.status;return task;},logAudit:async entry=>audits.push(entry)};

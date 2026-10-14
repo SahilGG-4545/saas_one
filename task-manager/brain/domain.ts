@@ -34,6 +34,9 @@ export interface ReplyFacts {
     names: string[];
     /** plain deterministic text used when the AI is down or its answer fails the checks. */
     fallback: string;
+    /** Part B: nothing is waiting for a yes after this reply, so it must NOT ask "should I…?" / "do you want me to…?" — a yes
+     *  to such a question would have nothing to answer (2026-10-12: Harsh's "Yes add this task" → "nothing waiting"). */
+    noYesNoQuestion?: boolean;
 }
 
 export interface ExecutionResult { values: Record<string, string>; summary: string }
