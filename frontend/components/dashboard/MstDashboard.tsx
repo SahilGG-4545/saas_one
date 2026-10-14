@@ -498,6 +498,326 @@ const MstDashboard = () => {
 
 
 
+
+        if (error) {
+            console.error('Error fetching tickets:', error);
+        } else {
+            const active = (data || []).filter((t: Ticket) => !['resolved', 'closed', 'pending_validation'].includes(t.status));
+            const completed = (data || []).filter((t: Ticket) => ['resolved', 'closed', 'pending_validation'].includes(t.status));
+            setIncomingTickets(active);
+            setCompletedTickets(completed);
+            
+            const totalExact = totalCount || data?.length || 0;
+            const closedExact = closedCountResult || completed.length;
+            setTicketStats({ total: totalExact, open: totalExact - closedExact, closed: closedExact });
+
+            setCachedData(`${cacheKeyPrefix}-tickets`, { incoming: active, completed });
+        }
+        setIsFetching(false);
+    };
+
+    const fetchPropertyDetails = async () => {
+        if (!property) {
+            setIsLoading(true);
+        }
+        setErrorMsg('');
+
+        const { data, error } = await supabase
+            .from('properties')
+            .select('*')
+            .eq('id', propertyId)
+            .maybeSingle();
+
+        if (error || !data) {
+            console.error('Property fetch error:', error);
+            setErrorMsg(`Property not found (ID: ${propertyId})`);
+        } else {
+            setProperty(data);
+            setCachedData(`${cacheKeyPrefix}-details`, data);
+        }
+        setIsLoading(false);
+    };
+
+    if (isLoading && !property) return (
+        <div className="min-h-screen bg-background flex">
+            {/* Sidebar Skeleton */}
+            <aside className="w-64 border-r border-border p-6 space-y-6 hidden lg:block bg-white">
+                <Skeleton className="w-full h-12" />
+                <div className="space-y-3">
+                    {[1, 2, 3, 4, 5, 6].map(i => <Skeleton key={i} className="w-full h-10" />)}
+                </div>
+            </aside>
+            <main className="flex-1">
+                <header className="h-14 border-b border-border px-6 flex items-center justify-between bg-white">
+                    <Skeleton className="w-32 h-6" />
+                    <Skeleton className="w-48 h-8 rounded-full" />
+                </header>
+                <div className="p-8 space-y-8">
+                    <header className="flex justify-between items-center">
+                        <div className="space-y-2">
+                            <Skeleton className="w-64 h-10" />
+                            <Skeleton className="w-48 h-4" />
+                        </div>
+                    </header>
+                    <div className="bg-white border border-border rounded-2xl p-8 space-y-6">
+                        <Skeleton className="w-48 h-6" />
+                        <div className="grid grid-cols-3 gap-8">
+                            <Skeleton className="h-24" />
+                            <Skeleton className="h-24" />
+                            <Skeleton className="h-24" />
+                        </div>
+                    </div>
+                </div>
+            </main>
+        </div>
+    );
+
+    if (!property) return (
+        <div className="min-h-screen bg-background flex items-center justify-center">
+            <div className="text-center">
+                <h2 className="text-xl font-bold text-error">Error Loading Dashboard</h2>
+                <p className="text-text-secondary mt-2">{errorMsg || 'Property not found.'}</p>
+                <button onClick={() => router.back()} className="mt-4 text-primary font-bold hover:underline">Go Back</button>
+            </div>
+        </div>
+    );
+
+
+
+    const handleEditClick = (e: React.MouseEvent, ticket: Ticket) => {
+        e.stopPropagation();
+        setEditingTicket(ticket);
+        setEditTitle(ticket.title);
+        setEditDescription(ticket.description);
+    };
+
+    const handleUpdateTicket = async () => {
+        if (!editingTicket || !editTitle.trim()) return;
+        setIsUpdating(true);
+        try {
+            const res = await fetch(`/api/tickets/${editingTicket.id}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    title: editTitle,
+                    description: editDescription
+                })
+            });
+
+            if (res.ok) {
+                setEditingTicket(null);
+                fetchTickets(); // Refresh list
+            } else {
+                const data = await res.json();
+                alert(data.error || 'Failed to update ticket');
+            }
+        } catch (error) {
+            console.error('Update ticket error:', error);
+        } finally {
+            setIsUpdating(false);
+        }
+    };
+
+
+    return (
+        <div className="min-h-screen w-full max-w-full bg-background flex font-inter text-text-primary overflow-x-hidden">
+            <FeedbackModal isOpen={showFeedbackModal} onClose={() => setShowFeedbackModal(false)} />
+            {/* Mobile Overlay */}
+            <AnimatePresence>
+                {sidebarOpen && (
+                    <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="fixed inset-0 bg-black/50 z-40 lg:hidden"
+                        onClick={() => setSidebarOpen(false)}
+                    />
+                )}
+            </AnimatePresence>
+
+            {/* Sidebar */}
+            <aside className={`
+                w-64 bg-sidebar border-r border-slate-300 flex flex-col inset-y-0 z-50 transition-all duration-300
+                fixed left-0
+                ${sidebarOpen ? 'translate-x-0 opacity-100' : '-translate-x-full opacity-0 lg:translate-x-0 lg:opacity-100'}
+                overflow-hidden
+            `}>
+                {/* Mobile Close Button */}
+                <button
+                    onClick={() => setSidebarOpen(false)}
+                    className="absolute top-4 right-4 lg:hidden p-2 rounded-lg hover:bg-surface-elevated transition-colors"
+                >
+                    <ChevronLeft className="w-5 h-5 text-text-secondary" />
+                </button>
+
+                {/* Logo */}
+                <div className="p-5 lg:p-6 pb-1 flex-shrink-0">
+                    <div className="flex flex-col items-center gap-1.5 mb-3">
+                        <img src="/autopilot-logo-new.png" alt="Autopilot Logo" className="h-10 w-auto object-contain" />
+                        <p className="text-[9px] text-text-tertiary font-black uppercase tracking-[0.2em]">Maintenance Portal</p>
+                    </div>
+                </div>
+
+                {/* Quick Actions */}
+                <div className="px-3 pb-3">
+                    <div className="flex items-center justify-between mb-2 px-1">
+                        <span className="text-[9px] font-bold text-text-tertiary uppercase tracking-wider">Quick Actions</span>
+                        <button onClick={() => setShowQuickActions(!showQuickActions)} className="text-text-tertiary hover:text-slate-300">
+                            <X className="w-3 h-3" />
+                        </button>
+                    </div>
+                    {showQuickActions && (
+                        <div className="grid grid-cols-1 gap-2">
+                            <button
+                                onClick={() => handleTabChange('create_request')}
+                                className="w-full flex items-center gap-2.5 px-3 py-2 bg-surface-elevated text-text-primary rounded-xl hover:bg-muted transition-all border border-border group shadow-sm"
+                            >
+                                <div className="w-7 h-7 bg-primary/20 rounded-lg flex items-center justify-center text-primary group-hover:scale-105 transition-transform">
+                                    <Plus className="w-4 h-4 font-black" />
+                                </div>
+                                <span className="text-[10px] font-black uppercase tracking-widest">New Request</span>
+                            </button>
+                            <button
+                                onClick={() => { setSidebarOpen(false); setShowQRScanner(true); }}
+                                className="w-full flex items-center gap-2.5 px-3 py-2 bg-surface-elevated text-text-primary rounded-xl hover:bg-muted transition-all border border-border group shadow-sm"
+                            >
+                                <div className="w-7 h-7 bg-primary/20 rounded-lg flex items-center justify-center text-primary group-hover:scale-105 transition-transform">
+                                    <ScanLine className="w-4 h-4" />
+                                </div>
+                                <span className="text-[10px] font-black uppercase tracking-widest">Scan QR</span>
+                            </button>
+                        </div>
+                    )}
+                </div>
+
+                {/* Navigation */}
+                <nav className="flex-1 px-3 overflow-y-auto min-h-0 custom-scrollbar">
+                    {/* Daily Work */}
+                    <div className="mb-4">
+                        <p className="text-[10px] font-semibold text-text-tertiary uppercase tracking-wider px-2 mb-2 flex items-center gap-1.5">
+                            <span className="w-0.5 h-2.5 bg-primary rounded-full" />
+                            Daily Work
+                        </p>
+                        <div className="space-y-0.5">
+                            <button
+                                onClick={() => handleTabChange('dashboard')}
+                                className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg transition-all text-sm font-bold ${activeTab === 'dashboard'
+                                    ? 'bg-primary text-text-inverse shadow-sm'
+                                    : 'text-text-secondary hover:bg-muted hover:text-text-primary'
+                                    }`}
+                            >
+                                <LayoutDashboard className="w-4 h-4" />
+                                Overview
+                            </button>
+                            <button
+                                onClick={() => handleTabChange('requests')}
+                                className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg transition-all text-sm font-bold ${activeTab === 'requests'
+                                    ? 'bg-primary text-text-inverse shadow-sm'
+                                    : 'text-text-secondary hover:bg-muted hover:text-text-primary'
+                                    }`}
+                            >
+                                <Ticket className="w-4 h-4" />
+                                Requests
+                            </button>
+                            <button
+                                onClick={() => handleTabChange('guest_experience')}
+                                className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg transition-all text-sm font-bold ${activeTab === 'guest_experience'
+                                    ? 'bg-primary text-text-inverse shadow-sm'
+                                    : 'text-text-secondary hover:bg-muted hover:text-text-primary'
+                                    }`}
+                            >
+                                <Ticket className="w-4 h-4" />
+                                Client Support
+                            </button>
+                            <button
+                                onClick={() => handleTabChange('flow-map')}
+                                className={`w-full flex items-center gap-2.5 px-2.5 py-2.5 rounded-lg transition-all text-sm font-bold ${activeTab === 'flow-map'
+                                    ? 'bg-primary text-text-inverse shadow-sm'
+                                    : 'text-text-secondary hover:bg-muted hover:text-text-primary'
+                                    }`}
+                            >
+                                <Activity className="w-4 h-4" />
+                                Live Flow Map
+                            </button>
+                            {/* Hidden until feature complete: Projects */}
+                        </div>
+                    </div>
+
+                    {/* Operations */}
+                    <div className="mb-4">
+                        <p className="text-[10px] font-semibold text-text-tertiary uppercase tracking-wider px-2 mb-2 flex items-center gap-1.5">
+                            <span className="w-0.5 h-2.5 bg-primary rounded-full" />
+                            Operations
+                        </p>
+                        <div className="space-y-0.5">
+                            <button
+                                onClick={() => handleTabChange('visitors')}
+                                className={`w-full flex items-center gap-2.5 px-2.5 py-2.5 rounded-lg transition-all text-sm font-bold ${activeTab === 'visitors'
+                                    ? 'bg-primary text-text-inverse shadow-sm'
+                                    : 'text-text-secondary hover:bg-muted hover:text-text-primary'
+                                    }`}
+                            >
+                                <UsersRound className="w-4 h-4" />
+                                Visitors
+                            </button>
+                            <button
+                                onClick={() => handleTabChange('diesel')}
+                                className={`w-full flex items-center gap-2.5 px-2.5 py-2.5 rounded-lg transition-all text-sm font-bold ${activeTab === 'diesel'
+                                    ? 'bg-primary text-text-inverse shadow-sm'
+                                    : 'text-text-secondary hover:bg-muted hover:text-text-primary'
+                                    }`}
+                            >
+                                <Fuel className="w-4 h-4" />
+                                Diesel Logger
+                            </button>
+                            <button
+                                onClick={() => handleTabChange('electricity')}
+                                className={`w-full flex items-center gap-2.5 px-2.5 py-2.5 rounded-lg transition-all text-sm font-bold ${activeTab === 'electricity'
+                                    ? 'bg-primary text-text-inverse shadow-sm'
+                                    : 'text-text-secondary hover:bg-muted hover:text-text-primary'
+                                    }`}
+                            >
+                                <Zap className="w-4 h-4" />
+                                Electricity Logger
+                            </button>
+                            <button
+                                onClick={() => handleTabChange('water')}
+                                className={`w-full flex items-center gap-2.5 px-2.5 py-2.5 rounded-lg transition-all text-sm font-bold ${activeTab === 'water'
+                                    ? 'bg-primary text-text-inverse shadow-sm'
+                                    : 'text-text-secondary hover:bg-muted hover:text-text-primary'
+                                    }`}
+                            >
+                                <Droplets className="w-4 h-4" />
+                                Water Logger
+                            </button>
+                            <button
+                                onClick={() => handleTabChange('checklist')}
+                                className={`w-full flex items-center gap-2.5 px-2.5 py-2.5 rounded-lg transition-all text-sm font-bold ${activeTab === 'checklist'
+                                    ? 'bg-primary text-text-inverse shadow-sm'
+                                    : 'text-text-secondary hover:bg-muted hover:text-text-primary'
+                                    }`}
+                            >
+                                <ClipboardCheck className="w-4 h-4" />
+                                Checklists
+                            </button>
+                            <button
+                                onClick={() => handleTabChange('assets')}
+                                className={`w-full flex items-center gap-2.5 px-2.5 py-2.5 rounded-lg transition-all text-sm font-bold ${activeTab === 'assets'
+                                    ? 'bg-primary text-text-inverse shadow-sm'
+                                    : 'text-text-secondary hover:bg-muted hover:text-text-primary'
+                                    }`}
+                            >
+                                <Wrench className="w-4 h-4" />
+                                Assets
+                            </button>
+                        </div>
+                    </div>
+
+
+                    <div className="mb-6" data-navigation-section="management-hub">
+                        <p className="px-4 mb-3 text-[10px] font-bold uppercase tracking-widest text-text-secondary">Management Hub</p>
+                        <PettyCashNavLink onNavigate={() => setSidebarOpen(false)} />
+                    </div>
 {/* System & Personal */}
                     <div className="mb-4">
                         <p className="text-[10px] font-semibold text-text-tertiary uppercase tracking-wider px-2 mb-2 flex items-center gap-1.5">
