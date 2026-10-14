@@ -69,6 +69,10 @@
       "schedule": "0 0 1 * *"
     },
     {
+      "path": "/api/cron/meeting-room-reminders",
+      "schedule": "* * * * *"
+    },
+    {
       "path": "/api/cron/sweep-outbox",
       "schedule": "*/5 * * * *"
     },

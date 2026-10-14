@@ -1056,7 +1056,49 @@ The room is now released and available for booking.
   - `{{4}}`: `19/08/2026`
   - `{{5}}`: `03:00 PM`
   - `{{6}}`: `04:30 PM`
-  - `{{7}}`: `Pooja Verma`
+---
+
+### Template 18a: `meeting_room_start_reminder_v1`
+- **Template Name:** `meeting_room_start_reminder_v1`
+- **Category:** `UTILITY`
+- **Language:** `English (en)`
+- **Header:** `Text` &rarr; `Upcoming Meeting Reminder`
+- **Body:**
+```text
+Hello {{1}},
+
+This is a reminder that your meeting in {{2}} at {{3}} is scheduled to begin in {{4}} minutes (at {{5}}).
+```
+- **Footer:** None
+- **Buttons:** None
+- **Parameters (5):**
+  - `{{1}}`: `user_name` (e.g. `Meenaa Chavan`)
+  - `{{2}}`: `room_name` (e.g. `Boardroom`)
+  - `{{3}}`: `property` (e.g. `Mafatlal Chambers, Lower Parel`)
+  - `{{4}}`: `remaining_minutes` (e.g. `10`)
+  - `{{5}}`: `start_time` (e.g. `11:00 AM`)
+
+---
+
+### Template 18b: `meeting_room_end_reminder_v1`
+- **Template Name:** `meeting_room_end_reminder_v1`
+- **Category:** `UTILITY`
+- **Language:** `English (en)`
+- **Header:** `Text` &rarr; `Meeting Ending Soon`
+- **Body:**
+```text
+Hello {{1}},
+
+This is a reminder that your meeting in {{2}} at {{3}} is scheduled to end in {{4}} minutes (at {{5}}).
+```
+- **Footer:** None
+- **Buttons:** None
+- **Parameters (5):**
+  - `{{1}}`: `user_name` (e.g. `Meenaa Chavan`)
+  - `{{2}}`: `room_name` (e.g. `Boardroom`)
+  - `{{3}}`: `property` (e.g. `Mafatlal Chambers, Lower Parel`)
+  - `{{4}}`: `remaining_minutes` (e.g. `10`)
+  - `{{5}}`: `end_time` (e.g. `01:00 PM`)
 
 ---
 

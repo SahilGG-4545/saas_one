@@ -14,10 +14,13 @@ export interface FeatureEmailConfig {
     notify_assignee?: boolean;
     notify_requester?: boolean;
     notify_approver?: boolean;
+    reminder_minutes?: number | null;
 }
 
 const ALIAS_MAP: Record<string, string> = {
     meeting_rooms: 'meeting_room_booked',
+    reminder_meeting_room: 'meeting_room_start_reminder',
+    meeting_room_reminder: 'meeting_room_start_reminder',
     tickets: 'ticket_created',
     material_requests: 'material_request_created',
     comparative_quotes: 'comparative_uploaded',
@@ -112,6 +115,8 @@ export const DEFAULT_EMAIL_SERVICE_CONFIG: Record<string, FeatureEmailConfig> = 
     meeting_rooms: { enabled: true, roles: ['property_admin', 'org_super_admin'], user_ids: [], notify_requester: true },
     meeting_room_booked: { enabled: true, roles: ['property_admin', 'org_super_admin'], user_ids: [], notify_requester: true },
     meeting_room_cancelled: { enabled: true, roles: ['property_admin', 'org_super_admin'], user_ids: [], notify_requester: true },
+    meeting_room_start_reminder: { enabled: true, roles: ['property_admin', 'org_super_admin'], user_ids: [], notify_requester: true, reminder_minutes: 10 },
+    meeting_room_end_reminder: { enabled: true, roles: ['property_admin', 'org_super_admin'], user_ids: [], notify_requester: true, reminder_minutes: 10 },
     reminder_ppm: { enabled: true, roles: ['property_admin', 'org_super_admin'], user_ids: [] },
     lead_created: { enabled: true, roles: ['sales', 'org_super_admin'], user_ids: [] },
     lead_assigned: { enabled: true, roles: [], user_ids: [], notify_assignee: true },

@@ -136,6 +136,12 @@ export const WhatsAppEventProcessor = {
             case 'ROOM_BOOKING_CANCELLED':
                 await this.handleMeetingRoomEvent(payload, true);
                 break;
+            case 'MEETING_ROOM_START_REMINDER':
+                await this.handleMeetingRoomReminderEvent(payload, 'start', payload.remaining_minutes || 10);
+                break;
+            case 'MEETING_ROOM_END_REMINDER':
+                await this.handleMeetingRoomReminderEvent(payload, 'end', payload.remaining_minutes || 10);
+                break;
 
             // Procurement & Materials
             case 'MATERIAL_REQUEST_CREATED':
@@ -358,6 +364,8 @@ export const WhatsAppEventProcessor = {
             requisition_po_issued: { campaign_name: 'requisition_po_issued_v1', params: ['user_name', 'month', 'year', 'property', 'vendor_name', 'po_number', 'total_amount'] },
             meeting_room_booked: { campaign_name: 'meeting_room_booked_v3', params: ['user_name', 'room_name', 'property', 'date', 'start_time', 'end_time', 'booker', 'booker_phone'] },
             meeting_room_cancelled: { campaign_name: 'meeting_room_cancelled_v2', params: ['user_name', 'room_name', 'property', 'date', 'start_time', 'end_time', 'booker'] },
+            meeting_room_start_reminder: { campaign_name: 'meeting_room_start_reminder_v1', params: ['user_name', 'room_name', 'property', 'remaining_minutes', 'start_time'] },
+            meeting_room_end_reminder: { campaign_name: 'meeting_room_end_reminder_v1', params: ['user_name', 'room_name', 'property', 'remaining_minutes', 'end_time'] },
             lead_created: { campaign_name: 'crm_lead_created_v1', params: ['user_name', 'company_name', 'contact_person', 'phone', 'source', 'property_interest'] },
             crm_lead_created: { campaign_name: 'crm_lead_created_v1', params: ['user_name', 'company_name', 'contact_person', 'phone', 'source', 'property_interest'] },
             lead_assigned: { campaign_name: 'crm_lead_assigned_v1', params: ['user_name', 'company_name', 'contact_person', 'phone', 'property_interest', 'next_followup'] },
@@ -444,6 +452,11 @@ export const WhatsAppEventProcessor = {
 
             'meeting_room_cancelled_v2': ['user_name', 'room_name', 'property', 'date', 'start_time', 'end_time', 'booker'],
             'meeting_room_cancelled': ['user_name', 'room_name', 'property', 'date', 'start_time', 'end_time', 'booker'],
+
+            'meeting_room_start_reminder_v1': ['user_name', 'room_name', 'property', 'remaining_minutes', 'start_time'],
+            'meeting_room_start_reminder': ['user_name', 'room_name', 'property', 'remaining_minutes', 'start_time'],
+            'meeting_room_end_reminder_v1': ['user_name', 'room_name', 'property', 'remaining_minutes', 'end_time'],
+            'meeting_room_end_reminder': ['user_name', 'room_name', 'property', 'remaining_minutes', 'end_time'],
 
             'crm_lead_created_v1': ['user_name', 'company_name', 'contact_person', 'phone', 'source', 'property_interest'],
             'lead_created': ['user_name', 'company_name', 'contact_person', 'phone', 'source', 'property_interest'],
@@ -812,6 +825,75 @@ export const WhatsAppEventProcessor = {
             organizationId: property.organization_id,
             propertyId,
             entityId: payload.id,
+            contextualUserIds: { requesterId: payload.user_id },
+            paramValues,
+            summaryMessage
+        });
+    },
+
+    async handleMeetingRoomReminderEvent(payload: any, reminderType: 'start' | 'end', remainingMinutes: number): Promise<void> {
+        const bookingId = payload.id;
+        const meetingRoomId = payload.meeting_room_id;
+        const propertyId = payload.property_id;
+
+        const { data: property } = await supabaseAdmin
+            .from('properties')
+            .select('id, name, organization_id')
+            .eq('id', propertyId)
+            .maybeSingle();
+
+        if (!property?.organization_id) return;
+
+        const { data: room } = await supabaseAdmin
+            .from('meeting_rooms')
+            .select('name')
+            .eq('id', meetingRoomId)
+            .maybeSingle();
+
+        const roomName = room?.name || 'Meeting Room';
+        const booker = await this.getUserDetails(payload.user_id);
+
+        const formatTime = (timeStr: string) => {
+            if (!timeStr) return '';
+            const [hours, minutes] = timeStr.split(':');
+            let h = parseInt(hours, 10);
+            const ampm = h >= 12 ? 'PM' : 'AM';
+            h = h % 12;
+            h = h ? h : 12;
+            return `${h.toString().padStart(2, '0')}:${minutes} ${ampm}`;
+        };
+
+        const formattedDate = payload.booking_date
+            ? payload.booking_date.split('-').reverse().join('/')
+            : '';
+        const formattedStartTime = formatTime(payload.start_time);
+        const formattedEndTime = formatTime(payload.end_time);
+
+        const isEnd = reminderType === 'end';
+        const featureKey = isEnd ? 'meeting_room_end_reminder' : 'meeting_room_start_reminder';
+
+        const paramValues: Record<string, string> = {
+            user_name: '', // Injected per recipient
+            room_name: roomName,
+            property: property.name || 'Property',
+            remaining_minutes: String(remainingMinutes || 10),
+            start_time: formattedStartTime,
+            end_time: formattedEndTime,
+            date: formattedDate,
+            booker: booker.name,
+            booker_phone: booker.phone || 'N/A'
+        };
+
+        const summaryMessage = isEnd
+            ? `Meeting room ending soon: ${roomName} in ${remainingMinutes} mins (ends at ${formattedEndTime})`
+            : `Upcoming meeting reminder: ${roomName} begins in ${remainingMinutes} mins (starts at ${formattedStartTime})`;
+
+        await this.dispatch({
+            featureKey,
+            templateEventKey: featureKey,
+            organizationId: property.organization_id,
+            propertyId,
+            entityId: bookingId,
             contextualUserIds: { requesterId: payload.user_id },
             paramValues,
             summaryMessage

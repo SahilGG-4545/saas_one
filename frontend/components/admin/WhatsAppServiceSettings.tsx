@@ -45,7 +45,9 @@ const DEFAULT_WHATSAPP_TEMPLATES: Record<string, WhatsAppTemplate> = {
     // Meeting Rooms
     meeting_room_booked: { campaign_name: 'meeting_room_booked_v3', params: ['user_name', 'room_name', 'property', 'date', 'start_time', 'end_time', 'booker', 'booker_phone'] },
     meeting_room_cancelled: { campaign_name: 'meeting_room_cancelled_v2', params: ['user_name', 'room_name', 'property', 'date', 'start_time', 'end_time', 'booker'] },
-    reminder_meeting_room: { campaign_name: 'reminder_meeting_room', params: ['room_name', 'date', 'start_time'] },
+    meeting_room_start_reminder: { campaign_name: 'meeting_room_start_reminder_v1', params: ['user_name', 'room_name', 'property', 'remaining_minutes', 'start_time', 'booker'] },
+    meeting_room_end_reminder: { campaign_name: 'meeting_room_end_reminder_v1', params: ['user_name', 'room_name', 'property', 'remaining_minutes', 'end_time', 'booker'] },
+    reminder_meeting_room: { campaign_name: 'meeting_room_start_reminder_v1', params: ['user_name', 'room_name', 'property', 'remaining_minutes', 'start_time', 'booker'] },
 
     // PPM & Maintenance
     reminder_ppm: { campaign_name: 'reminder_ppm', params: ['schedule_name', 'property', 'due_date'] },
@@ -115,7 +117,8 @@ const TEMPLATE_CATEGORIES = [
         events: [
             { key: 'meeting_room_booked', label: 'Meeting Room Reservation' },
             { key: 'meeting_room_cancelled', label: 'Meeting Room Cancellation' },
-            { key: 'reminder_meeting_room', label: 'Meeting Room Starting Reminder' },
+            { key: 'meeting_room_start_reminder', label: 'Meeting Room Starting Reminder' },
+            { key: 'meeting_room_end_reminder', label: 'Meeting Room Ending Soon Reminder' },
             { key: 'lead_created', label: 'New CRM Lead' },
             { key: 'lead_assigned', label: 'Lead Assigned to Agent' },
             { key: 'reminder_lead_followup', label: 'Lead Follow-up Reminder' }

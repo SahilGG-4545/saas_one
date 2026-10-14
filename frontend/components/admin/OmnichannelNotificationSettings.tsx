@@ -500,6 +500,22 @@ const MODULES_META: ModuleMeta[] = [
                 name: 'Meeting Room Cancelled',
                 description: 'Sent to selected staff/admins and the booking requester when a reservation is cancelled.',
                 hasContextual: { requester: true }
+            },
+            {
+                key: 'meeting_room_start_reminder',
+                name: 'Meeting Room Starting Soon Reminder',
+                description: 'Automated reminder dispatched in advance before the scheduled meeting begins.',
+                isReminder: true,
+                reminderLabel: 'Remind before meeting starts',
+                hasContextual: { requester: true }
+            },
+            {
+                key: 'meeting_room_end_reminder',
+                name: 'Meeting Room Ending Soon Reminder',
+                description: 'Automated reminder dispatched before the meeting room session concludes (e.g. 10 minutes before end time).',
+                isReminder: true,
+                reminderLabel: 'Remind before meeting ends',
+                hasContextual: { requester: true }
             }
         ]
     },
@@ -682,7 +698,9 @@ const DEFAULT_NOTIFICATION_MATRIX: NotificationMatrix = {
     },
     meeting_rooms: {
         meeting_room_booked: { channels: { email: true, whatsapp: true, push: true }, roles: ['property_admin'], user_ids: [], notify_requester: true },
-        meeting_room_cancelled: { channels: { email: true, whatsapp: true, push: true }, roles: ['property_admin'], user_ids: [], notify_requester: true }
+        meeting_room_cancelled: { channels: { email: true, whatsapp: true, push: true }, roles: ['property_admin'], user_ids: [], notify_requester: true },
+        meeting_room_start_reminder: { channels: { email: true, whatsapp: true, push: true }, roles: ['property_admin'], user_ids: [], notify_requester: true, reminder_minutes: 10 },
+        meeting_room_end_reminder: { channels: { email: true, whatsapp: true, push: true }, roles: ['property_admin'], user_ids: [], notify_requester: true, reminder_minutes: 10 }
     },
     ppm: {
         reminder_ppm: { channels: { email: true, whatsapp: true, push: true }, roles: ['property_admin', 'org_super_admin'], user_ids: [], reminder_minutes: 1440 }

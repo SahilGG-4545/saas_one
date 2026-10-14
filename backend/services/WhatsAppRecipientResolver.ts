@@ -48,6 +48,8 @@ export interface ResolveWhatsAppRecipientsResult {
 
 const ALIAS_MAP: Record<string, string> = {
     meeting_rooms: 'meeting_room_booked',
+    reminder_meeting_room: 'meeting_room_start_reminder',
+    meeting_room_reminder: 'meeting_room_start_reminder',
     tickets: 'ticket_created',
     ticket_sla_reminder: 'reminder_ticket_sla',
     material_requests: 'material_request_created',
@@ -154,6 +156,8 @@ export const DEFAULT_WHATSAPP_SERVICE_CONFIG: Record<string, FeatureWhatsAppConf
     meeting_rooms: { enabled: true, roles: ['property_admin'], user_ids: [], notify_requester: true },
     meeting_room_booked: { enabled: true, roles: ['property_admin'], user_ids: [], notify_requester: true },
     meeting_room_cancelled: { enabled: true, roles: ['property_admin'], user_ids: [], notify_requester: true },
+    meeting_room_start_reminder: { enabled: true, roles: ['property_admin'], user_ids: [], notify_requester: true, reminder_minutes: 10 },
+    meeting_room_end_reminder: { enabled: true, roles: ['property_admin'], user_ids: [], notify_requester: true, reminder_minutes: 10 },
     reminder_ppm: { enabled: true, roles: ['property_admin', 'org_super_admin'], user_ids: [], reminder_minutes: 1440 },
     lead_created: { enabled: true, roles: ['sales', 'org_super_admin'], user_ids: [] },
     lead_assigned: { enabled: true, roles: [], user_ids: [], notify_assignee: true },
