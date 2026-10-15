@@ -1,6 +1,6 @@
 import { campaignOptions } from '../lib/whatsapp/assistant/templates.mjs';
 import { providerIds } from '../lib/whatsapp/interpreter/delivery.mjs';
-import { sanitizeWhatsAppParam } from '../lib/whatsapp/sanitize.ts';
+import { sanitizeWhatsAppParam } from '../lib/whatsapp/sanitize';
 
 const AISENSY_API_URL = 'https://backend.aisensy.com/campaign/t1/api/v2';
 
