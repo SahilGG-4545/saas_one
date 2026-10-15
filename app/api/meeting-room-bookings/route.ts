@@ -4,6 +4,7 @@ import { supabaseAdmin } from '@/backend/lib/supabase/admin';
 import { NotificationService } from '@/backend/services/NotificationService';
 import { getBookingDateTimeIST } from '@/backend/utils/timezone';
 import { isCreditExemptBooker } from '@/backend/lib/meetingRooms/creditExempt';
+import { canViewAllBookings } from '@/backend/lib/meetingRooms/bookingVisibility';
 
 /**
  * GET /api/meeting-room-bookings
@@ -28,8 +29,13 @@ export async function GET(request: NextRequest) {
             .select('*, meeting_room:meeting_rooms(name, photo_url, location)')
             .order('created_at', { ascending: false });
 
+        // Only property admins, ops super admins and org super admins see every booking.
+        // Everyone else gets their own bookings, whatever tenantId they ask for.
+        const canViewAll = await canViewAllBookings(user.id, propertyId);
+
         if (propertyId) query = query.eq('property_id', propertyId);
-        if (tenantId) query = query.eq('user_id', tenantId);
+        if (!canViewAll) query = query.eq('user_id', user.id);
+        else if (tenantId) query = query.eq('user_id', tenantId);
         if (status) query = query.eq('status', status);
 
         const { data: rawBookings, error: fetchError } = await query;
@@ -61,7 +67,7 @@ export async function GET(request: NextRequest) {
             tenant: b.tenant || userMap[b.user_id] || { full_name: 'User', email: '' }
         }));
 
-        return NextResponse.json({ bookings });
+        return NextResponse.json({ bookings, canViewAll });
     } catch (error) {
         console.error('Bookings GET error:', error);
         return NextResponse.json({ error: 'Internal server error' }, { status: 500 });

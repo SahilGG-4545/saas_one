@@ -28,13 +28,14 @@ const TenantRoomBooking: React.FC<TenantRoomBookingProps> = ({ propertyId, user,
     };
     
     const roomsCacheKey = `rooms-avail-${propertyId}-${formatLocalDate(selectedDate)}-${selectedCapacity}`;
-    // HR/CRM (creditFree) see only their own bookings at this property, so cache them apart
-    const historyCacheKey = creditFree ? `tenant-bookings-${user?.id}-${propertyId}-mine` : `tenant-bookings-${user?.id}`;
+    const historyCacheKey = `tenant-bookings-${user?.id}-${propertyId}`;
     const creditCacheKey = `tenant-credits-${propertyId}-${user?.id}`;
     
     const [rooms, setRooms] = useState<any[]>(() => getCachedData(roomsCacheKey) || []);
     const [isSearching, setIsSearching] = useState(!getCachedData(roomsCacheKey));
     const [myBookings, setMyBookings] = useState<any[]>(() => getCachedData(historyCacheKey) || []);
+    // Set by the server: true only for property admins, ops super admins and org super admins
+    const [canViewAll, setCanViewAll] = useState(false);
     
     // Slots state
     const slotsCacheKey = `meeting-room-slots`;
@@ -87,18 +88,16 @@ const TenantRoomBooking: React.FC<TenantRoomBookingProps> = ({ propertyId, user,
     const [historyTab, setHistoryTab] = useState<'bookings' | 'requests'>('bookings');
 
     const fetchMyBookings = useCallback(async () => {
-        if (!propertyId || (creditFree && !user?.id)) return;
+        if (!propertyId) return;
         setIsLoadingHistory(true);
         try {
-            // Fetch ALL room bookings for the property so security and staff see everyone's bookings.
-            // HR/CRM users only see the bookings they made themselves.
-            const url = creditFree
-                ? `/api/meeting-room-bookings?propertyId=${propertyId}&tenantId=${user.id}`
-                : `/api/meeting-room-bookings?propertyId=${propertyId}`;
-            const res = await fetch(url);
+            // The server returns every booking at the property for admins, and only the
+            // caller's own bookings for everyone else.
+            const res = await fetch(`/api/meeting-room-bookings?propertyId=${propertyId}`);
             const data = await res.json();
             if (res.ok) {
                 const fetched = data.bookings || [];
+                setCanViewAll(!!data.canViewAll);
                 setMyBookings(fetched);
                 setCachedData(historyCacheKey, fetched);
             }
@@ -107,7 +106,7 @@ const TenantRoomBooking: React.FC<TenantRoomBookingProps> = ({ propertyId, user,
         } finally {
             setIsLoadingHistory(false);
         }
-    }, [propertyId, creditFree, user?.id, historyCacheKey]);
+    }, [propertyId, historyCacheKey]);
 
     const handleDeleteBooking = async (bookingId: string) => {
         if (!confirm(creditFree ? 'Cancel this booking?' : 'Cancel this booking? Your credits will be refunded.')) return;
@@ -137,7 +136,8 @@ const TenantRoomBooking: React.FC<TenantRoomBookingProps> = ({ propertyId, user,
     };
 
     useEffect(() => {
-        if (showHistory || activeViewTab === 'bookings') fetchMyBookings();
+        // Load on open too, so the Bookings count and the right view are ready before the tab is clicked
+        fetchMyBookings();
     }, [showHistory, activeViewTab, fetchMyBookings]);
 
     const fetchCredit = useCallback(async () => {
@@ -416,7 +416,7 @@ const TenantRoomBooking: React.FC<TenantRoomBookingProps> = ({ propertyId, user,
                                 className="flex items-center gap-2 px-3.5 py-2 bg-white border border-slate-200 hover:border-slate-300 text-slate-700 rounded-xl text-xs font-bold transition-all shadow-sm"
                             >
                                 <ClipboardList className="w-4 h-4 text-primary" />
-                                <span>My Bookings ({myBookings.length})</span>
+                                <span>{canViewAll ? 'All Bookings' : 'My Bookings'} ({myBookings.length})</span>
                             </button>
                         ) : (
                             <button
@@ -571,8 +571,8 @@ const TenantRoomBooking: React.FC<TenantRoomBookingProps> = ({ propertyId, user,
                             )}
                         </div>
                     </>
-                ) : creditFree ? (
-                    /* HR/CRM: only the bookings this user made */
+                ) : !canViewAll ? (
+                    /* Everyone except admins: only the bookings this user made */
                     <div className="space-y-3">
                         {isLoadingHistory && myBookings.length === 0 ? (
                             <div className="flex flex-col items-center justify-center py-12">
