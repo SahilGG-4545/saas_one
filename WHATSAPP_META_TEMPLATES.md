@@ -1026,12 +1026,12 @@ We look forward to hosting your meeting. Please contact the front desk if you re
   - `{{7}}`: `booker` (e.g. `Bhavin`)
   - `{{8}}`: `booker_phone` (e.g. `+91 99676 67347`)
 
-- **Audience:** Dispatched automatically to the **Requester** (client/booker) and any **Custom Added Users / Attendees**.
+- **Audience:** Dispatched automatically to the **Requester / Booker** (client).
 - **Note:** Contains the polite guest greeting: *"We look forward to hosting your meeting. Please contact the front desk if you require any assistance."*
 
 ---
 
-### Template 17 (Staff / Ops): `meeting_room_booked_v3`
+### Template 17 (Staff / Ops & Added Users): `meeting_room_booked_v3`
 - **Template Name:** `meeting_room_booked_v3`
 - **Category:** `UTILITY`
 - **Language:** `English (en)`
@@ -1052,7 +1052,7 @@ Please ensure facilities and refreshments are arranged if requested.
 ```
 - **Footer:** `AutoPilot Hospitality`
 - **Button Type:** `Quick Reply` &rarr; `View Bookings`
-- **Audience:** Dispatched automatically to the **Operations Team / Staff / Property Admins** (`roles`).
+- **Audience:** Dispatched automatically to the **Operations Team / Staff / Property Admins (`roles`)** AND **Specific Individual Users (`+ Add user...`)** to prepare facilities and refreshments.
 - **Note:** Contains the operational directive: *"Please ensure facilities and refreshments are arranged if requested."* to instruct on-site staff to prep the room.
 
 ---

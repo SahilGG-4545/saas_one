@@ -586,24 +586,13 @@ export const WhatsAppEventProcessor = {
         const effectiveMediaUrl = isMediaTemplate ? (options.mediaUrl || undefined) : undefined;
         const effectiveMediaType = isMediaTemplate ? options.mediaType : undefined;
 
-        // Identify requester & custom add users vs role-based staff for meeting room bookings
+        // For meeting room bookings:
+        // - Booker / Requester receives v4 template (hospitality notice without staff refreshment directive)
+        // - Staff roles AND specific added users (+ Add user...) receive v3 template (staff operational directive: "Please ensure facilities and refreshments are arranged")
         const isMeetingRoomBooked = templateEventKey === 'meeting_room_booked';
-        const v4UserIds = new Set<string>();
-        if (isMeetingRoomBooked) {
-            if (contextualUserIds?.requesterId) {
-                v4UserIds.add(String(contextualUserIds.requesterId).trim());
-            }
-            if (config?.user_ids && Array.isArray(config.user_ids)) {
-                config.user_ids.forEach((id: string) => {
-                    if (id && typeof id === 'string') v4UserIds.add(id.trim());
-                });
-            }
-            if (contextualUserIds?.extraUserIds && Array.isArray(contextualUserIds.extraUserIds)) {
-                contextualUserIds.extraUserIds.forEach((id: string) => {
-                    if (id && typeof id === 'string') v4UserIds.add(id.trim());
-                });
-            }
-        }
+        const requesterId = (isMeetingRoomBooked && contextualUserIds?.requesterId)
+            ? String(contextualUserIds.requesterId).trim()
+            : null;
 
         // Dispatch per recipient to personalize `user_name` / `approver_name` with recipient's actual name
         for (const recipient of recipients) {
@@ -611,12 +600,12 @@ export const WhatsAppEventProcessor = {
             let currentParamKeys = paramKeys;
 
             if (isMeetingRoomBooked) {
-                const isRequesterOrCustomUser = v4UserIds.has(recipient.id);
-                if (isRequesterOrCustomUser) {
-                    // Requester & custom added users receive v4 template (hospitality notice without staff refreshment directive)
+                const isRequester = Boolean(requesterId && recipient.id === requesterId);
+                if (isRequester) {
+                    // Only the actual booker/requester receives v4
                     recipientTemplateName = templatesMap['meeting_room_booked_v4']?.campaign_name || 'meeting_room_booked_v4';
                 } else {
-                    // Operations/staff/admins receive v3 template (staff operational directive: "Please ensure facilities and refreshments are arranged")
+                    // Staff, property admins, and specific added users (+ Add user...) receive v3
                     recipientTemplateName = templatesMap['meeting_room_booked_v3']?.campaign_name || templatesMap['meeting_room_booked']?.campaign_name || 'meeting_room_booked_v3';
                 }
                 currentParamKeys = CANONICAL_CAMPAIGN_PARAMS[recipientTemplateName] || paramKeys;
