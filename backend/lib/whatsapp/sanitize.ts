@@ -10,7 +10,8 @@
  */
 
 export function sanitizeWhatsAppParam(param: any, key?: string): string {
-    if (param === null || param === undefined) return 'N/A';
+    const isPhoneKey = Boolean(key && (key.includes('phone') || key.includes('mobile')));
+    if (param === null || param === undefined) return isPhoneKey ? 'Not Available' : 'N/A';
     let str = String(param);
 
     // If key indicates priority, format nicely to standard title case
@@ -34,9 +35,12 @@ export function sanitizeWhatsAppParam(param: any, key?: string): string {
     // Trim leading and trailing whitespace
     str = str.trim();
 
-    // If empty after trimming, fallback to 'N/A'
+    // If empty after trimming or raw 'n/a' for phone field, provide safe fallback
     if (str.length === 0) {
-        return 'N/A';
+        return isPhoneKey ? 'Not Available' : 'N/A';
+    }
+    if (isPhoneKey && str.toLowerCase() === 'n/a') {
+        return 'Not Available';
     }
 
     // Truncate to safe Meta parameter length (max 1000 chars)

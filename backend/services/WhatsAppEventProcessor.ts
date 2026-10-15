@@ -308,11 +308,31 @@ export const WhatsAppEventProcessor = {
                 .from('users')
                 .select('id, phone, full_name')
                 .in('id', missingIds);
-            (contextualUsers || [])
-                .filter((u: any) => u?.phone && String(u.phone).trim())
-                .forEach((u: any) => {
-                    userMap.set(u.id, { id: u.id, phone: String(u.phone).trim(), name: u.full_name || null });
+
+            const needEmpPhone = (contextualUsers || []).filter((u: any) => !u?.phone || !String(u.phone).trim() || String(u.phone).trim().toLowerCase() === 'n/a');
+            const empPhoneMap = new Map<string, string>();
+            if (needEmpPhone.length > 0) {
+                const { data: emps } = await supabaseAdmin
+                    .from('employee_profiles')
+                    .select('user_id, phone')
+                    .in('user_id', needEmpPhone.map((u: any) => u.id))
+                    .not('phone', 'is', null);
+                (emps || []).forEach((e: any) => {
+                    if (e.phone && String(e.phone).trim() && String(e.phone).trim().toLowerCase() !== 'n/a') {
+                        empPhoneMap.set(e.user_id, String(e.phone).trim());
+                        supabaseAdmin.from('users').update({ phone: String(e.phone).trim() }).eq('id', e.user_id).then();
+                    }
                 });
+            }
+
+            (contextualUsers || []).forEach((u: any) => {
+                const phone = (u?.phone && String(u.phone).trim() && String(u.phone).trim().toLowerCase() !== 'n/a')
+                    ? String(u.phone).trim()
+                    : empPhoneMap.get(u.id);
+                if (phone) {
+                    userMap.set(u.id, { id: u.id, phone, name: u.full_name || null });
+                }
+            });
         }
 
         // Strictly deduplicate by cleaned 10+ digit phone number so 1 phone number never receives multiple copies of the same alert
@@ -615,13 +635,8 @@ export const WhatsAppEventProcessor = {
         const orgId = ticket?.property?.organization_id || payload.organization_id;
         const propId = ticket?.property_id || payload.property_id;
 
-        const raiser = ticket?.raised_by_user?.full_name
-            ? { name: ticket.raised_by_user.full_name, phone: ticket.raised_by_user.phone }
-            : await this.getUserDetails(payload.raised_by);
-
-        const assignee = ticket?.assigned_to_user?.full_name
-            ? { name: ticket.assigned_to_user.full_name, phone: ticket.assigned_to_user.phone }
-            : await this.getUserDetails(payload.assigned_to);
+        const raiser = await this.getUserDetails(ticket?.raised_by || payload.raised_by, ticket?.raised_by_user);
+        const assignee = await this.getUserDetails(payload.assigned_to || ticket?.assigned_to, ticket?.assigned_to_user);
 
         const assigneeId = ticket?.assigned_to || payload.assigned_to;
         const photoBeforeUrl = ticket?.photo_before_url || payload.photo_before_url || null;
@@ -673,13 +688,8 @@ export const WhatsAppEventProcessor = {
         const orgId = ticket?.property?.organization_id || payload.organization_id;
         const propId = ticket?.property_id || payload.property_id;
 
-        const raiser = ticket?.raised_by_user?.full_name
-            ? { name: ticket.raised_by_user.full_name, phone: ticket.raised_by_user.phone }
-            : await this.getUserDetails(payload.raised_by);
-
-        const assignee = ticket?.assigned_to_user?.full_name
-            ? { name: ticket.assigned_to_user.full_name, phone: ticket.assigned_to_user.phone }
-            : await this.getUserDetails(assignedToId);
+        const raiser = await this.getUserDetails(ticket?.raised_by || payload.raised_by, ticket?.raised_by_user);
+        const assignee = await this.getUserDetails(assignedToId, ticket?.assigned_to_user);
 
         await this.dispatch({
             featureKey: 'ticket_assigned',
@@ -717,13 +727,8 @@ export const WhatsAppEventProcessor = {
         const orgId = ticket?.property?.organization_id || payload.organization_id;
         const propId = ticket?.property_id || payload.property_id;
 
-        const raiser = ticket?.raised_by_user?.full_name
-            ? { name: ticket.raised_by_user.full_name, phone: ticket.raised_by_user.phone }
-            : await this.getUserDetails(payload.raised_by);
-
-        const completer = ticket?.assigned_to_user?.full_name
-            ? { name: ticket.assigned_to_user.full_name, phone: ticket.assigned_to_user.phone }
-            : await this.getUserDetails(payload.assigned_to || payload.updated_by || payload.action_by);
+        const raiser = await this.getUserDetails(ticket?.raised_by || payload.raised_by, ticket?.raised_by_user);
+        const completer = await this.getUserDetails(payload.assigned_to || payload.updated_by || payload.action_by || ticket?.assigned_to, ticket?.assigned_to_user);
 
         const photoAfterUrl = ticket?.photo_after_url || payload.photo_after_url || null;
 
@@ -1691,17 +1696,55 @@ export const WhatsAppEventProcessor = {
         return property?.name || 'N/A';
     },
 
-    async getUserDetails(userId?: string | string[] | null): Promise<{ name: string; phone: string | null }> {
+    async getUserDetails(
+        userId?: string | string[] | null,
+        prefetched?: { full_name?: string | null; phone?: string | null } | null
+    ): Promise<{ name: string; phone: string | null }> {
         const cleanId = Array.isArray(userId) ? userId[0] : userId;
-        if (!cleanId || typeof cleanId !== 'string' || !cleanId.trim()) return { name: 'Staff', phone: null };
-        const { data: user } = await supabaseAdmin
-            .from('users')
-            .select('full_name, phone')
-            .eq('id', cleanId.trim())
-            .maybeSingle();
+        let name = prefetched?.full_name || null;
+        let phone = prefetched?.phone ? String(prefetched.phone).trim() : null;
+
+        // If already has a valid phone (not empty, not 'n/a')
+        if (phone && phone.toLowerCase() !== 'n/a') {
+            return { name: name || 'Staff', phone };
+        }
+
+        if (!cleanId || typeof cleanId !== 'string' || !cleanId.trim()) {
+            return { name: name || 'Staff', phone: null };
+        }
+
+        const trimmedId = cleanId.trim();
+
+        // If name or phone is missing, fetch from users table
+        if (!name || !phone) {
+            const { data: user } = await supabaseAdmin
+                .from('users')
+                .select('full_name, phone')
+                .eq('id', trimmedId)
+                .maybeSingle();
+            if (user) {
+                if (!name && user.full_name) name = user.full_name;
+                if (!phone && user.phone) phone = String(user.phone).trim();
+            }
+        }
+
+        // If phone is still missing or 'n/a', fallback to employee_profiles table
+        if (!phone || phone.toLowerCase() === 'n/a') {
+            const { data: emp } = await supabaseAdmin
+                .from('employee_profiles')
+                .select('phone')
+                .eq('user_id', trimmedId)
+                .maybeSingle();
+            if (emp?.phone && String(emp.phone).trim()) {
+                phone = String(emp.phone).trim();
+                // Opportunistically backfill users table so subsequent lookups are instant
+                supabaseAdmin.from('users').update({ phone }).eq('id', trimmedId).then();
+            }
+        }
+
         return {
-            name: user?.full_name || 'Staff',
-            phone: user?.phone || null
+            name: name || 'Staff',
+            phone: (phone && phone.toLowerCase() !== 'n/a') ? phone : null
         };
     },
 

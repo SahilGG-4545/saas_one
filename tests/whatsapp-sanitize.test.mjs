@@ -59,3 +59,12 @@ test('sanitizeWhatsAppParams processes array of parameters', () => {
         'Naveenachari B S'
     ]);
 });
+
+test('sanitizeWhatsAppParam handles missing phone numbers gracefully with Not Available', () => {
+    assert.equal(sanitizeWhatsAppParam(null, 'raised_by_phone'), 'Not Available');
+    assert.equal(sanitizeWhatsAppParam(undefined, 'assigned_to_phone'), 'Not Available');
+    assert.equal(sanitizeWhatsAppParam('', 'requester_phone'), 'Not Available');
+    assert.equal(sanitizeWhatsAppParam('N/A', 'raised_by_phone'), 'Not Available');
+    assert.equal(sanitizeWhatsAppParam('n/a', 'assigned_to_phone'), 'Not Available');
+    assert.equal(sanitizeWhatsAppParam('  9876543210  ', 'raised_by_phone'), '9876543210');
+});
