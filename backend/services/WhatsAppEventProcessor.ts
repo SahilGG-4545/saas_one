@@ -2,6 +2,7 @@ import { supabaseAdmin } from '@/backend/lib/supabase/admin';
 import { WhatsAppRecipientResolver, ResolvedWhatsAppUser } from '@/backend/services/WhatsAppRecipientResolver';
 import { WhatsAppQueueService } from '@/backend/services/WhatsAppQueueService';
 import { PettyCashNotificationService } from '@/backend/services/PettyCashNotificationService';
+import { sanitizeWhatsAppParam, sanitizeWhatsAppParams } from '@/backend/lib/whatsapp/sanitize';
 
 interface DispatchOptions {
     featureKey: string;
@@ -355,9 +356,9 @@ export const WhatsAppEventProcessor = {
             crm_lead_assigned: { campaign_name: 'crm_lead_assigned_v1', params: ['user_name', 'company_name', 'contact_person', 'phone', 'property_interest', 'next_followup'] },
             ticket_created: { campaign_name: 'ticket_created_v3', params: ['user_name', 'ticket_number', 'title', 'property', 'priority', 'raised_by', 'raised_by_phone', 'assigned_to', 'assigned_to_phone', 'ticket_id'] },
             ticket_created_media: { campaign_name: 'ticket_created_v3_media', params: ['user_name', 'ticket_number', 'title', 'property', 'priority', 'raised_by', 'raised_by_phone', 'assigned_to', 'assigned_to_phone', 'ticket_id'] },
-            ticket_assigned: { campaign_name: 'ticket_assigned_v1', params: ['user_name', 'ticket_number', 'title', 'property', 'priority', 'raised_by', 'raised_by_phone', 'ticket_id'] },
-            ticket_completed: { campaign_name: 'ticket_completed_v1', params: ['user_name', 'ticket_number', 'title', 'property', 'resolved_by', 'ticket_id'] },
-            ticket_completed_media: { campaign_name: 'ticket_completed_v1_media', params: ['user_name', 'ticket_number', 'title', 'property', 'resolved_by', 'ticket_id'] },
+            ticket_assigned: { campaign_name: 'ticket_assigned_v1', params: ['user_name', 'ticket_number', 'title', 'property', 'priority', 'raised_by', 'raised_by_phone'] },
+            ticket_completed: { campaign_name: 'ticket_completed_v1', params: ['user_name', 'ticket_number', 'title', 'property', 'resolved_by'] },
+            ticket_completed_media: { campaign_name: 'ticket_completed_v1_media', params: ['user_name', 'ticket_number', 'title', 'property', 'resolved_by'] },
             daily_property_report: { campaign_name: 'ai_property_report_v1', params: ['user_name', 'org_name', 'date', 'critical_count', 'open_count', 'resolved_count', 'electricity_kwh', 'dg_liters', 'ppm_completed', 'ppm_missed', 'sop_compliance', 'property_summary', 'ai_insights'] },
             ai_property_report: { campaign_name: 'ai_property_report_v1', params: ['user_name', 'org_name', 'date', 'critical_count', 'open_count', 'resolved_count', 'electricity_kwh', 'dg_liters', 'ppm_completed', 'ppm_missed', 'sop_compliance', 'property_summary', 'ai_insights'] },
             material_request_created: { campaign_name: 'material_request_created_v4', params: ['user_name', 'ticket_number', 'property', 'requested_by', 'requester_phone', 'items_summary', 'ticket_id'] },
@@ -447,13 +448,13 @@ export const WhatsAppEventProcessor = {
             'ticket_created': ['user_name', 'ticket_number', 'title', 'property', 'priority', 'raised_by', 'raised_by_phone', 'assigned_to', 'assigned_to_phone', 'ticket_id'],
             'ticket_created_media': ['user_name', 'ticket_number', 'title', 'property', 'priority', 'raised_by', 'raised_by_phone', 'assigned_to', 'assigned_to_phone', 'ticket_id'],
 
-            'ticket_assigned_v1': ['user_name', 'ticket_number', 'title', 'property', 'priority', 'raised_by', 'raised_by_phone', 'ticket_id'],
-            'ticket_assigned': ['user_name', 'ticket_number', 'title', 'property', 'priority', 'raised_by', 'raised_by_phone', 'ticket_id'],
+            'ticket_assigned_v1': ['user_name', 'ticket_number', 'title', 'property', 'priority', 'raised_by', 'raised_by_phone'],
+            'ticket_assigned': ['user_name', 'ticket_number', 'title', 'property', 'priority', 'raised_by', 'raised_by_phone'],
 
-            'ticket_completed_v1': ['user_name', 'ticket_number', 'title', 'property', 'resolved_by', 'ticket_id'],
-            'ticket_completed_v1_media': ['user_name', 'ticket_number', 'title', 'property', 'resolved_by', 'ticket_id'],
-            'ticket_completed': ['user_name', 'ticket_number', 'title', 'property', 'resolved_by', 'ticket_id'],
-            'ticket_completed_media': ['user_name', 'ticket_number', 'title', 'property', 'resolved_by', 'ticket_id'],
+            'ticket_completed_v1': ['user_name', 'ticket_number', 'title', 'property', 'resolved_by'],
+            'ticket_completed_v1_media': ['user_name', 'ticket_number', 'title', 'property', 'resolved_by'],
+            'ticket_completed': ['user_name', 'ticket_number', 'title', 'property', 'resolved_by'],
+            'ticket_completed_media': ['user_name', 'ticket_number', 'title', 'property', 'resolved_by'],
 
             'ai_property_report_v1': ['user_name', 'org_name', 'date', 'critical_count', 'open_count', 'resolved_count', 'electricity_kwh', 'dg_liters', 'ppm_completed', 'ppm_missed', 'sop_compliance', 'property_summary', 'ai_insights'],
             'daily_property_report': ['user_name', 'org_name', 'date', 'critical_count', 'open_count', 'resolved_count', 'electricity_kwh', 'dg_liters', 'ppm_completed', 'ppm_missed', 'sop_compliance', 'property_summary', 'ai_insights'],
@@ -574,7 +575,7 @@ export const WhatsAppEventProcessor = {
             const orderedParams: string[] = paramKeys.map((key: string) => {
                 let value = recipientParamValues[key];
                 // Resolve aliases if direct key is empty
-                if (value === undefined || value === null || value === '') {
+                if (value === undefined || value === null || String(value).trim() === '') {
                     if (key === 'approver_name') value = recipientParamValues['user_name'] || recipientParamValues['action_by'] || 'Approver';
                     else if (key === 'user_name') value = recipientParamValues['approver_name'] || recipientParamValues['requested_by'] || recipientParamValues['uploaded_by'] || 'Procurement Team';
                     else if (key === 'requested_by') value = recipientParamValues['uploaded_by'] || recipientParamValues['user_name'] || 'Site Admin';
@@ -583,7 +584,7 @@ export const WhatsAppEventProcessor = {
                     else if (key === 'total_amount') value = recipientParamValues['total_cost'] || recipientParamValues['total_po_amount'] || recipientParamValues['amount'] || '0';
                     else if (key === 'vendor_name') value = recipientParamValues['vendor'] || recipientParamValues['selected_vendor'] || 'Selected Vendor';
                 }
-                return value !== undefined && value !== null && value !== '' ? String(value) : 'N/A';
+                return sanitizeWhatsAppParam(value, key);
             });
 
             await WhatsAppQueueService.enqueue({

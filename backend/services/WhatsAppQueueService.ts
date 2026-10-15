@@ -1,6 +1,7 @@
 import { supabaseAdmin } from '@/backend/lib/supabase/admin';
 import { AiSensyService } from '@/backend/services/AiSensyService';
 import { WhatsAppService } from '@/backend/services/WhatsAppService';
+import { sanitizeWhatsAppParam } from '@/backend/lib/whatsapp/sanitize';
 
 export interface WhatsAppQueuePayload {
     ticketId?: string;
@@ -141,7 +142,7 @@ export class WhatsAppQueueService {
                 status: 'pending',
                 organization_id: payload.organizationId ?? null,
                 template_name: payload.templateName ?? null,
-                template_params: payload.templateParams ?? null,
+                template_params: Array.isArray(payload.templateParams) ? payload.templateParams.map(p => sanitizeWhatsAppParam(p)) : null,
                 entity_id: payload.entityId ?? (payload.ticketId ? String(payload.ticketId) : null),
             }));
 
@@ -203,12 +204,15 @@ export class WhatsAppQueueService {
                                     if (campaignName === 'material_delivered_v1' && templateParams.length > 7) templateParams = templateParams.slice(0, 7);
                                     if (campaignName === 'procurement_vendor_tag_v1' && templateParams.length > 8) templateParams = templateParams.slice(0, 8);
                                     if (campaignName === 'procurement_vendor_aligned_v1' && templateParams.length > 7) templateParams = templateParams.slice(0, 7);
-                                    if (campaignName === 'ticket_assigned_v1' && templateParams.length > 8) templateParams = templateParams.slice(0, 8);
-                                    if (campaignName === 'ticket_completed_v1' && templateParams.length > 6) templateParams = templateParams.slice(0, 6);
-                                    if (campaignName === 'ticket_completed_v1_media' && templateParams.length > 6) templateParams = templateParams.slice(0, 6);
+                                    if (campaignName === 'ticket_assigned_v1' && templateParams.length > 7) templateParams = templateParams.slice(0, 7);
+                                    if (campaignName === 'ticket_completed_v1' && templateParams.length > 5) templateParams = templateParams.slice(0, 5);
+                                    if (campaignName === 'ticket_completed_v1_media' && templateParams.length > 5) templateParams = templateParams.slice(0, 5);
                                     if (campaignName === 'ticket_created_v3' && templateParams.length > 10) templateParams = templateParams.slice(0, 10);
                                     if (campaignName === 'ticket_created_v3_media' && templateParams.length > 10) templateParams = templateParams.slice(0, 10);
+                                    if (campaignName === 'reminder_ticket_sla_v1' && templateParams.length > 7) templateParams = templateParams.slice(0, 7);
                                     if ((campaignName === 'checklist_slot_reminder_v2' || campaignName === 'checklist_slot_reminder_v1') && templateParams.length > 5) templateParams = templateParams.slice(0, 5);
+
+                                    templateParams = templateParams.map(p => sanitizeWhatsAppParam(p));
 
                                     const res = await AiSensyService.sendTemplate({
                                         phone: r.phone,

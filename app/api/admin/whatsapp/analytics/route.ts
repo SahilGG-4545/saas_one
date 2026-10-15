@@ -61,30 +61,30 @@ const APPROVED_META_TEMPLATES_REGISTRY: MetaTemplateSpec[] = [
     {
         campaignName: 'ticket_assigned_v1',
         eventKey: 'ticket_assigned',
-        paramCount: 8,
+        paramCount: 7,
         description: 'Ticket assignment alert to designated technician / MST.',
-        suggestedFix: 'Requires approved Meta campaign "ticket_assigned_v1" (8 parameters: 7 body parameters + ticket_id dynamic CTA button).'
+        suggestedFix: 'Requires approved Meta campaign "ticket_assigned_v1" (7 parameters: user_name, ticket_number, title, property, priority, raised_by, raised_by_phone).'
     },
     {
         campaignName: 'ticket_completed_v1',
         eventKey: 'ticket_completed',
-        paramCount: 6,
+        paramCount: 5,
         description: 'Ticket resolution notification (text only).',
-        suggestedFix: 'Requires approved Meta campaign "ticket_completed_v1" (6 parameters: 5 body parameters + ticket_id dynamic CTA button).'
+        suggestedFix: 'Requires approved Meta campaign "ticket_completed_v1" (5 parameters: user_name, ticket_number, title, property, resolved_by).'
     },
     {
         campaignName: 'ticket_completed_v1_media',
         eventKey: 'ticket_completed_media',
-        paramCount: 6,
+        paramCount: 5,
         description: 'Ticket resolution with after-work completion photo.',
-        suggestedFix: 'Requires approved Meta campaign "ticket_completed_v1_media" with 6 parameters (5 body parameters + ticket_id dynamic CTA button).'
+        suggestedFix: 'Requires approved Meta campaign "ticket_completed_v1_media" with 5 parameters (user_name, ticket_number, title, property, resolved_by).'
     },
     {
         campaignName: 'reminder_ticket_sla_v1',
         eventKey: 'reminder_ticket_sla',
-        paramCount: 6,
+        paramCount: 7,
         description: 'Urgent reminder before ticket SLA breach.',
-        suggestedFix: 'Requires approved Meta campaign "reminder_ticket_sla_v1" (6 parameters: user_name, ticket_number, title, property, priority, sla_time).'
+        suggestedFix: 'Requires approved Meta campaign "reminder_ticket_sla_v1" (7 parameters: user_name, ticket_number, title, property, sla_deadline, priority, assignee_name).'
     },
 
     // 2. SOP Checklists & Compliance
