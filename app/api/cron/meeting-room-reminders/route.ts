@@ -77,7 +77,7 @@ export async function GET(request: NextRequest) {
     try {
         const { data: orgSettings, error: orgsErr } = await supabaseAdmin
             .from('organization_settings')
-            .select('organization_id, notification_matrix, whatsapp_templates, timezone');
+            .select('organization_id, notification_matrix, whatsapp_templates');
 
         if (orgsErr) {
             console.error('[cron/meeting-room-reminders] Error fetching organization_settings:', orgsErr);
@@ -88,7 +88,7 @@ export async function GET(request: NextRequest) {
             organizationId: row.organization_id,
             matrix: row.notification_matrix || {},
             templates: row.whatsapp_templates || {},
-            timezone: row.timezone || DEFAULT_TIMEZONE,
+            timezone: DEFAULT_TIMEZONE,
         }));
 
         summary.organizationsChecked = orgContexts.length;
@@ -116,14 +116,20 @@ export async function GET(request: NextRequest) {
 
                 const { dateStr, currentMinutes } = getZonedDateAndMinutes(ctx.timezone);
 
-                // Fetch property names map for this org to avoid PostgREST relationship errors
+                // Fetch property names map for this org
                 const { data: properties } = await supabaseAdmin
                     .from('properties')
                     .select('id, name')
                     .eq('organization_id', ctx.organizationId);
-                const propertyMap = new Map((properties || []).map((p: any) => [p.id, p.name]));
 
-                // Fetch all confirmed bookings for today in this organization
+                const propertyMap = new Map((properties || []).map((p: any) => [p.id, p.name]));
+                const propertyIds = Array.from(propertyMap.keys());
+
+                if (propertyIds.length === 0) {
+                    continue;
+                }
+
+                // Fetch all confirmed bookings for today in this organization (by org id or belonging to org's properties)
                 const { data: bookings, error: bookingsErr } = await supabaseAdmin
                     .from('meeting_room_bookings')
                     .select(`
@@ -133,7 +139,7 @@ export async function GET(request: NextRequest) {
                         room:meeting_rooms(name),
                         booker:users!user_id(id, full_name, email, phone)
                     `)
-                    .eq('organization_id', ctx.organizationId)
+                    .in('property_id', propertyIds)
                     .eq('booking_date', dateStr)
                     .eq('status', 'confirmed');
 
@@ -161,23 +167,33 @@ export async function GET(request: NextRequest) {
                     ) {
                         const targetTriggerMin = startMin - startMinutesLead;
                         // Trigger if within the window: current time >= trigger time and before start time
-                        // With up to 5 mins leeway in case cron fires on a 5-minute interval
                         if (currentMinutes >= targetTriggerMin && currentMinutes < startMin) {
                             const remaining = Math.max(1, startMin - currentMinutes);
                             const propertyName = propertyMap.get(b.property_id) || 'Your Property';
-                            await dispatchMeetingReminder({
-                                ctx,
-                                booking: b,
-                                reminderType: 'start',
-                                rule: startRule,
-                                remainingMinutes: remaining,
-                                propertyName
-                            });
+
+                            // Check if booking was created very recently (< 2 minutes ago)
+                            // If user booked 1 minute ago, they already received immediate booking confirmation
+                            const createdAtMs = b.created_at ? new Date(b.created_at).getTime() : 0;
+                            const minsSinceCreation = createdAtMs > 0 ? (Date.now() - createdAtMs) / (60 * 1000) : 999;
+                            const shouldSuppressDuplicateStartAlert = minsSinceCreation < 2 && remaining <= 2;
+
+                            if (!shouldSuppressDuplicateStartAlert) {
+                                await dispatchMeetingReminder({
+                                    ctx,
+                                    booking: b,
+                                    reminderType: 'start',
+                                    rule: startRule,
+                                    remainingMinutes: remaining,
+                                    propertyName
+                                });
+                                summary.startRemindersSent++;
+                            }
+
+                            // Mark as sent so it transitions smoothly into the active meeting without re-evaluating
                             await supabaseAdmin
                                 .from('meeting_room_bookings')
                                 .update({ start_reminder_sent_at: new Date().toISOString() })
                                 .eq('id', b.id);
-                            summary.startRemindersSent++;
                         }
                     }
 
@@ -244,7 +260,22 @@ async function dispatchMeetingReminder({
     const booker = (booking.booker as any) || {};
     const bookerName = booker.full_name || 'Valued Member';
     const bookerEmail = booker.email || '';
-    const bookerPhone = booker.phone || '';
+    let bookerPhone = booker.phone ? String(booker.phone).trim() : '';
+
+    if (!bookerPhone && booking.user_id) {
+        try {
+            const { data: emp } = await supabaseAdmin
+                .from('employee_profiles')
+                .select('phone')
+                .eq('user_id', booking.user_id)
+                .maybeSingle();
+            if (emp?.phone && String(emp.phone).trim()) {
+                bookerPhone = String(emp.phone).trim();
+            }
+        } catch {
+            // ignore
+        }
+    }
 
     const formatTime12h = (timeStr: string) => {
         if (!timeStr) return '';
@@ -271,14 +302,29 @@ async function dispatchMeetingReminder({
                 contextualUserIds: [booking.user_id]
             });
 
-            if (enabled && users.length > 0) {
+            // Ensure booker is included if notify_requester is active
+            const targetUsers = [...(users || [])];
+            if (rule.notify_requester !== false && bookerPhone) {
+                const cleanPhone = bookerPhone.replace(/[^0-9]/g, '');
+                const hasBooker = targetUsers.some(u => {
+                    const uClean = String(u.phone).replace(/[^0-9]/g, '');
+                    return u.id === booking.user_id || uClean === cleanPhone;
+                });
+                if (!hasBooker) {
+                    targetUsers.push({
+                        id: booking.user_id,
+                        phone: bookerPhone,
+                        name: bookerName
+                    });
+                }
+            }
+
+            if (enabled && targetUsers.length > 0) {
                 const defaultCampaign = isEnd ? 'meeting_room_end_reminder_v1' : 'meeting_room_start_reminder_v1';
-                const template = ctx.templates[featureKey] || {
-                    campaign_name: defaultCampaign,
-                    params: isEnd
-                        ? ['user_name', 'room_name', 'property', 'remaining_minutes', 'end_time']
-                        : ['user_name', 'room_name', 'property', 'remaining_minutes', 'start_time']
-                };
+                const campaignName = ctx.templates[featureKey]?.campaign_name || defaultCampaign;
+                const paramKeys = isEnd
+                    ? ['user_name', 'room_name', 'property', 'remaining_minutes', 'end_time']
+                    : ['user_name', 'room_name', 'property', 'remaining_minutes', 'start_time'];
 
                 const paramMap: Record<string, string> = {
                     room_name: roomName,
@@ -290,9 +336,9 @@ async function dispatchMeetingReminder({
                     booker_phone: bookerPhone || 'N/A'
                 };
 
-                for (const u of users) {
+                for (const u of targetUsers) {
                     const recipientName = u.name || bookerName;
-                    const finalParams = (template.params || []).map((p: string) => {
+                    const finalParams = paramKeys.map((p: string) => {
                         if (p === 'user_name') return recipientName;
                         return paramMap[p] ?? '';
                     });
@@ -301,12 +347,12 @@ async function dispatchMeetingReminder({
                         organizationId: ctx.organizationId,
                         propertyId: booking.property_id,
                         userIds: u.id ? [u.id] : [],
-                        customPhones: u.phone ? [u.phone] : [],
+                        customPhones: !u.id && u.phone ? [u.phone] : [],
                         message: isEnd
                             ? `Meeting ending soon: ${roomName} in ${remainingMinutes} mins`
                             : `Upcoming meeting reminder: ${roomName} starts in ${remainingMinutes} mins`,
                         eventType: isEnd ? 'MEETING_ROOM_END_REMINDER' : 'MEETING_ROOM_START_REMINDER',
-                        templateName: template.campaign_name,
+                        templateName: campaignName,
                         templateParams: finalParams,
                         entityId: booking.id
                     });

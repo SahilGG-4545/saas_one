@@ -367,36 +367,68 @@ export const WhatsAppRecipientResolver = {
         });
 
         if (missingPhoneIds.length > 0) {
-            await Promise.all(
-                missingPhoneIds.map(async (uid) => {
-                    try {
-                        const { data: authUser, error: authLookupError } = await supabaseAdmin.auth.admin.getUserById(uid);
-                        if (authLookupError && options.strictReads && authLookupError.status !== 404) throw authLookupError;
-                        if (authUser?.user) {
-                            const rawPhone = authUser.user.phone || authUser.user.user_metadata?.phone;
-                            if (rawPhone) {
-                                const cleanPhone = String(rawPhone).replace(/[^0-9+]/g, '').trim();
-                                if (cleanPhone.length >= 10) {
-                                    userMap.set(uid, {
-                                        id: uid,
-                                        phone: cleanPhone,
-                                        full_name: authUser.user.user_metadata?.full_name || userMap.get(uid)?.full_name || null
-                                    });
-                                    // Auto-sync back to public.users table in the background
-                                    supabaseAdmin
-                                        .from('users')
-                                        .update({ phone: cleanPhone })
-                                        .eq('id', uid)
-                                        .then();
+            // First check employee_profiles table for missing phones
+            try {
+                const { data: empProfiles } = await supabaseAdmin
+                    .from('employee_profiles')
+                    .select('user_id, phone, full_name')
+                    .in('user_id', missingPhoneIds);
+
+                (empProfiles || []).forEach((emp: any) => {
+                    const rawPhone = emp?.phone;
+                    const cleanPhone = rawPhone ? String(rawPhone).replace(/[^0-9+]/g, '').trim() : '';
+                    if (cleanPhone.length >= 10) {
+                        userMap.set(emp.user_id, {
+                            id: emp.user_id,
+                            phone: cleanPhone,
+                            full_name: emp.full_name || userMap.get(emp.user_id)?.full_name || null
+                        });
+                        // Opportunistically sync back to users table
+                        supabaseAdmin.from('users').update({ phone: cleanPhone }).eq('id', emp.user_id).then();
+                    }
+                });
+            } catch {
+                // ignore
+            }
+
+            // For any remaining IDs without phone, check Supabase Auth
+            const remainingMissingIds = missingPhoneIds.filter(id => {
+                const u = userMap.get(id);
+                return !u?.phone || String(u.phone).replace(/[^0-9+]/g, '').trim().length < 10;
+            });
+
+            if (remainingMissingIds.length > 0) {
+                await Promise.all(
+                    remainingMissingIds.map(async (uid) => {
+                        try {
+                            const { data: authUser, error: authLookupError } = await supabaseAdmin.auth.admin.getUserById(uid);
+                            if (authLookupError && options.strictReads && authLookupError.status !== 404) throw authLookupError;
+                            if (authUser?.user) {
+                                const rawPhone = authUser.user.phone || authUser.user.user_metadata?.phone;
+                                if (rawPhone) {
+                                    const cleanPhone = String(rawPhone).replace(/[^0-9+]/g, '').trim();
+                                    if (cleanPhone.length >= 10) {
+                                        userMap.set(uid, {
+                                            id: uid,
+                                            phone: cleanPhone,
+                                            full_name: authUser.user.user_metadata?.full_name || userMap.get(uid)?.full_name || null
+                                        });
+                                        // Auto-sync back to public.users table in the background
+                                        supabaseAdmin
+                                            .from('users')
+                                            .update({ phone: cleanPhone })
+                                            .eq('id', uid)
+                                            .then();
+                                    }
                                 }
                             }
+                        } catch (e) {
+                            if (options.strictReads) throw e;
+                            // ignore background fallback errors
                         }
-                    } catch (e) {
-                        if (options.strictReads) throw e;
-                        // ignore background fallback errors
-                    }
-                })
-            );
+                    })
+                );
+            }
         }
 
         const resolvedUsers: ResolvedWhatsAppUser[] = Array.from(userMap.values())
