@@ -90,9 +90,8 @@ A new ticket has been raised on AutoPilot.
 Our team has been notified to attend to this request.
 ```
 - **Footer:** `AutoPilot Property Management`
-- **Button Type:** `Call to Action (Dynamic URL)`
+- **Button Type:** `Call to Action`
   - **Button Text:** `View Ticket`
-  - **URL Type:** `Dynamic` &rarr; `https://fms-dev-saas-one.vercel.app/tickets/{{10}}`
 - **Sample Values:**
   - `Header Image`: Upload any sample equipment/issue photo
   - `{{1}}`: `Property Team`
@@ -104,7 +103,6 @@ Our team has been notified to attend to this request.
   - `{{7}}`: `+91 98765 43210`
   - `{{8}}`: `Sunil Kumar (MST)`
   - `{{9}}`: `+91 98111 22334`
-  - `{{10}}` *(Button URL Ticket UUID)*: `d35372d1-bee2-403f-8578-00da66f16984`
 
 ---
 

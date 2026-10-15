@@ -19,7 +19,7 @@ SET whatsapp_templates = COALESCE(whatsapp_templates, '{}'::jsonb) || jsonb_buil
     ),
     'ticket_created_media', jsonb_build_object(
         'campaign_name', 'ticket_created_v3_media',
-        'params', jsonb_build_array('user_name', 'ticket_number', 'title', 'property', 'priority', 'raised_by', 'raised_by_phone', 'assigned_to', 'assigned_to_phone', 'ticket_id'),
+        'params', jsonb_build_array('user_name', 'ticket_number', 'title', 'property', 'priority', 'raised_by', 'raised_by_phone', 'assigned_to', 'assigned_to_phone'),
         'is_media', true
     ),
     'ticket_assigned', jsonb_build_object(

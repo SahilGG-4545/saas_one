@@ -208,7 +208,7 @@ export class WhatsAppQueueService {
                                     if (campaignName === 'ticket_completed_v1' && templateParams.length > 5) templateParams = templateParams.slice(0, 5);
                                     if (campaignName === 'ticket_completed_v1_media' && templateParams.length > 5) templateParams = templateParams.slice(0, 5);
                                     if (campaignName === 'ticket_created_v3' && templateParams.length > 10) templateParams = templateParams.slice(0, 10);
-                                    if (campaignName === 'ticket_created_v3_media' && templateParams.length > 10) templateParams = templateParams.slice(0, 10);
+                                    if (campaignName === 'ticket_created_v3_media' && templateParams.length > 9) templateParams = templateParams.slice(0, 9);
                                     if (campaignName === 'reminder_ticket_sla_v1' && templateParams.length > 7) templateParams = templateParams.slice(0, 7);
                                     if ((campaignName === 'checklist_slot_reminder_v2' || campaignName === 'checklist_slot_reminder_v1') && templateParams.length > 5) templateParams = templateParams.slice(0, 5);
 
