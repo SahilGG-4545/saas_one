@@ -98,8 +98,20 @@ export class TaskProgressService {
     private static async rangeAssignments(empIds: string[], date: string, opts: ProgressOptions, departmentId: string | null): Promise<TaskAssignment[]> {
         const to = opts.to || date;
         const days = opts.includeCarried ? carryDaysOf(await TaskDatabaseService.getCarryForward(departmentId)) : 0;
+        // Read in pages of 1,000 (the database returns at most that many at once), so "All time" totals stay exact.
+        const allInRange = async () => {
+            const rows: TaskAssignment[] = [];
+            for (let page = 0; page < 50; page++) {
+                const { data, error } = await supabaseAdmin.from('task_assignments').select('*').gte('assigned_date', date).lte('assigned_date', to).in('employee_id', empIds)
+                    .order('id').range(page * 1000, page * 1000 + 999);
+                if (error) return { data: null, error };
+                rows.push(...((data || []) as TaskAssignment[]));
+                if (!data || data.length < 1000) break;
+            }
+            return { data: rows, error: null };
+        };
         const [inRange, carried] = await Promise.all([
-            supabaseAdmin.from('task_assignments').select('*').gte('assigned_date', date).lte('assigned_date', to).in('employee_id', empIds),
+            allInRange(),
             days > 0
                 ? supabaseAdmin.from('task_assignments').select('*').gte('assigned_date', addDaysIso(date, -Math.min(days, CARRY_LOOKBACK_DAYS))).lt('assigned_date', date).neq('status', 'completed').in('employee_id', empIds)
                 : Promise.resolve({ data: [], error: null }),
