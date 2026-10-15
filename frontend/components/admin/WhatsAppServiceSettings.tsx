@@ -44,6 +44,7 @@ const DEFAULT_WHATSAPP_TEMPLATES: Record<string, WhatsAppTemplate> = {
 
     // Meeting Rooms
     meeting_room_booked: { campaign_name: 'meeting_room_booked_v3', params: ['user_name', 'room_name', 'property', 'date', 'start_time', 'end_time', 'booker', 'booker_phone'] },
+    meeting_room_booked_v4: { campaign_name: 'meeting_room_booked_v4', params: ['user_name', 'room_name', 'property', 'date', 'start_time', 'end_time', 'booker', 'booker_phone'] },
     meeting_room_cancelled: { campaign_name: 'meeting_room_cancelled_v2', params: ['user_name', 'room_name', 'property', 'date', 'start_time', 'end_time', 'booker'] },
     meeting_room_start_reminder: { campaign_name: 'meeting_room_start_reminder_v1', params: ['user_name', 'room_name', 'property', 'remaining_minutes', 'start_time', 'booker'] },
     meeting_room_end_reminder: { campaign_name: 'meeting_room_end_reminder_v1', params: ['user_name', 'room_name', 'property', 'remaining_minutes', 'end_time', 'booker'] },
@@ -115,7 +116,8 @@ const TEMPLATE_CATEGORIES = [
         icon: Calendar,
         color: 'text-violet-600 bg-violet-50',
         events: [
-            { key: 'meeting_room_booked', label: 'Meeting Room Reservation' },
+            { key: 'meeting_room_booked', label: 'Meeting Room Reservation (Staff & Admins - v3)' },
+            { key: 'meeting_room_booked_v4', label: 'Meeting Room Reservation (Booker & Guests - v4)' },
             { key: 'meeting_room_cancelled', label: 'Meeting Room Cancellation' },
             { key: 'meeting_room_start_reminder', label: 'Meeting Room Starting Reminder' },
             { key: 'meeting_room_end_reminder', label: 'Meeting Room Ending Soon Reminder' },
