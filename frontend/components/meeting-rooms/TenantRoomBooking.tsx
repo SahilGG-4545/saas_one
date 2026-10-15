@@ -11,9 +11,11 @@ interface TenantRoomBookingProps {
     propertyId: string;
     user: any;
     hideHeader?: boolean;
+    /** HR and CRM users book for free: no credit balance, no refill prompts. */
+    creditFree?: boolean;
 }
 
-const TenantRoomBooking: React.FC<TenantRoomBookingProps> = ({ propertyId, user, hideHeader = false }) => {
+const TenantRoomBooking: React.FC<TenantRoomBookingProps> = ({ propertyId, user, hideHeader = false, creditFree = false }) => {
     const [selectedDate, setSelectedDate] = useState(new Date());
     const [selectedCapacity, setSelectedCapacity] = useState<number>(0);
     const { getCachedData, setCachedData, invalidateCache } = useDataCache();
@@ -104,7 +106,7 @@ const TenantRoomBooking: React.FC<TenantRoomBookingProps> = ({ propertyId, user,
     }, [propertyId]);
 
     const handleDeleteBooking = async (bookingId: string) => {
-        if (!confirm('Cancel this booking? Your credits will be refunded.')) return;
+        if (!confirm(creditFree ? 'Cancel this booking?' : 'Cancel this booking? Your credits will be refunded.')) return;
         setDeletingId(bookingId);
         try {
             const res = await fetch(`/api/meeting-room-bookings/${bookingId}`, {
@@ -135,7 +137,7 @@ const TenantRoomBooking: React.FC<TenantRoomBookingProps> = ({ propertyId, user,
     }, [showHistory, activeViewTab, fetchMyBookings]);
 
     const fetchCredit = useCallback(async () => {
-        if (!user?.id) return;
+        if (!user?.id || creditFree) return;
         try {
             const res = await fetch(`/api/meeting-room-credits?propertyId=${propertyId}`);
             const data = await res.json();
@@ -144,7 +146,7 @@ const TenantRoomBooking: React.FC<TenantRoomBookingProps> = ({ propertyId, user,
                 setCachedData(creditCacheKey, data.credit);
             }
         } catch { /* no-op */ }
-    }, [propertyId, user?.id]);
+    }, [propertyId, user?.id, creditFree]);
 
     useEffect(() => { fetchCredit(); }, [fetchCredit]);
 
@@ -359,7 +361,7 @@ const TenantRoomBooking: React.FC<TenantRoomBookingProps> = ({ propertyId, user,
                 )}
 
                 {/* Credit Balance Banner */}
-                {credit !== null && (
+                {!creditFree && credit !== null && (
                     <div className={`flex items-center justify-between px-4 py-3 rounded-xl border text-sm font-bold ${
                         credit.remaining_hours <= 0
                             ? 'bg-rose-50 border-rose-100 text-rose-700'
