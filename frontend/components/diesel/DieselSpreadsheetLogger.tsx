@@ -196,11 +196,17 @@ export default function DieselSpreadsheetLogger({
             const lastDay = new Date(parseInt(yearStr, 10), parseInt(monthStr, 10), 0).getDate();
             const endDate = `${month}-${String(lastDay).padStart(2, '0')}`;
 
-            const res = await fetch(`/api/properties/${propertyId}/diesel-readings?startDate=${startDate}&endDate=${endDate}`);
+            // The two reads don't depend on each other: start both now, read the answers in the original order
+            // (performance plan Phase 4).
+            const monthAgoDate = new Date(parseInt(yearStr, 10), parseInt(monthStr, 10) - 2, 1).toISOString().split('T')[0];
+            const monthRequest = fetch(`/api/properties/${propertyId}/diesel-readings?startDate=${startDate}&endDate=${endDate}`);
+            const prevRequest = fetch(`/api/properties/${propertyId}/diesel-readings?startDate=${monthAgoDate}&endDate=${startDate}`);
+            prevRequest.catch(() => { /* handled when awaited below */ });
+
+            const res = await monthRequest;
             const fetchedData: DieselReading[] = res.ok ? await res.json() : [];
 
-            const monthAgoDate = new Date(parseInt(yearStr, 10), parseInt(monthStr, 10) - 2, 1).toISOString().split('T')[0];
-            const prevRes = await fetch(`/api/properties/${propertyId}/diesel-readings?startDate=${monthAgoDate}&endDate=${startDate}`);
+            const prevRes = await prevRequest;
             const prevData: DieselReading[] = prevRes.ok ? await prevRes.json() : [];
 
             const rawReadings: Record<string, Record<string, DieselReading>> = {};

@@ -219,63 +219,31 @@ const ElectricityAnalyticsDashboard: React.FC<ElectricityAnalyticsDashboardProps
         let propData: { name: string } | null = property;
 
         try {
-            // 1. Property Name
-            if (isValidId(propertyId)) {
-                const { data: fetchedPropData } = await supabase.from('properties').select('name').eq('id', propertyId).single();
-                propData = fetchedPropData;
-                setProperty(propData);
-            }
-
-            // 2. Meters
-            let metersRes = null;
-            if (isValidId(propertyId)) {
-                metersRes = await fetch(`/api/properties/${propertyId}/electricity-meters`);
-            } else if (isValidId(orgId)) {
-                metersRes = await fetch(`/api/organizations/${orgId}/electricity-meters`);
-            }
-
-            if (metersRes && metersRes.ok) {
-                metersData = await metersRes.json();
-                if (Array.isArray(metersData)) {
-                    setMeters(metersData);
-                }
-            }
-
-            // 2.5 Categories (for Sheet/Location mapping)
-            let categoriesData: any[] = [];
-            if (isValidId(propertyId)) {
-                try {
-                    const layoutRes = await fetch(`/api/properties/${propertyId}/facility-meters`);
-                    if (layoutRes.ok) {
-                        const layoutData = await layoutRes.json();
-                        if (Array.isArray(layoutData)) {
-                            categoriesData = layoutData;
-                            setCategories(categoriesData);
-                        }
-                    }
-                } catch (err) {
-                    console.warn("Failed to fetch facility layout", err);
-                }
-            }
-
-            // 3. Tariff
+            // Property, meters, layout, tariff and readings don't depend on each other: start them all now and read
+            // the answers below in the original order, so state updates and errors behave exactly as before
+            // (performance plan Phase 4). (.then(r => r) starts a Supabase query now; a query builder on its own only
+            // runs when awaited.)
             const today = new Date().toISOString().split('T')[0];
-            if (isValidId(propertyId)) {
-                const tariffRes = await fetch(`/api/properties/${propertyId}/grid-tariffs?date=${today}`);
-                if (tariffRes && tariffRes.ok) {
-                    const t = await tariffRes.json();
-                    activeTariffValue = t?.rate_per_unit || 0;
-                    setActiveTariff(activeTariffValue);
-                }
-            }
+            const propertyRequest = isValidId(propertyId)
+                ? supabase.from('properties').select('name').eq('id', propertyId).single().then(result => result)
+                : null;
+            const metersRequest = isValidId(propertyId)
+                ? fetch(`/api/properties/${propertyId}/electricity-meters`)
+                : isValidId(orgId)
+                    ? fetch(`/api/organizations/${orgId}/electricity-meters`)
+                    : null;
+            metersRequest?.catch(() => { /* handled when awaited below */ });
+            const layoutRequest = isValidId(propertyId) ? fetch(`/api/properties/${propertyId}/facility-meters`) : null;
+            layoutRequest?.catch(() => { /* handled when awaited below */ });
+            const tariffRequest = isValidId(propertyId) ? fetch(`/api/properties/${propertyId}/grid-tariffs?date=${today}`) : null;
+            tariffRequest?.catch(() => { /* handled when awaited below */ });
 
-            // 4. Readings (Batch or separate)
             const readingsBaseUrl = isValidId(propertyId)
                 ? `/api/properties/${propertyId}/electricity-readings`
                 : isValidId(orgId)
                     ? `/api/organizations/${orgId}/electricity-readings`
                     : null;
-
+            let readingsRequest: Promise<ElectricityReading[][]> | null = null;
             if (readingsBaseUrl) {
                 const getLocalYMD = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
                 const now = new Date();
@@ -299,8 +267,56 @@ const ElectricityAnalyticsDashboard: React.FC<ElectricityAnalyticsDashboardProps
                 if (isCustomRange && dateFrom && dateTo) {
                     fetchTasks.push(handleFetch(`${readingsBaseUrl}?startDate=${dateFrom}&endDate=${dateTo}`));
                 }
+                readingsRequest = Promise.all(fetchTasks);
+            }
 
-                const [todayR, monthR, prevMonthR, trendR, customR] = await Promise.all(fetchTasks);
+            // 1. Property Name
+            if (propertyRequest) {
+                const { data: fetchedPropData } = await propertyRequest;
+                propData = fetchedPropData;
+                setProperty(propData);
+            }
+
+            // 2. Meters
+            const metersRes = metersRequest ? await metersRequest : null;
+
+            if (metersRes && metersRes.ok) {
+                metersData = await metersRes.json();
+                if (Array.isArray(metersData)) {
+                    setMeters(metersData);
+                }
+            }
+
+            // 2.5 Categories (for Sheet/Location mapping)
+            let categoriesData: any[] = [];
+            if (layoutRequest) {
+                try {
+                    const layoutRes = await layoutRequest;
+                    if (layoutRes.ok) {
+                        const layoutData = await layoutRes.json();
+                        if (Array.isArray(layoutData)) {
+                            categoriesData = layoutData;
+                            setCategories(categoriesData);
+                        }
+                    }
+                } catch (err) {
+                    console.warn("Failed to fetch facility layout", err);
+                }
+            }
+
+            // 3. Tariff
+            if (tariffRequest) {
+                const tariffRes = await tariffRequest;
+                if (tariffRes && tariffRes.ok) {
+                    const t = await tariffRes.json();
+                    activeTariffValue = t?.rate_per_unit || 0;
+                    setActiveTariff(activeTariffValue);
+                }
+            }
+
+            // 4. Readings (Batch or separate) — already started above
+            if (readingsRequest) {
+                const [todayR, monthR, prevMonthR, trendR, customR] = await readingsRequest;
 
                 readingsData = {
                     today: Array.isArray(todayR) ? todayR : [],

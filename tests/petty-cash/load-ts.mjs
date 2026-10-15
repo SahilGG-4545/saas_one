@@ -1,10 +1,11 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve, dirname, extname } from 'node:path';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 import ts from 'typescript';
 const require = createRequire(new URL('../../package.json', import.meta.url));
-const root = resolve(new URL('../..', import.meta.url).pathname);
+const root = fileURLToPath(new URL('../..', import.meta.url));
 export function loadTs(file, mocks = {}) {
     const filename = resolve(root, file); const module = { exports: {} };
     const output = ts.transpileModule(readFileSync(filename, 'utf8'), { fileName: filename, compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true, target: ts.ScriptTarget.ES2022 } }).outputText;

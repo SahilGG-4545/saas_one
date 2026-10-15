@@ -112,6 +112,8 @@ order by n_live_tup desc;
 | 2026-10-12 | 1 — load code per role / per tab (local build, not deployed) | shell 126 KB; per role: super-admin 217, property admin 180, MST 160, staff 160, others 130–435 KB | _to measure on localhost_ | _unchanged — Phase 2_ | Excel/PDF code now loads only with the tabs that use it |
 | 2026-10-12 | 2 — remember tab data (local build) | unchanged | _to measure on localhost_ | _expected: no loader on revisit for Diesel, Electricity, Documents, Vendors, Stock report, PPM, Assets_ | caches cleared on user change; HR, Users, Visitors, Procurement, AI tickets deliberately not cached |
 | 2026-10-13 | 1b — no extra tab spinner | _to re-measure_ | | | tab code is preloaded in the background after the dashboard shows (owner asked for no new spinner) |
+| 2026-10-15 | 3 — stop unused work (local, not deployed) | _to re-measure_ | _expected: ~7 fewer requests on org dashboard open_ | unchanged | hidden old Overview panel and its data loading deleted from `OrgAdminDashboard.tsx`; unused Material Symbols stylesheet removed; 5 s guard added to the second chunk-reload path. See [DASHBOARD_PERFORMANCE_PLAN.md](DASHBOARD_PERFORMANCE_PLAN.md) |
+| 2026-10-15 | 4 — independent requests start together (local, not deployed) | unchanged | _to re-measure with production build_ | unchanged | 9 files: Diesel/Electricity staff + analytics, spreadsheet, Property Overview, tickets-summary, users list, accounts summary. Answers are still read in the original order, so errors and state updates are unchanged. Deviations from plan: Diesel analytics price loop left as is (it stops at the first price; Phase 5.1 replaces it); users-list permission checks left untouched (CLAUDE.md), only the reads after the check overlap. |
 
 ---
 

@@ -68,6 +68,21 @@ export async function GET(
         const inProgressStatuses = ['assigned', 'in_progress', 'paused', 'work_started'];
         const urgentPriorities = ['urgent', 'high', 'critical'];
 
+        // Exact counts per property via concurrent count queries. They only need the property list, so they start now,
+        // together with the organization-wide queries below, instead of after them (performance plan Phase 4). Their
+        // answers are combined with the trend and validation data further down, exactly as before.
+        // This scales beautifully without fetching hundreds of thousands of rows into memory and avoids 1000 max-rows limit.
+        const propertyCountRequests = properties.map((p) => Promise.all([
+            supabase.from('tickets').select('id', { count: 'exact', head: true }).eq('property_id', p.id).gte('created_at', periodFilter || '1970-01-01'),
+            supabase.from('tickets').select('id', { count: 'exact', head: true }).eq('property_id', p.id).gte('created_at', periodFilter || '1970-01-01').in('status', ['open', 'blocked']),
+            supabase.from('tickets').select('id', { count: 'exact', head: true }).eq('property_id', p.id).gte('created_at', periodFilter || '1970-01-01').eq('status', 'waitlist'),
+            supabase.from('tickets').select('id', { count: 'exact', head: true }).eq('property_id', p.id).gte('created_at', periodFilter || '1970-01-01').in('status', inProgressStatuses),
+            supabase.from('tickets').select('id', { count: 'exact', head: true }).eq('property_id', p.id).gte('created_at', periodFilter || '1970-01-01').in('status', resolvedStatuses),
+            supabase.from('tickets').select('id', { count: 'exact', head: true }).eq('property_id', p.id).gte('created_at', periodFilter || '1970-01-01').eq('status', 'pending_validation'),
+            supabase.from('tickets').select('id', { count: 'exact', head: true }).eq('property_id', p.id).gte('created_at', periodFilter || '1970-01-01').in('priority', urgentPriorities).not('status', 'in', `(${resolvedStatuses.map(s => `"${s}"`).join(',')},"pending_validation")`)
+        ]));
+        propertyCountRequests.forEach(request => request.catch(() => { /* handled when awaited below */ }));
+
         const [
             totalCountRes,
             openCountRes,
@@ -153,9 +168,8 @@ export async function GET(
             }
         });
 
-        // Perform exact counts per property via concurrent count queries.
-        // This scales beautifully without fetching hundreds of thousands of rows into memory and avoids 1000 max-rows limit.
-        const propertyBreakdownPromises = properties.map(async (p) => {
+        // Per-property counts (started above, together with the organization-wide queries).
+        const propertyBreakdownPromises = properties.map(async (p, index) => {
             const [
                  pTotal,
                  pOpenRes,
@@ -164,15 +178,7 @@ export async function GET(
                  pResolved,
                  pPending,
                  pUrgent
-            ] = await Promise.all([
-                 supabase.from('tickets').select('id', { count: 'exact', head: true }).eq('property_id', p.id).gte('created_at', periodFilter || '1970-01-01'),
-                 supabase.from('tickets').select('id', { count: 'exact', head: true }).eq('property_id', p.id).gte('created_at', periodFilter || '1970-01-01').in('status', ['open', 'blocked']),
-                 supabase.from('tickets').select('id', { count: 'exact', head: true }).eq('property_id', p.id).gte('created_at', periodFilter || '1970-01-01').eq('status', 'waitlist'),
-                 supabase.from('tickets').select('id', { count: 'exact', head: true }).eq('property_id', p.id).gte('created_at', periodFilter || '1970-01-01').in('status', inProgressStatuses),
-                 supabase.from('tickets').select('id', { count: 'exact', head: true }).eq('property_id', p.id).gte('created_at', periodFilter || '1970-01-01').in('status', resolvedStatuses),
-                 supabase.from('tickets').select('id', { count: 'exact', head: true }).eq('property_id', p.id).gte('created_at', periodFilter || '1970-01-01').eq('status', 'pending_validation'),
-                 supabase.from('tickets').select('id', { count: 'exact', head: true }).eq('property_id', p.id).gte('created_at', periodFilter || '1970-01-01').in('priority', urgentPriorities).not('status', 'in', `(${resolvedStatuses.map(s => `"${s}"`).join(',')},"pending_validation")`)
-            ]);
+            ] = await propertyCountRequests[index];
 
             const trends = propTrends.get(p.id) || { total: new Array(30).fill(0), resolved: new Array(30).fill(0), active: new Array(30).fill(0), pending: new Array(30).fill(0) };
 

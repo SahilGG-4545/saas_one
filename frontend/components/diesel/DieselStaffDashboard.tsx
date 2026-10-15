@@ -100,18 +100,26 @@ const DieselStaffDashboard: React.FC<DieselStaffDashboardProps> = ({ propertyId:
         setError(null);
 
         try {
-            // Fetch property
-            const { data: propData, error: propError } = await supabase
+            // Property and generators don't depend on each other: start both now, then read the answers in the same
+            // order as before, so errors and state updates behave exactly as they did (performance plan Phase 4).
+            // (.then(r => r) starts the Supabase query now; a query builder on its own only runs when awaited.)
+            const propertyRequest = supabase
                 .from('properties')
                 .select('id, name, code')
                 .eq('id', propertyId)
-                .single();
+                .single()
+                .then(result => result);
+            const generatorsRequest = fetch(`/api/properties/${propertyId}/generators`);
+            generatorsRequest.catch(() => { /* handled when awaited below */ });
+
+            // Fetch property
+            const { data: propData, error: propError } = await propertyRequest;
 
             if (propError) throw propError;
             setProperty(propData);
 
             // Fetch generators
-            const generatorsRes = await fetch(`/api/properties/${propertyId}/generators`);
+            const generatorsRes = await generatorsRequest;
             if (!generatorsRes.ok) throw new Error('Failed to fetch generators');
             const generatorsData = await generatorsRes.json();
             setGenerators(generatorsData);
@@ -119,10 +127,33 @@ const DieselStaffDashboard: React.FC<DieselStaffDashboardProps> = ({ propertyId:
             // Fetch yesterday's readings for opening
             if (generatorsData.length > 0) {
                 const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+                // Readings, averages and tariffs only need the generator list, not each other: start all three now and
+                // read the answers below in the original order (performance plan Phase 4).
+                const monthAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+                const today = new Date().toISOString().split('T')[0];
+                const readingsRequest = fetch(`/api/properties/${propertyId}/diesel-readings?limit=100`);
+                readingsRequest.catch(() => { /* handled when awaited below */ });
+                const avgRequest = fetch(`/api/properties/${propertyId}/diesel-readings?startDate=${monthAgo}`);
+                avgRequest.catch(() => { /* handled when awaited below */ });
+                const tariffs: Record<string, any> = {};
+                const tariffsRequest = Promise.all(generatorsData.map(async (gen: Generator) => {
+                    try {
+                        const tariffRes = await fetch(`/api/properties/${propertyId}/dg-tariffs?generatorId=${gen.id}&date=${today}`);
+                        if (tariffRes.ok) {
+                            const t = await tariffRes.json();
+                            if (t && t.id) {
+                                tariffs[gen.id] = t;
+                            }
+                            // If t is null or empty, that's fine - no tariff configured
+                        }
+                        // 500 errors are expected when RPC doesn't exist or no tariff - just skip
+                    } catch (e) {
+                        // Silent fail - no tariff is a valid state
+                    }
+                }));
+
                 // v2 Carry-Forward: Get latest readings for all generators
-                const readingsRes = await fetch(
-                    `/api/properties/${propertyId}/diesel-readings?limit=100`
-                );
+                const readingsRes = await readingsRequest;
                 if (readingsRes.ok) {
                     const readingsData = await readingsRes.json();
 
@@ -159,10 +190,7 @@ const DieselStaffDashboard: React.FC<DieselStaffDashboardProps> = ({ propertyId:
                 }
 
                 // Fetch averages
-                const monthAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-                const avgRes = await fetch(
-                    `/api/properties/${propertyId}/diesel-readings?startDate=${monthAgo}`
-                );
+                const avgRes = await avgRequest;
                 if (avgRes.ok) {
                     const avgData = await avgRes.json();
                     const avgByGen: Record<string, number[]> = {};
@@ -179,24 +207,8 @@ const DieselStaffDashboard: React.FC<DieselStaffDashboardProps> = ({ propertyId:
                     setAverages(avgs);
                 }
 
-                // Fetch tariffs for each generator (ignore errors - no tariff is valid state)
-                const today = new Date().toISOString().split('T')[0];
-                const tariffs: Record<string, any> = {};
-                await Promise.all(generatorsData.map(async (gen: Generator) => {
-                    try {
-                        const tariffRes = await fetch(`/api/properties/${propertyId}/dg-tariffs?generatorId=${gen.id}&date=${today}`);
-                        if (tariffRes.ok) {
-                            const t = await tariffRes.json();
-                            if (t && t.id) {
-                                tariffs[gen.id] = t;
-                            }
-                            // If t is null or empty, that's fine - no tariff configured
-                        }
-                        // 500 errors are expected when RPC doesn't exist or no tariff - just skip
-                    } catch (e) {
-                        // Silent fail - no tariff is a valid state
-                    }
-                }));
+                // Tariffs for each generator (ignore errors - no tariff is valid state)
+                await tariffsRequest;
                 setActiveTariffs(tariffs);
             }
         } catch (err: any) {

@@ -1543,24 +1543,9 @@ const OverviewTab = memo(function OverviewTab({
                     slaBreachedQuery = slaBreachedQuery.gte('created_at', monthStart);
                 }
 
-                const validationFeaturePromise = propertyId === 'all'
-                    ? Promise.resolve({ data: { is_enabled: true }, error: null })
-                    : supabase.from('property_features').select('is_enabled').eq('property_id', propertyId).eq('feature_key', 'ticket_validation').maybeSingle();
-
-                const [openRes, waitlistRes, inProgressRes, resolvedRes, totalRes, recentsRes, pendingValRes, urgentOpenRes, slaBreachedRes, validationFeatureRes] = await Promise.all([
-                    openQuery,
-                    waitlistQuery,
-                    inProgressQuery,
-                    resolvedQuery,
-                    totalQuery,
-                    recentsQuery,
-                    pendingValQuery,
-                    urgentOpenQuery,
-                    slaBreachedQuery,
-                    validationFeaturePromise,
-                ]);
-
-                // --- Electricity, VMS, Vendors (all in parallel via APIs) ---
+                // --- Electricity, VMS, Vendors, checklist (all in parallel via APIs) ---
+                // None of these use the ticket results below, so they start now, together with the tickets, instead
+                // of waiting for them. Their answers are still read after the tickets, as before (performance plan Phase 4).
                 const today = new Date().toISOString().split('T')[0];
                 const apiPeriod = timePeriod; // 'today' | 'month' | 'all'
 
@@ -1577,7 +1562,7 @@ const OverviewTab = memo(function OverviewTab({
                 } else if (timePeriod === 'month') {
                     electricityQuery = electricityQuery.gte('reading_date', monthStart);
                 }
-                
+
                 let dieselQuery = supabase.from('diesel_readings').select('computed_consumed_litres, closing_kwh, opening_kwh, reading_date');
                 if (propertyId !== 'all') {
                     dieselQuery = dieselQuery.eq('property_id', propertyId);
@@ -1590,7 +1575,7 @@ const OverviewTab = memo(function OverviewTab({
                 } else if (timePeriod === 'month') {
                     dieselQuery = dieselQuery.gte('reading_date', monthStart);
                 }
-                
+
                 // Checklist progress
                 const todayForChecklist = new Date().toISOString().split('T')[0];
                 const monthStartForChecklist = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
@@ -1608,13 +1593,34 @@ const OverviewTab = memo(function OverviewTab({
                     checklistQuery = checklistQuery.gte('completion_date', monthStartForChecklist);
                 }
 
-                const [electricityRes, dieselRes, vmsApiRes, vendorApiRes, checklistRes] = await Promise.all([
+                const secondBatchRequest = Promise.all([
                     electricityQuery,
                     dieselQuery,
                     fetch(`/api/properties/${propertyId}/vms-summary?period=${apiPeriod}`),
                     fetch(`/api/properties/${propertyId}/vendor-summary?period=${apiPeriod}`),
                     checklistQuery
                 ]);
+                secondBatchRequest.catch(() => { /* handled when awaited below */ });
+
+                const validationFeaturePromise = propertyId === 'all'
+                    ? Promise.resolve({ data: { is_enabled: true }, error: null })
+                    : supabase.from('property_features').select('is_enabled').eq('property_id', propertyId).eq('feature_key', 'ticket_validation').maybeSingle();
+
+                const [openRes, waitlistRes, inProgressRes, resolvedRes, totalRes, recentsRes, pendingValRes, urgentOpenRes, slaBreachedRes, validationFeatureRes] = await Promise.all([
+                    openQuery,
+                    waitlistQuery,
+                    inProgressQuery,
+                    resolvedQuery,
+                    totalQuery,
+                    recentsQuery,
+                    pendingValQuery,
+                    urgentOpenQuery,
+                    slaBreachedQuery,
+                    validationFeaturePromise,
+                ]);
+
+                // --- Electricity, VMS, Vendors, checklist (started above, together with the tickets) ---
+                const [electricityRes, dieselRes, vmsApiRes, vendorApiRes, checklistRes] = await secondBatchRequest;
 
                 // Process checklist stats
                 const checklistData = checklistRes.data || [];
