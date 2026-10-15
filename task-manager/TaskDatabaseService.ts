@@ -5,6 +5,7 @@ import {
     EmployeeProfile,
     TaskTemplate,
     TaskAssignment,
+    NumberedAssignment,
     ConversationContext,
     ContextSystem,
     TaskStatus,
@@ -14,7 +15,56 @@ import {
     NotificationRule,
     NotificationTaskFilters,
     WhatsAppKillSwitches,
+    CarryForwardSetting,
 } from './types';
+
+/** How many days back an unfinished task stays on a person's list. One window for every message and the bot. Since
+ *  2026-10-14 each department can turn this off or shorten it (1–7 days, Notifications tab); 7 is the most and the default. */
+export const CARRY_LOOKBACK_DAYS = 7;
+export const DEFAULT_CARRY_FORWARD: CarryForwardSetting = { enabled: true, days: CARRY_LOOKBACK_DAYS };
+
+/** A stored or submitted setting → a safe one: on/off, and a whole number of days from 1 to 7. Anything odd → the default. */
+export function normalizeCarryForward(value: unknown): CarryForwardSetting {
+    if (!value || typeof value !== 'object') return { ...DEFAULT_CARRY_FORWARD };
+    const v = value as Record<string, unknown>;
+    const days = Number(v.days);
+    return {
+        enabled: v.enabled !== false,
+        days: Number.isInteger(days) && days >= 1 && days <= CARRY_LOOKBACK_DAYS ? days : CARRY_LOOKBACK_DAYS,
+    };
+}
+
+/** How many days back to look for a department (0 = carry-forward is off). */
+export const carryDaysOf = (s: CarryForwardSetting) => (s.enabled ? s.days : 0);
+
+let carryCache: { at: number; map: Record<string, CarryForwardSetting> } | null = null;
+export const resetCarryForwardCache = () => { carryCache = null; };
+
+/** Builds the numbered list from raw rows (pure, so it can be tested without the database). See NumberedAssignment. */
+export function buildNumberedList(today: TaskAssignment[], earlierOpen: TaskAssignment[]): NumberedAssignment[] {
+    const key = (t: TaskAssignment) => t.title.trim().toLowerCase();
+    const seen = new Set(today.map(key));
+    // Newest copy first, so when the same title is open on several days only the latest copy is kept.
+    const newestFirst = [...earlierOpen].sort((a, b) => b.assigned_date.localeCompare(a.assigned_date) || a.created_at.localeCompare(b.created_at));
+    const carried: TaskAssignment[] = [];
+    for (const t of newestFirst) {
+        if (t.status === 'completed' || seen.has(key(t))) continue;
+        seen.add(key(t));
+        carried.push(t);
+    }
+    carried.sort((a, b) => a.assigned_date.localeCompare(b.assigned_date) || a.created_at.localeCompare(b.created_at));
+    const todaySorted = [...today].sort((a, b) => a.created_at.localeCompare(b.created_at));
+    return [
+        ...carried.map(t => ({ ...t, isCarriedForward: true })),
+        ...todaySorted.map(t => ({ ...t, isCarriedForward: false })),
+    ].map((t, i) => ({ ...t, listNumber: i + 1 }));
+}
+
+const isBotAlertAdmin =(value: unknown): value is { name: string; phone: string } => {
+    if (!value || typeof value !== 'object') return false;
+    const recipient = value as Record<string, unknown>;
+    return typeof recipient.name === 'string' && /^\+?\d{10,15}$/.test(String(recipient.phone || '').replace(/[\s()-]/g, ''));
+};
 
 function mapProfileToEmployee(profile: any): Employee {
     const fullName = profile.first_name && profile.last_name
@@ -221,7 +271,8 @@ export class TaskDatabaseService {
                 *,
                 department:departments(*)
             `)
-            .eq('is_active', true);
+            .eq('is_active', true)
+            .is('owner_id', null); // personal fixed ("locked") tasks are not department templates
 
         if (params?.departmentId) {
             query = query.eq('department_id', params.departmentId);
@@ -330,87 +381,116 @@ export class TaskDatabaseService {
     }
 
     /**
-     * Phase 2: Fetches assignments applying task selection filters and carry-forward rules.
-     * Safely includes uncompleted tasks from yesterday or previous days without creating DB duplicates.
+     * A person's numbered list for `date`: open tasks from the last CARRY_LOOKBACK_DAYS days first (oldest first), then all of
+     * today's tasks. The bot and every scheduled message number tasks from THIS list, so "done 1" means the same task everywhere.
+     */
+    /**
+     * Flexible "look up tasks" (docs/TASK_LOOKUP_PLAN.md, 2026-10-13): ONE read-only, parameterised select — no raw SQL.
+     * Every value comes from code-checked filters (people already permission-filtered by the caller); search words are plain
+     * letters / digits / spaces / hyphens only. At most 500 rows.
+     */
+    static async searchAssignments(q: {
+        employeeIds: string[]; assignedBy?: string | null; from: string; to: string; dateField: 'assigned' | 'finished';
+        statuses?: TaskStatus[] | null; assignedBefore?: string | null; assignedOnOrBefore?: string | null;
+        kind?: 'any' | 'fixed' | 'one_off'; words?: string[]; newestFirst?: boolean; limit?: number;
+    }): Promise<TaskAssignment[]> {
+        if (!q.employeeIds.length) return [];
+        let query = supabaseAdmin
+            .from('task_assignments')
+            .select('id, title, employee_id, assigned_date, status, assigned_by, completed_at, task_template_id, created_at')
+            .in('employee_id', q.employeeIds.slice(0, 500));
+        if (q.dateField === 'finished') {
+            // "finished yesterday" = completed during that India day.
+            query = query.gte('completed_at', `${q.from}T00:00:00+05:30`).lte('completed_at', `${q.to}T23:59:59.999+05:30`);
+        } else {
+            query = query.gte('assigned_date', q.from).lte('assigned_date', q.to);
+        }
+        if (q.statuses?.length) query = query.in('status', q.statuses);
+        if (q.assignedBy) query = query.eq('assigned_by', q.assignedBy);
+        if (q.assignedBefore) query = query.lt('assigned_date', q.assignedBefore);
+        if (q.assignedOnOrBefore) query = query.lte('assigned_date', q.assignedOnOrBefore);
+        if (q.kind === 'fixed') query = query.not('task_template_id', 'is', null);
+        if (q.kind === 'one_off') query = query.is('task_template_id', null);
+        for (const w of (q.words ?? []).slice(0, 5)) {
+            const safe = String(w).toLowerCase().replace(/[^a-z0-9 -]/g, '').trim().slice(0, 30);
+            if (safe) query = query.or(`title.ilike."%${safe}%",description.ilike."%${safe}%"`);
+        }
+        const { data, error } = await query
+            .order(q.dateField === 'finished' ? 'completed_at' : 'assigned_date', { ascending: !q.newestFirst })
+            .limit(Math.min(q.limit ?? 500, 500));
+        if (error) {
+            console.error('[TaskDatabaseService] Error searching assignments:', error);
+            throw error;
+        }
+        return (data || []) as TaskAssignment[];
+    }
+
+    /** The department's carry-forward setting (cached 30 s). No department or no saved setting → on, 7 days. */
+    static async getCarryForward(departmentId: string | null | undefined): Promise<CarryForwardSetting> {
+        if (!departmentId) return { ...DEFAULT_CARRY_FORWARD };
+        if (!carryCache || Date.now() - carryCache.at > 30_000) {
+            try { carryCache = { at: Date.now(), map: (await this.getTestingConfig()).carryForward || {} }; }
+            catch { return { ...DEFAULT_CARRY_FORWARD }; }
+        }
+        return normalizeCarryForward(carryCache.map[departmentId]);
+    }
+
+    static async saveCarryForward(departmentId: string, value: unknown): Promise<CarryForwardSetting> {
+        const setting = normalizeCarryForward(value);
+        const existing = (await this.getTestingConfig()).carryForward || {};
+        await this.saveTestingConfig({ carryForward: { ...existing, [departmentId]: setting } });
+        carryCache = null;
+        return setting;
+    }
+
+    static async getNumberedList(params: { employeeId: string; date?: string; departmentId?: string | null }): Promise<NumberedAssignment[]> {
+        const targetDate = params.date || new Date().toISOString().slice(0, 10);
+        // The person's department decides how far back unfinished tasks are carried (one setting, so every list matches).
+        const departmentId = params.departmentId !== undefined ? params.departmentId : (await this.getEmployeeById(params.employeeId))?.department_id ?? null;
+        const carryDays = carryDaysOf(await this.getCarryForward(departmentId));
+        const start = new Date(`${targetDate}T12:00:00Z`);
+        start.setUTCDate(start.getUTCDate() - carryDays);
+
+        const [today, earlier] = await Promise.all([
+            supabaseAdmin.from('task_assignments').select('*, template:task_templates(*)')
+                .eq('employee_id', params.employeeId).eq('assigned_date', targetDate),
+            carryDays > 0
+                ? supabaseAdmin.from('task_assignments').select('*, template:task_templates(*)')
+                    .eq('employee_id', params.employeeId).gte('assigned_date', start.toISOString().slice(0, 10)).lt('assigned_date', targetDate)
+                    .neq('status', 'completed')
+                : Promise.resolve({ data: [], error: null }),
+        ]);
+        if (today.error || earlier.error) {
+            console.error('[TaskDatabaseService] Error fetching numbered task list:', today.error || earlier.error);
+            throw today.error || earlier.error;
+        }
+        return buildNumberedList((today.data || []) as TaskAssignment[], (earlier.data || []) as TaskAssignment[]);
+    }
+
+    /**
+     * What one scheduled message shows: a part of the numbered list (getNumberedList), keeping each task's number.
+     * `lookbackDays` is no longer used: every message carries tasks from the same window, so the numbers always match.
      */
     static async getFilteredAssignments(params: {
         employeeId: string;
         date?: string; // YYYY-MM-DD
         filters?: NotificationTaskFilters;
-    }): Promise<Array<TaskAssignment & { isCarriedForward?: boolean }>> {
-        const targetDate = params.date || new Date().toISOString().slice(0, 10);
+        departmentId?: string | null;
+    }): Promise<NumberedAssignment[]> {
         const filters = params.filters || {
             includeTodayFixed: true,
             includeTodayAssigned: true,
             includeYesterdayPending: false
         };
-
-        const assignments: Array<TaskAssignment & { isCarriedForward?: boolean }> = [];
-
-        // 1. Fetch Today's Tasks
-        const todayQuery = supabaseAdmin
-            .from('task_assignments')
-            .select(`
-                *,
-                template:task_templates(*)
-            `)
-            .eq('employee_id', params.employeeId)
-            .eq('assigned_date', targetDate);
-
-        const { data: rawToday, error: todayErr } = await todayQuery.order('created_at', { ascending: true });
-        if (todayErr) {
-            console.error('[TaskDatabaseService] Error fetching today assignments in filter:', todayErr);
-            throw todayErr;
-        }
-
-        const todayTasks = (rawToday || []) as TaskAssignment[];
-        for (const t of todayTasks) {
+        const list = await this.getNumberedList({ employeeId: params.employeeId, date: params.date, departmentId: params.departmentId });
+        return list.filter(t => {
+            if (t.isCarriedForward) return Boolean(filters.includeYesterdayPending);
             const isFixed = Boolean(t.task_template_id);
-            if (isFixed && filters.includeTodayFixed === false) continue;
-            if (!isFixed && filters.includeTodayAssigned === false) continue;
-            if (filters.onlyPending && t.status === 'completed') continue;
-            assignments.push(t);
-        }
-
-        // 2. Fetch Carried-Forward Pending Tasks from Previous Days
-        if (filters.includeYesterdayPending) {
-            const lookbackDays = Math.max(1, filters.lookbackDays || 1);
-            const targetD = new Date(targetDate);
-            const startD = new Date(targetD);
-            startD.setDate(startD.getDate() - lookbackDays);
-            const startDateStr = startD.toISOString().slice(0, 10);
-
-            const { data: rawPrevious, error: prevErr } = await supabaseAdmin
-                .from('task_assignments')
-                .select(`
-                    *,
-                    template:task_templates(*)
-                `)
-                .eq('employee_id', params.employeeId)
-                .gte('assigned_date', startDateStr)
-                .lt('assigned_date', targetDate)
-                .neq('status', 'completed')
-                .order('assigned_date', { ascending: false });
-
-            if (prevErr) {
-                console.error('[TaskDatabaseService] Error fetching carried-forward assignments:', prevErr);
-                throw prevErr;
-            }
-
-            const prevTasks = (rawPrevious || []) as TaskAssignment[];
-            for (const pt of prevTasks) {
-                // Avoid duplicate if task with same title is already present today
-                const alreadyHasToday = assignments.some(at => at.title.trim().toLowerCase() === pt.title.trim().toLowerCase());
-                if (!alreadyHasToday) {
-                    assignments.push({
-                        ...pt,
-                        isCarriedForward: true
-                    });
-                }
-            }
-        }
-
-        return assignments;
+            if (isFixed && filters.includeTodayFixed === false) return false;
+            if (!isFixed && filters.includeTodayAssigned === false) return false;
+            if (filters.onlyPending && t.status === 'completed') return false;
+            return true;
+        });
     }
 
     static async updateAssignmentStatus(params: {
@@ -732,6 +812,18 @@ export class TaskDatabaseService {
             killSwitches,
             whatsappPretendMode: raw.whatsappPretendMode !== false,
             nlGatewayEnabled: raw.nlGatewayEnabled === true,
+            neverSilentEnabled: raw.neverSilentEnabled === true,
+            conversationMemoryEnabled: raw.conversationMemoryEnabled === true,
+            frontDoorEnabled: raw.frontDoorEnabled === true,
+            teamReportsEnabled: raw.teamReportsEnabled === true,
+            learningLoopEnabled: raw.learningLoopEnabled === true,
+            promptVersionsEnabled: raw.promptVersionsEnabled === true,
+            nightlyAutoTuneEnabled: raw.nightlyAutoTuneEnabled === true,
+            voiceNotesEnabled: raw.voiceNotesEnabled === true,
+            botAlertAdmins: Array.isArray(raw.botAlertAdmins) ? raw.botAlertAdmins.filter(isBotAlertAdmin).slice(0, 10) : [],
+            carryForward: raw.carryForward && typeof raw.carryForward === 'object' && !Array.isArray(raw.carryForward)
+                ? Object.fromEntries(Object.entries(raw.carryForward).map(([k, v]) => [k, normalizeCarryForward(v)]))
+                : {},
         };
     }
 
@@ -740,7 +832,7 @@ export class TaskDatabaseService {
      * Unlike getTestingConfig(), a database error is thrown (never swallowed), so the gate can fail closed.
      * Pretend Mode is ON unless it was explicitly switched off.
      */
-    static async getSendControls(): Promise<{ killSwitches: WhatsAppKillSwitches; pretendMode: boolean }> {
+    static async getSendControls(): Promise<{ killSwitches: WhatsAppKillSwitches; pretendMode: boolean; botFeatures: Record<import('./BotSwitches').BotSwitch, boolean>; botAlertAdmins: Array<{ name: string; phone: string }> }> {
         const { data, error } = await supabaseAdmin
             .from('conversation_context')
             .select('context_data')
@@ -766,7 +858,20 @@ export class TaskDatabaseService {
                 },
             },
             pretendMode: raw.whatsappPretendMode !== false,
+            botFeatures: { neverSilent: raw.neverSilentEnabled === true, conversationMemory: raw.conversationMemoryEnabled === true, frontDoor: raw.frontDoorEnabled === true, teamReports: raw.teamReportsEnabled === true, learningLoop: raw.learningLoopEnabled === true, promptVersions: raw.promptVersionsEnabled === true, nightlyAutoTune: raw.nightlyAutoTuneEnabled === true, voiceNotes: raw.voiceNotesEnabled === true },
+            botAlertAdmins: Array.isArray(raw.botAlertAdmins) ? raw.botAlertAdmins.filter(isBotAlertAdmin).slice(0, 10) : [],
         };
+    }
+
+    /** WhatsApp bot upgrades (docs/WHATSAPP_BOT_PRODUCTION_PLAN.md): flipped from the Task Access panel, no redeploy needed. */
+    static async setBotFeature(feature: import('./BotSwitches').BotSwitch, enabled: boolean, actor?: string): Promise<TestingConfig> {
+        const fields: Record<import('./BotSwitches').BotSwitch, keyof TestingConfig> = { neverSilent: 'neverSilentEnabled', conversationMemory: 'conversationMemoryEnabled', frontDoor: 'frontDoorEnabled', teamReports: 'teamReportsEnabled', learningLoop: 'learningLoopEnabled', promptVersions: 'promptVersionsEnabled', nightlyAutoTune: 'nightlyAutoTuneEnabled', voiceNotes: 'voiceNotesEnabled' };
+        const updated = await this.saveTestingConfig({ [fields[feature]]: enabled });
+        await this.logAudit({
+            event_type: 'bot_feature_updated',
+            details: { feature, enabled, actor: actor || null },
+        });
+        return updated;
     }
 
     static async setNaturalLanguageGateway(enabled: boolean, actor?: string): Promise<TestingConfig> {
@@ -1018,5 +1123,3 @@ export class TaskDatabaseService {
         return { success: true, employee: updatedEmp };
     }
 }
-
-

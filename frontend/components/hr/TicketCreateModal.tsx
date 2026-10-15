@@ -8,7 +8,7 @@ import { formatSlaDisplay } from '@/frontend/components/hr/HRAdminConfigPanel';
 interface TicketCreateModalProps {
     isOpen: boolean;
     onClose: () => void;
-    onSuccess: () => void;
+    onSuccess?: (ticket?: any) => void;
     orgId: string;
     userId: string;
 }
@@ -90,6 +90,19 @@ export default function TicketCreateModal({ isOpen, onClose, onSuccess, orgId, u
         return c.ticket_type === ticketType;
     });
 
+    // Auto-select category if there is only 1 option; reset if invalid
+    useEffect(() => {
+        if (filteredCategories.length === 1) {
+            setCategoryId(filteredCategories[0].id);
+        } else if (filteredCategories.length > 1) {
+            if (categoryId && !filteredCategories.some(c => c.id === categoryId)) {
+                setCategoryId('');
+            }
+        } else {
+            setCategoryId('');
+        }
+    }, [ticketType, categories]);
+
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setError('');
@@ -125,7 +138,10 @@ export default function TicketCreateModal({ isOpen, onClose, onSuccess, orgId, u
             try { data = text ? JSON.parse(text) : {}; } catch {}
             if (!data.success) throw new Error(data.error || 'Failed to submit ticket');
 
-            onSuccess();
+            if (onSuccess) onSuccess(data.data);
+            if (typeof window !== 'undefined') {
+                window.dispatchEvent(new CustomEvent('hr-ticket-created', { detail: { ticket: data.data } }));
+            }
             onClose();
         } catch (err: any) {
             setError(err.message || 'Failed to submit ticket');
@@ -195,10 +211,20 @@ export default function TicketCreateModal({ isOpen, onClose, onSuccess, orgId, u
                                         key={tab.id}
                                         type="button"
                                         onClick={() => {
-                                            setTicketType(tab.id as any);
-                                            setCategoryId('');
-                                            setIsConfidential(tab.id === 'confidential_feedback');
-                                            setIsAnonymous(tab.id === 'anonymous_feedback');
+                                            const newType = tab.id as any;
+                                            setTicketType(newType);
+                                            setIsConfidential(newType === 'confidential_feedback');
+                                            setIsAnonymous(newType === 'anonymous_feedback');
+                                            const matched = categories.filter(c => {
+                                                if (newType === 'confidential_feedback') return c.ticket_type === 'confidential_feedback' || c.is_confidential;
+                                                if (newType === 'anonymous_feedback') return c.ticket_type === 'anonymous_feedback' || c.is_anonymous;
+                                                return c.ticket_type === newType;
+                                            });
+                                            if (matched.length === 1) {
+                                                setCategoryId(matched[0].id);
+                                            } else {
+                                                setCategoryId('');
+                                            }
                                         }}
                                         className={`p-2.5 sm:p-3 rounded-xl border text-left transition-all ${
                                             ticketType === tab.id
@@ -244,25 +270,42 @@ export default function TicketCreateModal({ isOpen, onClose, onSuccess, orgId, u
                             </div>
                         )}
 
-                        {/* Category Selection Dropdown */}
+                        {/* Category Selection */}
                         <div>
                             <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5 flex items-center justify-between">
                                 <span>Category *</span>
-                                <span className="text-[10px] font-normal text-slate-400">Select from list ({filteredCategories.length} options)</span>
+                                <span className="text-[10px] font-normal text-slate-400">
+                                    {filteredCategories.length === 1
+                                        ? 'Default Category'
+                                        : `Select from list (${filteredCategories.length} options)`}
+                                </span>
                             </label>
-                            <select
-                                value={categoryId}
-                                onChange={(e) => setCategoryId(e.target.value)}
-                                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-xs font-semibold focus:ring-2 focus:ring-indigo-500 outline-none cursor-pointer"
-                                required
-                            >
-                                <option value="">-- Select Category Option --</option>
-                                {filteredCategories.map((cat) => (
-                                    <option key={cat.id} value={cat.id}>
-                                        {cat.category_name}{cat.sub_category_name ? ` — ${cat.sub_category_name}` : ''}
-                                    </option>
-                                ))}
-                            </select>
+
+                            {filteredCategories.length === 1 ? (
+                                <div className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/60 text-slate-900 dark:text-white text-xs font-semibold flex items-center justify-between shadow-2xs">
+                                    <span className="truncate">
+                                        {filteredCategories[0].category_name}
+                                        {filteredCategories[0].sub_category_name ? ` — ${filteredCategories[0].sub_category_name}` : ''}
+                                    </span>
+                                    <span className="text-[10px] font-bold text-[#587e85] dark:text-[#7ba9b1] bg-[#587e85]/10 px-2 py-0.5 rounded-md border border-[#587e85]/20 shrink-0">
+                                        Selected
+                                    </span>
+                                </div>
+                            ) : (
+                                <select
+                                    value={categoryId}
+                                    onChange={(e) => setCategoryId(e.target.value)}
+                                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-xs font-semibold focus:ring-2 focus:ring-indigo-500 outline-none cursor-pointer"
+                                    required
+                                >
+                                    <option value="">-- Select Category Option --</option>
+                                    {filteredCategories.map((cat) => (
+                                        <option key={cat.id} value={cat.id}>
+                                            {cat.category_name}{cat.sub_category_name ? ` — ${cat.sub_category_name}` : ''}
+                                        </option>
+                                    ))}
+                                </select>
+                            )}
                         </div>
 
                         {/* Subject */}
@@ -295,40 +338,22 @@ export default function TicketCreateModal({ isOpen, onClose, onSuccess, orgId, u
                             />
                         </div>
 
-                        {/* Priority & Document File Upload */}
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                            <div>
-                                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                                    Priority Level
-                                </label>
-                                <select
-                                    value={priority}
-                                    onChange={(e) => setPriority(e.target.value)}
-                                    className="w-full px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-xs focus:ring-2 focus:ring-indigo-500 outline-none"
-                                >
-                                    <option value="low">Low Priority</option>
-                                    <option value="medium">Medium Priority</option>
-                                    <option value="high">High Priority</option>
-                                    <option value="critical">Critical / Urgent</option>
-                                </select>
-                            </div>
-
-                            <div>
-                                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                                    Attach Documents / Screenshots
-                                </label>
-                                <label className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 text-xs font-semibold cursor-pointer transition-colors">
-                                    <Paperclip className="w-4 h-4 text-[#587e85]" />
-                                    <span>{uploadingFile ? 'Uploading file...' : 'Choose File(s) to Attach'}</span>
-                                    <input
-                                        type="file"
-                                        multiple
-                                        onChange={handleFileUpload}
-                                        disabled={uploadingFile}
-                                        className="hidden"
-                                    />
-                                </label>
-                            </div>
+                        {/* Document File Upload */}
+                        <div>
+                            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                                Attach Documents / Screenshots
+                            </label>
+                            <label className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 text-xs font-semibold cursor-pointer transition-colors">
+                                <Paperclip className="w-4 h-4 text-[#587e85]" />
+                                <span>{uploadingFile ? 'Uploading file...' : 'Choose File(s) to Attach'}</span>
+                                <input
+                                    type="file"
+                                    multiple
+                                    onChange={handleFileUpload}
+                                    disabled={uploadingFile}
+                                    className="hidden"
+                                />
+                            </label>
                         </div>
 
                         {/* Attachments List */}

@@ -17,7 +17,8 @@ export interface Toast {
  *  - moves a card OPTIMISTICALLY: the UI changes at once, and snaps back with a message if the server refuses
  *  - adds / assigns tasks
  */
-export function useWorkspace(date: string, departmentName: string) {
+/** `date` … `to`: the days shown (owner 2026-10-15: a range of up to 31 days; `to` = `date` for one day). */
+export function useWorkspace(date: string, departmentName: string, to: string = date) {
     const [ws, setWs] = useState<Workspace | null>(null);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
@@ -39,7 +40,7 @@ export function useWorkspace(date: string, departmentName: string) {
     const load = useCallback(async () => {
         if (wsRef.current) setRefreshing(true); else setLoading(true);
         try {
-            const res = await fetch(`/api/task-manager/workspace?date=${date}&department=${encodeURIComponent(departmentName)}`);
+            const res = await fetch(`/api/task-manager/workspace?from=${date}&to=${to}&department=${encodeURIComponent(departmentName)}`);
             const data = await res.json();
             if (!res.ok || !data.success) throw new Error(data.error || 'Could not load tasks');
             setWs(data.workspace);
@@ -50,7 +51,7 @@ export function useWorkspace(date: string, departmentName: string) {
             setLoading(false);
             setRefreshing(false);
         }
-    }, [date, departmentName]);
+    }, [date, to, departmentName]);
 
     useEffect(() => { load(); }, [load]);
 
@@ -96,6 +97,49 @@ export function useWorkspace(date: string, departmentName: string) {
         }
     }, [load, post, toast]);
 
+    /** Gives one of MY tasks to a teammate. Not optimistic: the server checks the rules, then the board reloads. */
+    const giveTask = useCallback(async (taskId: string, targetUserId: string, toName: string) => {
+        try {
+            await post({ action: 'hand_over', taskId, targetUserId });
+            toast('success', `Given to ${toName}`);
+            await load();
+            return true;
+        } catch (err) {
+            toast('error', messageOf(err, 'Could not give that task'));
+            load(); // the board may be out of date (e.g. the task just changed)
+            return false;
+        }
+    }, [load, post, toast]);
+
+    /** Deletes a task for good. No confirmation by design; the server checks who may do it, then the board reloads. */
+    const deleteTask = useCallback(async (taskId: string) => {
+        try {
+            await post({ action: 'delete_task', taskId });
+            toast('success', 'Task deleted');
+            await load();
+            return true;
+        } catch (err) {
+            toast('error', messageOf(err, 'Could not delete that task'));
+            load();
+            return false;
+        }
+    }, [load, post, toast]);
+
+    /** Locks (comes back every working day) or unlocks one of MY tasks. The screen changes at once and snaps back if the server refuses. */
+    const setLocked = useCallback(async (taskId: string, locked: boolean) => {
+        const before = wsRef.current;
+        if (!before || before.state !== 'ok') return;
+        setWs({ ...before, tasks: before.tasks.map(t => (t.id === taskId ? { ...t, locked } : t)) });
+        try {
+            await post({ action: 'set_locked', taskId, locked });
+            toast('success', locked ? 'Locked. This task comes back every working day.' : 'Unlocked. It will not come back.');
+            load();
+        } catch (err) {
+            setWs(before);
+            toast('error', messageOf(err, 'Could not change that task'));
+        }
+    }, [load, post, toast]);
+
     const ok: WorkspaceOk | null = ws && ws.state === 'ok' ? ws : null;
-    return { ws, ok, loading, refreshing, error, toasts, dismissToast, reload: load, moveTask, addTask };
+    return { ws, ok, loading, refreshing, error, toasts, dismissToast, reload: load, moveTask, addTask, giveTask, deleteTask, setLocked };
 }

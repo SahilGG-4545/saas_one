@@ -1,3 +1,5 @@
+import { usesBulkApprovalSummary, siteVendorQuotation } from '@/backend/lib/procurement/requisition-approval.mjs';
+import { requisitionNotes, batchWhatsAppOptions } from '@/backend/lib/procurement/requisition-approval.mjs';
 import { supabaseAdmin } from '@/backend/lib/supabase/admin';
 import { WhatsAppRecipientResolver, ResolvedWhatsAppUser } from '@/backend/services/WhatsAppRecipientResolver';
 import { WhatsAppQueueService } from '@/backend/services/WhatsAppQueueService';
@@ -5,6 +7,7 @@ import { PettyCashNotificationService } from '@/backend/services/PettyCashNotifi
 import { sanitizeWhatsAppParam, sanitizeWhatsAppParams } from '@/backend/lib/whatsapp/sanitize';
 
 interface DispatchOptions {
+    durableBatch?: boolean;
     featureKey: string;
     templateEventKey: string;
     organizationId: string;
@@ -134,6 +137,12 @@ export const WhatsAppEventProcessor = {
             case 'ROOM_BOOKING_CANCELLED':
                 await this.handleMeetingRoomEvent(payload, true);
                 break;
+            case 'MEETING_ROOM_START_REMINDER':
+                await this.handleMeetingRoomReminderEvent(payload, 'start', payload.remaining_minutes || 10);
+                break;
+            case 'MEETING_ROOM_END_REMINDER':
+                await this.handleMeetingRoomReminderEvent(payload, 'end', payload.remaining_minutes || 10);
+                break;
 
             // Procurement & Materials
             case 'MATERIAL_REQUEST_CREATED':
@@ -154,6 +163,9 @@ export const WhatsAppEventProcessor = {
             case 'REQUISITION_UPLOADED':
             case 'MONTHLY_REQUISITION_UPLOADED':
                 await this.handleRequisitionUploaded(payload);
+                break;
+            case 'REQUISITION_APPROVAL_BATCH_REQUESTED':
+                await this.handleRequisitionApprovalBatchRequested(payload);
                 break;
             case 'REQUISITION_APPROVAL_REQUESTED':
                 await this.handleRequisitionApprovalRequested(payload);
@@ -279,6 +291,7 @@ export const WhatsAppEventProcessor = {
             organizationId,
             propertyId,
             featureKey,
+            strictReads: options.durableBatch,
             contextualUsers: contextualUserIds ? {
                 assigneeId: contextualUserIds.assigneeId,
                 requesterId: contextualUserIds.requesterId,
@@ -304,10 +317,12 @@ export const WhatsAppEventProcessor = {
 
         const missingIds = contextualIds.filter(id => !userMap.has(id));
         if (missingIds.length > 0) {
-            const { data: contextualUsers } = await supabaseAdmin
+            const { data: contextualUsers, error: contextualError } = await supabaseAdmin
                 .from('users')
                 .select('id, phone, full_name')
                 .in('id', missingIds);
+
+            if (contextualError && options.durableBatch) throw contextualError;
 
             const needEmpPhone = (contextualUsers || []).filter((u: any) => !u?.phone || !String(u.phone).trim() || String(u.phone).trim().toLowerCase() === 'n/a');
             const empPhoneMap = new Map<string, string>();
@@ -331,7 +346,6 @@ export const WhatsAppEventProcessor = {
                     : empPhoneMap.get(u.id);
                 if (phone) {
                     userMap.set(u.id, { id: u.id, phone, name: u.full_name || null });
-                }
             });
         }
 
@@ -354,12 +368,13 @@ export const WhatsAppEventProcessor = {
         }
 
         // Read the org's template map
-        const { data: orgData } = await supabaseAdmin
+        const { data: orgData, error: templateError } = await supabaseAdmin
             .from('organization_settings')
             .select('whatsapp_templates')
             .eq('organization_id', organizationId)
             .maybeSingle();
 
+        if (templateError && options.durableBatch) throw templateError;
         const templatesMap = (orgData as any)?.whatsapp_templates || {};
 
         const DEFAULT_TEMPLATES: Record<string, { campaign_name: string; params: string[] }> = {
@@ -369,7 +384,11 @@ export const WhatsAppEventProcessor = {
             requisition_status_updated: { campaign_name: 'requisition_status_updated_v1', params: ['user_name', 'property', 'month', 'year', 'status', 'approver_name', 'total_amount', 'remarks'] },
             requisition_po_issued: { campaign_name: 'requisition_po_issued_v1', params: ['user_name', 'month', 'year', 'property', 'vendor_name', 'po_number', 'total_amount'] },
             meeting_room_booked: { campaign_name: 'meeting_room_booked_v3', params: ['user_name', 'room_name', 'property', 'date', 'start_time', 'end_time', 'booker', 'booker_phone'] },
+            meeting_room_booked_v4: { campaign_name: 'meeting_room_booked_v4', params: ['user_name', 'room_name', 'property', 'date', 'start_time', 'end_time', 'booker', 'booker_phone'] },
+            meeting_room_booked_v3: { campaign_name: 'meeting_room_booked_v3', params: ['user_name', 'room_name', 'property', 'date', 'start_time', 'end_time', 'booker', 'booker_phone'] },
             meeting_room_cancelled: { campaign_name: 'meeting_room_cancelled_v2', params: ['user_name', 'room_name', 'property', 'date', 'start_time', 'end_time', 'booker'] },
+            meeting_room_start_reminder: { campaign_name: 'meeting_room_start_reminder_v1', params: ['user_name', 'room_name', 'property', 'remaining_minutes', 'start_time'] },
+            meeting_room_end_reminder: { campaign_name: 'meeting_room_end_reminder_v1', params: ['user_name', 'room_name', 'property', 'remaining_minutes', 'end_time'] },
             lead_created: { campaign_name: 'crm_lead_created_v1', params: ['user_name', 'company_name', 'contact_person', 'phone', 'source', 'property_interest'] },
             crm_lead_created: { campaign_name: 'crm_lead_created_v1', params: ['user_name', 'company_name', 'contact_person', 'phone', 'source', 'property_interest'] },
             lead_assigned: { campaign_name: 'crm_lead_assigned_v1', params: ['user_name', 'company_name', 'contact_person', 'phone', 'property_interest', 'next_followup'] },
@@ -451,11 +470,17 @@ export const WhatsAppEventProcessor = {
             'requisition_po_issued_v1': ['user_name', 'month', 'year', 'property', 'vendor_name', 'po_number', 'total_amount'],
             'requisition_po_issued': ['user_name', 'month', 'year', 'property', 'vendor_name', 'po_number', 'total_amount'],
 
+            'meeting_room_booked_v4': ['user_name', 'room_name', 'property', 'date', 'start_time', 'end_time', 'booker', 'booker_phone'],
             'meeting_room_booked_v3': ['user_name', 'room_name', 'property', 'date', 'start_time', 'end_time', 'booker', 'booker_phone'],
             'meeting_room_booked': ['user_name', 'room_name', 'property', 'date', 'start_time', 'end_time', 'booker', 'booker_phone'],
 
             'meeting_room_cancelled_v2': ['user_name', 'room_name', 'property', 'date', 'start_time', 'end_time', 'booker'],
             'meeting_room_cancelled': ['user_name', 'room_name', 'property', 'date', 'start_time', 'end_time', 'booker'],
+
+            'meeting_room_start_reminder_v1': ['user_name', 'room_name', 'property', 'remaining_minutes', 'start_time'],
+            'meeting_room_start_reminder': ['user_name', 'room_name', 'property', 'remaining_minutes', 'start_time'],
+            'meeting_room_end_reminder_v1': ['user_name', 'room_name', 'property', 'remaining_minutes', 'end_time'],
+            'meeting_room_end_reminder': ['user_name', 'room_name', 'property', 'remaining_minutes', 'end_time'],
 
             'crm_lead_created_v1': ['user_name', 'company_name', 'contact_person', 'phone', 'source', 'property_interest'],
             'lead_created': ['user_name', 'company_name', 'contact_person', 'phone', 'source', 'property_interest'],
@@ -582,8 +607,31 @@ export const WhatsAppEventProcessor = {
         const effectiveMediaUrl = isMediaTemplate ? (options.mediaUrl || undefined) : undefined;
         const effectiveMediaType = isMediaTemplate ? options.mediaType : undefined;
 
+        // For meeting room bookings:
+        // - Booker / Requester receives v4 template (hospitality notice without staff refreshment directive)
+        // - Staff roles AND specific added users (+ Add user...) receive v3 template (staff operational directive: "Please ensure facilities and refreshments are arranged")
+        const isMeetingRoomBooked = templateEventKey === 'meeting_room_booked';
+        const requesterId = (isMeetingRoomBooked && contextualUserIds?.requesterId)
+            ? String(contextualUserIds.requesterId).trim()
+            : null;
+
         // Dispatch per recipient to personalize `user_name` / `approver_name` with recipient's actual name
         for (const recipient of recipients) {
+            let recipientTemplateName = template.campaign_name;
+            let currentParamKeys = paramKeys;
+
+            if (isMeetingRoomBooked) {
+                const isRequester = Boolean(requesterId && recipient.id === requesterId);
+                if (isRequester) {
+                    // Only the actual booker/requester receives v4
+                    recipientTemplateName = templatesMap['meeting_room_booked_v4']?.campaign_name || 'meeting_room_booked_v4';
+                } else {
+                    // Staff, property admins, and specific added users (+ Add user...) receive v3
+                    recipientTemplateName = templatesMap['meeting_room_booked_v3']?.campaign_name || templatesMap['meeting_room_booked']?.campaign_name || 'meeting_room_booked_v3';
+                }
+                currentParamKeys = CANONICAL_CAMPAIGN_PARAMS[recipientTemplateName] || paramKeys;
+            }
+
             const recipientName = recipient.name?.trim() || paramValues['user_name'] || 'Team';
 
             const recipientParamValues: Record<string, string> = {
@@ -592,7 +640,7 @@ export const WhatsAppEventProcessor = {
                 approver_name: recipient.name?.trim() || paramValues['approver_name'] || 'Approver'
             };
 
-            const orderedParams: string[] = paramKeys.map((key: string) => {
+            const orderedParams: string[] = currentParamKeys.map((key: string) => {
                 let value = recipientParamValues[key];
                 // Resolve aliases if direct key is empty
                 if (value === undefined || value === null || String(value).trim() === '') {
@@ -613,11 +661,12 @@ export const WhatsAppEventProcessor = {
                 eventType: templateEventKey.toUpperCase(),
                 organizationId,
                 propertyId: propertyId || undefined,
-                templateName: template.campaign_name,
+                templateName: recipientTemplateName,
                 templateParams: orderedParams,
                 entityId: entityId || undefined,
                 mediaUrl: effectiveMediaUrl,
-                mediaType: effectiveMediaType
+                mediaType: effectiveMediaType,
+                durableBatch: options.durableBatch
             });
         }
     },
@@ -802,12 +851,111 @@ export const WhatsAppEventProcessor = {
             ? `Meeting room cancelled: ${roomName} on ${formattedDate} at ${formattedStartTime}`
             : `Meeting room booked: ${roomName} at ${property.name} on ${formattedDate} (${formattedStartTime} - ${formattedEndTime}) by ${booker.name}`;
 
+        // Resolve any attendee emails into user IDs so custom invited users receive the v4 template
+        let attendeeEmail = payload.attendee_email;
+        if (!attendeeEmail && payload.id) {
+            const { data: bookingRow } = await supabaseAdmin
+                .from('meeting_room_bookings')
+                .select('attendee_email')
+                .eq('id', payload.id)
+                .maybeSingle();
+            if (bookingRow?.attendee_email) {
+                attendeeEmail = bookingRow.attendee_email;
+            }
+        }
+
+        const extraUserIds: string[] = [];
+        if (attendeeEmail) {
+            const emails = String(attendeeEmail)
+                .split(/[,;]+/)
+                .map(e => e.trim().toLowerCase())
+                .filter(e => e.includes('@'));
+            if (emails.length > 0) {
+                const { data: attendeeUsers } = await supabaseAdmin
+                    .from('users')
+                    .select('id')
+                    .in('email', emails);
+                if (attendeeUsers && attendeeUsers.length > 0) {
+                    extraUserIds.push(...attendeeUsers.map((u: any) => u.id));
+                }
+            }
+        }
+
         await this.dispatch({
             featureKey: isCancellation ? 'meeting_room_cancelled' : 'meeting_room_booked',
             templateEventKey: isCancellation ? 'meeting_room_cancelled' : 'meeting_room_booked',
             organizationId: property.organization_id,
             propertyId,
             entityId: payload.id,
+            contextualUserIds: { requesterId: payload.user_id, extraUserIds },
+            paramValues,
+            summaryMessage
+        });
+    },
+
+    async handleMeetingRoomReminderEvent(payload: any, reminderType: 'start' | 'end', remainingMinutes: number): Promise<void> {
+        const bookingId = payload.id;
+        const meetingRoomId = payload.meeting_room_id;
+        const propertyId = payload.property_id;
+
+        const { data: property } = await supabaseAdmin
+            .from('properties')
+            .select('id, name, organization_id')
+            .eq('id', propertyId)
+            .maybeSingle();
+
+        if (!property?.organization_id) return;
+
+        const { data: room } = await supabaseAdmin
+            .from('meeting_rooms')
+            .select('name')
+            .eq('id', meetingRoomId)
+            .maybeSingle();
+
+        const roomName = room?.name || 'Meeting Room';
+        const booker = await this.getUserDetails(payload.user_id);
+
+        const formatTime = (timeStr: string) => {
+            if (!timeStr) return '';
+            const [hours, minutes] = timeStr.split(':');
+            let h = parseInt(hours, 10);
+            const ampm = h >= 12 ? 'PM' : 'AM';
+            h = h % 12;
+            h = h ? h : 12;
+            return `${h.toString().padStart(2, '0')}:${minutes} ${ampm}`;
+        };
+
+        const formattedDate = payload.booking_date
+            ? payload.booking_date.split('-').reverse().join('/')
+            : '';
+        const formattedStartTime = formatTime(payload.start_time);
+        const formattedEndTime = formatTime(payload.end_time);
+
+        const isEnd = reminderType === 'end';
+        const featureKey = isEnd ? 'meeting_room_end_reminder' : 'meeting_room_start_reminder';
+
+        const paramValues: Record<string, string> = {
+            user_name: '', // Injected per recipient
+            room_name: roomName,
+            property: property.name || 'Property',
+            remaining_minutes: String(remainingMinutes || 10),
+            start_time: formattedStartTime,
+            end_time: formattedEndTime,
+            date: formattedDate,
+            booker: booker.name,
+            booker_phone: booker.phone || 'N/A'
+        };
+
+        const summaryMessage = isEnd
+            ? `Meeting room ending soon: ${roomName} in ${remainingMinutes} mins (ends at ${formattedEndTime})`
+            : `Upcoming meeting reminder: ${roomName} begins in ${remainingMinutes} mins (starts at ${formattedStartTime})`;
+
+        await this.dispatch({
+            featureKey,
+            templateEventKey: featureKey,
+            organizationId: property.organization_id,
+            propertyId,
+            entityId: bookingId,
             contextualUserIds: { requesterId: payload.user_id },
             paramValues,
             summaryMessage
@@ -1188,21 +1336,35 @@ export const WhatsAppEventProcessor = {
         });
     },
 
+    async handleRequisitionApprovalBatchRequested(payload: any) {
+        const { data: records, error } = await supabaseAdmin.from('property_monthly_requisitions')
+            .select('*,property:properties!property_id(id,name)').eq('organization_id', payload.organization_id)
+            .in('id', payload.requisition_ids);
+        if (error) throw error;
+        const saved = (records || []).filter(record =>
+            requisitionNotes(record).vendor_quotation?.batch_id === payload.batch_id);
+        if (!saved.length) return;
+        await this.dispatch(batchWhatsAppOptions(saved, payload));
+    },
+
     async handleRequisitionApprovalRequested(payload: any): Promise<void> {
         let { organization_id, property_id, requisition_month, requisition_year, target_approver_id, vendor_name, total_final_amount, vendor_notes } = payload;
         let isOverBudget = !!payload.is_over_budget;
         let overBudgetAmount = Number(payload.over_budget_amount) || 0;
         let budgetLimit = Number(payload.budget_limit) || 0;
 
+        if (usesBulkApprovalSummary({ notes: payload.notes })) return;
         if (payload.requisition_id) {
             try {
-                const { data: req } = await supabaseAdmin
+                const { data: req, error: hydrateError } = await supabaseAdmin
                     .from('property_monthly_requisitions')
-                    .select('notes, floor_tag, property_id, organization_id, requisition_month, requisition_year, is_over_budget, budget_limit, over_budget_amount')
+                    .select('notes, total_estimated_amount, floor_tag, property_id, organization_id, requisition_month, requisition_year, is_over_budget, budget_limit, over_budget_amount')
                     .eq('id', payload.requisition_id)
                     .maybeSingle();
 
+                if (hydrateError) throw hydrateError;
                 if (req) {
+                    if (usesBulkApprovalSummary(req)) return;
                     if (!organization_id) organization_id = req.organization_id;
                     if (!property_id) property_id = req.property_id;
                     if (!requisition_month) requisition_month = req.requisition_month;
@@ -1220,10 +1382,11 @@ export const WhatsAppEventProcessor = {
                         } catch {}
                     }
 
-                    if (parsedNotes?.vendor_quotation) {
-                        if (!vendor_name) vendor_name = parsedNotes.vendor_quotation.vendor_name;
-                        if (!total_final_amount) total_final_amount = parsedNotes.vendor_quotation.total_quoted_amount;
-                        if (!vendor_notes) vendor_notes = parsedNotes.vendor_quotation.notes;
+                    const siteQuote = siteVendorQuotation(req);
+                    if (siteQuote) {
+                        if (!vendor_name) vendor_name = siteQuote.vendor_name;
+                        if (siteQuote.is_bulk || !total_final_amount) total_final_amount = siteQuote.total_quoted_amount;
+                        if (!vendor_notes) vendor_notes = siteQuote.notes;
                     }
                     if (parsedNotes?.approver_info && !target_approver_id) {
                         target_approver_id = parsedNotes.approver_info.id;
@@ -1233,6 +1396,7 @@ export const WhatsAppEventProcessor = {
                 }
             } catch (err) {
                 console.warn('[Requisition Approval Hydrate Error]:', err);
+                throw err;
             }
         }
 

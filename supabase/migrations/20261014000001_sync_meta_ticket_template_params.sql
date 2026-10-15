@@ -3,7 +3,7 @@
 -- DESCRIPTION: Synchronizes organization_settings.whatsapp_templates JSONB map
 --              with live approved Meta / AiSensy campaign parameters for ticketing suite:
 --              1. ticket_created_v3: 10 params (9 body + dynamic CTA ticket_id)
---              2. ticket_created_v3_media: 10 params (photo header + 9 body + dynamic CTA ticket_id)
+--              2. ticket_created_v3_media: 9 params (photo header + 9 body parameters)
 --              3. ticket_assigned_v1: 7 params (body parameters only, no CTA param)
 --              4. ticket_completed_v1: 5 params (body parameters only, no CTA button)
 --              5. ticket_completed_v1_media: 5 params (after-photo header + 5 body parameters)
