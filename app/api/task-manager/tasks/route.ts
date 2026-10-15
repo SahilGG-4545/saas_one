@@ -129,7 +129,9 @@ export async function GET(request: NextRequest) {
             templates,
             date,
             from,
-            to
+            to,
+            // "All time" or a busy range: only the newest 500 are listed (the screen says so).
+            truncated: (rawTasks || []).length >= 500
         });
     } catch (err: any) {
         if (err instanceof PermissionDeniedError) {

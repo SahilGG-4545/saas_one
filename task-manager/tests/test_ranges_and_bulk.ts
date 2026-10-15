@@ -85,6 +85,18 @@ async function run() {
     const week = parseRange(q({ from: '2026-10-09', to: '2026-10-15' })) as any;
     check('from / to → that range', week.ok && week.from === '2026-10-09' && week.to === '2026-10-15' && spanDays(week.from, week.to) === 7);
     check('a 31-day range is fine; 32 days is refused', parseRange(q({ from: '2026-09-15', to: '2026-10-15' })).ok && !parseRange(q({ from: '2026-09-14', to: '2026-10-15' })).ok && MAX_RANGE_DAYS === 31);
+    const all = parseRange(q({ from: '2000-01-01', to: '2026-10-15' })) as any;
+    check('"All time" is the one range allowed past 31 days', all.ok && all.from === '2000-01-01');
+    const P0 = await import('../../frontend/components/task-manager/DateRangePicker');
+    check('the picker: "All time" keeps its start (no 31-day trim) and is labelled "All time"', P0.clampRange({ from: P0.ALL_TIME_FROM, to: '2026-10-15' }).from === '2000-01-01' && P0.rangeLabel({ from: P0.ALL_TIME_FROM, to: '2026-10-15' }) === 'All time' && /<option value="all">All time<\/option>/.test(read('frontend/components/task-manager/DateRangePicker.tsx')));
+    const pickerSrc = read('frontend/components/task-manager/DateRangePicker.tsx');
+    check('"Custom" is not a menu choice; the from / to boxes always sit beside it ("Custom dates" is only shown)', !/<option value="custom">Custom<\/option>/.test(pickerSrc) && /<option value="custom" disabled hidden>Custom dates<\/option>/.test(pickerSrc) && !/compact/.test(pickerSrc));
+    check('typing a "from" date from All time → that day plus 30 days (never past today)', JSON.stringify(P0.editRange({ from: P0.ALL_TIME_FROM, to: '2026-10-15' }, 'from', '2026-09-01')) === '{"from":"2026-09-01","to":"2026-10-01"}');
+    check('typing a "to" date from All time → 30 days before it', JSON.stringify(P0.editRange({ from: P0.ALL_TIME_FROM, to: '2026-10-15' }, 'to', '2026-10-15')) === '{"from":"2026-09-15","to":"2026-10-15"}');
+    check('the typed date wins; the other box moves to keep at most 31 days', JSON.stringify(P0.editRange({ from: '2026-10-01', to: '2026-10-10' }, 'from', '2026-08-01')) === '{"from":"2026-08-01","to":"2026-08-31"}' && JSON.stringify(P0.editRange({ from: '2026-10-01', to: '2026-10-10' }, 'to', '2026-09-20')) === '{"from":"2026-08-21","to":"2026-09-20"}');
+    const tadSrc = read('frontend/components/task-manager/TaskAssignmentDashboard.tsx');
+    check('status is one dropdown with All / Pending / Done / Carry forward, filtered on screen', /<option value="carried">Carry forward \(\{carriedCount\}\)<\/option>/.test(tadSrc) && /statusFilter === 'carried' && !t\.is_carried_forward/.test(tadSrc) && !/params\.set\('status'/.test(tadSrc));
+    check('the left Staff list follows the page department; the Assign window has its own list', /selectedDeptId !== 'all'\) \{\s*list = employees\.filter\(e => e\.department_id === selectedDeptId\)/.test(read('frontend/components/task-manager/TaskAssignmentDashboard.tsx')) && /modalAssignees\.map/.test(read('frontend/components/task-manager/TaskAssignmentDashboard.tsx')));
     check('backwards or broken dates are refused', !parseRange(q({ from: '2026-10-16', to: '2026-10-15' })).ok && !parseRange(q({ from: '15-10-2026', to: '2026-10-15' })).ok);
     const P = await import('../../frontend/components/task-manager/DateRangePicker');
     check('the picker keeps a range valid: swaps a backwards range, trims to 31 days', JSON.stringify(P.clampRange({ from: '2026-10-15', to: '2026-10-10' })) === '{"from":"2026-10-10","to":"2026-10-15"}' && P.clampRange({ from: '2026-08-01', to: '2026-10-15' }).from === '2026-09-15');
@@ -99,7 +111,7 @@ async function run() {
     console.log('\n5. Screens');
     const tad = read('frontend/components/task-manager/TaskAssignmentDashboard.tsx'), ptab = read('frontend/components/procurement/ProcurementTasksTab.tsx'), con = read('frontend/components/task-manager/ConsoleTasks.tsx');
     check('Assign & monitor opens with no intro animation (no timed steps, no replay on refresh)', /const animationStep = 5;/.test(tad) && !/setAnimationStep/.test(tad) && !/setTimeout\(\(\) => setAnimationStep/.test(tad));
-    check('the range picker sits beside All / Pending / Done', /date range beside All \/ Pending \/ Done[\s\S]{0,120}<DateRangePicker/.test(tad));
+    check('the range picker sits beside All / Pending / Done', /date range beside the status dropdown[\s\S]{0,120}<DateRangePicker/.test(tad));
     check('carry-forward tasks show under their own heading with "from <day>"', /Carry forward — unfinished from earlier days/.test(tad) && /`from \$\{rangeLabel/.test(tad));
     check('the Assign window has a Department filter (superuser) and its own date', /id="assign-dept"/.test(tad) && /All departments/.test(tad) && /id="assign-date"/.test(tad) && /assignedDate: assignDate/.test(tad));
     check('department Tasks tab and My tasks have the range picker', /<DateRangePicker value=\{range\}/.test(ptab) && /<DateRangePicker value=\{c\.range\}/.test(con) && /scope=console&from=/.test(con));

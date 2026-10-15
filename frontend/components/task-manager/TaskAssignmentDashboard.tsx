@@ -156,7 +156,8 @@ export default function TaskAssignmentDashboard({
     // Filters
     const [selectedDeptId, setSelectedDeptId] = useState<string>('all');
     const [selectedEmployeeId, setSelectedEmployeeId] = useState<string>('all');
-    const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'completed'>('all');
+    // Owner 2026-10-15: one dropdown — All / Pending / Done / Carry forward. Filtered on screen, so the counts never change.
+    const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'completed' | 'carried'>('all');
     const [searchQuery, setSearchQuery] = useState('');
     // Owner 2026-10-15: a date RANGE (at most 31 days) instead of one day.
     const [range, setRange] = useState<DateRange>(todayRange());
@@ -175,6 +176,7 @@ export default function TaskAssignmentDashboard({
     const [assignDeptId, setAssignDeptId] = useState<string>('all');
     const [assignDate, setAssignDate] = useState<string>(localDay());
     const [allAssignable, setAllAssignable] = useState<Employee[]>([]);
+    const [truncated, setTruncated] = useState(false);   // "All time" / a busy range: only the newest 500 are listed
     const [isSubmittingAssign, setIsSubmittingAssign] = useState(false);
 
     // Form: Create Template
@@ -203,10 +205,6 @@ export default function TaskAssignmentDashboard({
             if (selectedEmployeeId && selectedEmployeeId !== 'all') {
                 params.set('employeeId', selectedEmployeeId);
             }
-            if (statusFilter !== 'all') {
-                params.set('status', statusFilter);
-            }
-
             // Fire both requests in parallel — previously sequential (tasks first, then progress)
             const [res, progRes] = await Promise.all([
                 fetch(`/api/task-manager/tasks?${params.toString()}`),
@@ -223,6 +221,7 @@ export default function TaskAssignmentDashboard({
             setDepartments(data.departments || []);
             setEmployees(data.employees || []);
             setAllAssignable(data.assignableEmployees || data.employees || []);
+            setTruncated(!!data.truncated);
             setTasks(data.tasks || []);
             setTemplates(data.templates || []);
             hasInitialLoadedRef.current = true;
@@ -254,7 +253,7 @@ export default function TaskAssignmentDashboard({
 
     useEffect(() => {
         fetchData();
-    }, [actorId, rangeQuery, selectedDeptId, selectedEmployeeId, statusFilter]);
+    }, [actorId, rangeQuery, selectedDeptId, selectedEmployeeId]);
 
     // Realtime Postgres change subscription for live updates (e.g. WhatsApp completions)
     useEffect(() => {
@@ -270,10 +269,31 @@ export default function TaskAssignmentDashboard({
         return () => {
             supabase.removeChannel(channel);
         };
-    }, [actorId, rangeQuery, selectedDeptId, selectedEmployeeId, statusFilter]);
+    }, [actorId, rangeQuery, selectedDeptId, selectedEmployeeId]);
 
-    // Derived: Employees available for task assignment
+    const uniqueById = (list: Employee[]) => {
+        const seen = new Set<string>();
+        return list.filter(e => {
+            if (!e.id || seen.has(e.id)) return false;
+            seen.add(e.id);
+            return true;
+        });
+    };
+
+    // Derived: the Staff list on the left — follows the page's department filter (as before)
     const assignableEmployees = useMemo(() => {
+        if (!actor) return [];
+        let list = employees;
+        if (actor.role === 'reporting_manager') {
+            list = employees.filter(e => e.department_id === actor.department_id);
+        } else if (actor.role === 'superuser' && selectedDeptId !== 'all') {
+            list = employees.filter(e => e.department_id === selectedDeptId);
+        }
+        return uniqueById(list);
+    }, [employees, actor, selectedDeptId]);
+
+    // Derived: the Assignee list in the Assign window — follows the window's OWN department filter (owner 2026-10-15)
+    const modalAssignees = useMemo(() => {
         if (!actor) return [];
         let list = allAssignable.length ? allAssignable : employees;
         if (actor.role === 'reporting_manager') {
@@ -281,12 +301,7 @@ export default function TaskAssignmentDashboard({
         } else if (actor.role === 'superuser' && assignDeptId !== 'all') {
             list = list.filter(e => e.department_id === assignDeptId);
         }
-        const seen = new Set<string>();
-        return list.filter(e => {
-            if (!e.id || seen.has(e.id)) return false;
-            seen.add(e.id);
-            return true;
-        });
+        return uniqueById(list);
     }, [employees, allAssignable, actor, assignDeptId]);
 
     /** Open the Assign window: department = the one being viewed, date = the day shown (today when several days are shown). */
@@ -506,6 +521,9 @@ export default function TaskAssignmentDashboard({
             if (statusFilter === 'completed' && t.status !== 'completed') {
                 return false;
             }
+            if (statusFilter === 'carried' && !t.is_carried_forward) {
+                return false;
+            }
             // Search query filter
             if (searchQuery) {
                 const match = t.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -633,6 +651,7 @@ export default function TaskAssignmentDashboard({
     const totalTasks = departmentTasks.length;
     const completedCount = departmentTasks.filter(t => t.status === 'completed').length;
     const pendingCount = departmentTasks.filter(t => t.status === 'pending' || t.status === 'in_progress').length;
+    const carriedCount = departmentTasks.filter(t => t.is_carried_forward).length;
     const completionRate = totalTasks > 0 ? Math.round((completedCount / totalTasks) * 100) : 0;
 
     // Count-up animated values for stat cards (rolls smoothly in Step 2: animationStep >= 2)
@@ -1117,39 +1136,20 @@ export default function TaskAssignmentDashboard({
                     <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl px-2.5 py-1.5 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
                         <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
                             <Filter className="w-3 h-3 text-zinc-400 flex-shrink-0" />
-                            {/* Status tab switcher */}
-                            <div className="flex bg-zinc-100 dark:bg-zinc-800 p-0.5 rounded-lg gap-0.5">
-                                {([
-                                    { key: 'all' as const, label: 'All', count: departmentTasks.length },
-                                    { key: 'pending' as const, label: 'Pending', count: pendingCount },
-                                    { key: 'completed' as const, label: 'Done', count: completedCount },
-                                ]).map(tab => (
-                                    <button
-                                        key={tab.key}
-                                        onClick={() => setStatusFilter(tab.key)}
-                                        className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold transition-all duration-150 active:scale-95 ${
-                                            statusFilter === tab.key
-                                                ? 'bg-white dark:bg-zinc-700 text-zinc-900 dark:text-zinc-100 shadow-xs'
-                                                : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200'
-                                        }`}
-                                    >
-                                        {tab.label}
-                                        {tab.count > 0 && (
-                                            <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded-full ${
-                                                statusFilter === tab.key
-                                                    ? tab.key === 'completed' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
-                                                    : tab.key === 'pending' ? 'bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300'
-                                                    : 'bg-indigo-100 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300'
-                                                    : 'bg-zinc-200/80 dark:bg-zinc-700 text-zinc-500 dark:text-zinc-400'
-                                            }`}>
-                                                {tab.count}
-                                            </span>
-                                        )}
-                                    </button>
-                                ))}
-                            </div>
-                            {/* Owner 2026-10-15: date range beside All / Pending / Done */}
-                            <DateRangePicker value={range} onChange={setRange} compact />
+                            {/* Owner 2026-10-15: status as one dropdown, with a Carry forward choice */}
+                            <select
+                                aria-label="Show tasks"
+                                value={statusFilter}
+                                onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)}
+                                className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg px-2 py-1 text-xs font-semibold text-zinc-800 dark:text-zinc-100 shadow-xs focus:outline-none focus:ring-2 focus:ring-indigo-500/30 cursor-pointer"
+                            >
+                                <option value="all">All ({departmentTasks.length})</option>
+                                <option value="pending">Pending ({pendingCount})</option>
+                                <option value="completed">Done ({completedCount})</option>
+                                <option value="carried">Carry forward ({carriedCount})</option>
+                            </select>
+                            {/* Owner 2026-10-15: date range beside the status dropdown */}
+                            <DateRangePicker value={range} onChange={setRange} />
                         </div>
 
                         {/* Search input */}
@@ -1352,6 +1352,10 @@ export default function TaskAssignmentDashboard({
                         </div>
                     )}
 
+                    {truncated && (
+                        <p className="text-center text-[11px] text-zinc-500">Showing the newest 500 tasks. Pick a shorter date range to see older ones.</p>
+                    )}
+
                     {/* Syncing indicator */}
                     {refreshing && !loading && (
                         <div className="flex items-center justify-center gap-2 py-3 text-xs text-zinc-400">
@@ -1424,8 +1428,8 @@ export default function TaskAssignmentDashboard({
                                     required
                                     className="w-full bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-xl px-3 py-2.5 text-sm text-zinc-900 dark:text-zinc-100 font-medium focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-400 focus:outline-none transition-all"
                                 >
-                                    {assignableEmployees.length === 0 && <option value="">No one in this department</option>}
-                                    {assignableEmployees.map(emp => (
+                                    {modalAssignees.length === 0 && <option value="">No one in this department</option>}
+                                    {modalAssignees.map(emp => (
                                         <option key={emp.id} value={emp.id}>
                                             {emp.name} — {emp.department_name || 'Staff'}
                                         </option>

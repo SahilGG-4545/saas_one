@@ -233,7 +233,7 @@ export function ConsoleTasksView({ c }: { c: ConsoleState }) {
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                     {/* Owner 2026-10-15: date range */}
-                    <DateRangePicker value={c.range} onChange={c.setRange} compact className="rounded-xl py-2" />
+                    <DateRangePicker value={c.range} onChange={c.setRange} className="rounded-xl py-2" />
                     <DepartmentSelect id="console-dept" value={dept} departments={data.departments} onChange={setDept} allLabel="All departments" />
                     <button type="button" onClick={c.reload} disabled={c.refreshing} aria-label="Refresh" className="rounded-xl border border-zinc-200 bg-white p-2.5 text-zinc-500 hover:text-zinc-800 disabled:opacity-60 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:text-zinc-200">
                         {c.refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}

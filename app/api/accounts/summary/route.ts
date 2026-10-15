@@ -149,6 +149,17 @@ export async function GET(request: NextRequest) {
     const win = resolveWindow(period, sp.get('from'), sp.get('to'));
     if ('error' in win) return NextResponse.json({ error: win.error }, { status: 400 });
 
+    // Critical flags (read below) don't depend on the POs or payments: start that read now so it runs alongside them
+    // (performance plan Phase 4). Its errors are still swallowed where it is awaited, exactly as before.
+    const flaggedRequest = fetchAll<{ po_id: string }>(() =>
+        supabaseAdmin
+            .from('po_workflow_state')
+            .select('po_id')
+            .eq('organization_id', access.organizationId)
+            .eq('is_critical', true)
+            .order('po_id', { ascending: true }));
+    flaggedRequest.catch(() => { /* handled when awaited below */ });
+
     let pos: PoRow[];
     let payments: PayRow[];
     try {
@@ -183,13 +194,7 @@ export async function GET(request: NextRequest) {
     // Read defensively — the overview must still render if that migration hasn't run.
     const critical = new Set<string>();
     try {
-        const flagged = await fetchAll<{ po_id: string }>(() =>
-            supabaseAdmin
-                .from('po_workflow_state')
-                .select('po_id')
-                .eq('organization_id', access.organizationId)
-                .eq('is_critical', true)
-                .order('po_id', { ascending: true }));
+        const flagged = await flaggedRequest;
         for (const r of flagged) critical.add(r.po_id);
     } catch {
         // no-op: criticality is a sort hint here, never a required input

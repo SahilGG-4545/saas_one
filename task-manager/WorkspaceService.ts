@@ -1,5 +1,6 @@
 import { supabaseAdmin } from '@/backend/lib/supabase/admin';
 import { CARRY_LOOKBACK_DAYS, TaskDatabaseService, carryDaysOf } from './TaskDatabaseService';
+import { ALL_TIME_FROM } from './dateRange';
 import { TaskAccessService } from './TaskAccessService';
 import { PermissionService } from './PermissionService';
 import { HierarchyService } from './HierarchyService';
@@ -95,7 +96,7 @@ export interface ConsoleResponse {
 // window the bot and the messages use — no longer a fixed 14 days here.
 const CONSOLE_DONE_DAYS = 7;
 const MAX_RANGE = 31;
-const spanOk = (from: string, to: string) => from <= to && (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000 < MAX_RANGE;
+const spanOk = (from: string, to: string) => from <= to && (from === ALL_TIME_FROM || (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000 < MAX_RANGE);
 
 export function todayIST(): string {
     const ist = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
@@ -184,7 +185,8 @@ export class WorkspaceService {
         if (ids.length > 0) {
             const select = 'id, title, description, employee_id, assigned_date, status, created_at, task_template_id';
             const [today, carried] = await Promise.all([
-                supabaseAdmin.from('task_assignments').select(select).in('employee_id', ids).gte('assigned_date', date).lte('assigned_date', to),
+                supabaseAdmin.from('task_assignments').select(select).in('employee_id', ids).gte('assigned_date', date).lte('assigned_date', to)
+                    .order('assigned_date', { ascending: false }).limit(1000),   // "All time": the newest 1,000
                 supabaseAdmin.from('task_assignments').select(select).in('employee_id', ids)
                     .lt('assigned_date', date).gte('assigned_date', addDays(date, -CARRY_LOOKBACK_DAYS)).neq('status', 'completed'),
             ]);
