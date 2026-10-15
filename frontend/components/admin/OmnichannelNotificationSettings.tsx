@@ -492,7 +492,7 @@ const MODULES_META: ModuleMeta[] = [
             {
                 key: 'meeting_room_booked',
                 name: 'Meeting Room Booked',
-                description: 'Sent to selected staff/admins and the booking requester when a room is booked.',
+                description: 'Staff, admin roles & added users receive v3 (facility & refreshment prep). Booker/requester receives v4 (guest welcome).',
                 hasContextual: { requester: true }
             },
             {

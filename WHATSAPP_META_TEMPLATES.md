@@ -995,7 +995,43 @@ Keep up the great work in maintaining site standards!
 
 ## 7. Meeting Room Reservations
 
-### Template 17: `meeting_room_booked_v3`
+### Template 17: `meeting_room_booked_v4` (Recommended)
+- **Template Name:** `meeting_room_booked_v4`
+- **Category:** `UTILITY`
+- **Language:** `English (en)`
+- **Header:** `Text` &rarr; `Meeting Room Booking Notice 📅`
+- **Body:**
+```text
+Hello {{1}},
+
+A meeting room reservation has been confirmed.
+
+🚪 Room: {{2}}
+🏢 Property: {{3}}
+📅 Date: {{4}}
+⏰ Time: {{5}} to {{6}}
+👥 Booked By: {{7}} (📞 {{8}})
+
+We look forward to hosting your meeting. Please contact the front desk if you require any assistance.
+```
+- **Footer:** `AutoPilot Hospitality`
+- **Button Type:** `Quick Reply` &rarr; `View Bookings`
+- **Parameters (8):**
+  - `{{1}}`: `user_name` (e.g. `Bhavin` or `Front Desk Team`)
+  - `{{2}}`: `room_name` (e.g. `Executive Boardroom (12 Pax)`)
+  - `{{3}}`: `property` (e.g. `Mafatlal Chambers`)
+  - `{{4}}`: `date` (e.g. `15/10/2026`)
+  - `{{5}}`: `start_time` (e.g. `11:30 AM`)
+  - `{{6}}`: `end_time` (e.g. `12:00 PM`)
+  - `{{7}}`: `booker` (e.g. `Bhavin`)
+  - `{{8}}`: `booker_phone` (e.g. `+91 99676 67347`)
+
+- **Audience:** Dispatched automatically to the **Requester / Booker** (client).
+- **Note:** Contains the polite guest greeting: *"We look forward to hosting your meeting. Please contact the front desk if you require any assistance."*
+
+---
+
+### Template 17 (Staff / Ops & Added Users): `meeting_room_booked_v3`
 - **Template Name:** `meeting_room_booked_v3`
 - **Category:** `UTILITY`
 - **Language:** `English (en)`
@@ -1016,15 +1052,8 @@ Please ensure facilities and refreshments are arranged if requested.
 ```
 - **Footer:** `AutoPilot Hospitality`
 - **Button Type:** `Quick Reply` &rarr; `View Bookings`
-- **Sample Values:**
-  - `{{1}}`: `Front Desk Team`
-  - `{{2}}`: `Executive Boardroom (12 Pax)`
-  - `{{3}}`: `WorkSquare Hub 1`
-  - `{{4}}`: `19/08/2026`
-  - `{{5}}`: `03:00 PM`
-  - `{{6}}`: `04:30 PM`
-  - `{{7}}`: `Pooja Verma (Design Co)`
-  - `{{8}}`: `+91 98200 54321`
+- **Audience:** Dispatched automatically to the **Operations Team / Staff / Property Admins (`roles`)** AND **Specific Individual Users (`+ Add user...`)** to prepare facilities and refreshments.
+- **Note:** Contains the operational directive: *"Please ensure facilities and refreshments are arranged if requested."* to instruct on-site staff to prep the room.
 
 ---
 

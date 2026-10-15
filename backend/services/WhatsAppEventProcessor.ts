@@ -363,6 +363,8 @@ export const WhatsAppEventProcessor = {
             requisition_status_updated: { campaign_name: 'requisition_status_updated_v1', params: ['user_name', 'property', 'month', 'year', 'status', 'approver_name', 'total_amount', 'remarks'] },
             requisition_po_issued: { campaign_name: 'requisition_po_issued_v1', params: ['user_name', 'month', 'year', 'property', 'vendor_name', 'po_number', 'total_amount'] },
             meeting_room_booked: { campaign_name: 'meeting_room_booked_v3', params: ['user_name', 'room_name', 'property', 'date', 'start_time', 'end_time', 'booker', 'booker_phone'] },
+            meeting_room_booked_v4: { campaign_name: 'meeting_room_booked_v4', params: ['user_name', 'room_name', 'property', 'date', 'start_time', 'end_time', 'booker', 'booker_phone'] },
+            meeting_room_booked_v3: { campaign_name: 'meeting_room_booked_v3', params: ['user_name', 'room_name', 'property', 'date', 'start_time', 'end_time', 'booker', 'booker_phone'] },
             meeting_room_cancelled: { campaign_name: 'meeting_room_cancelled_v2', params: ['user_name', 'room_name', 'property', 'date', 'start_time', 'end_time', 'booker'] },
             meeting_room_start_reminder: { campaign_name: 'meeting_room_start_reminder_v1', params: ['user_name', 'room_name', 'property', 'remaining_minutes', 'start_time'] },
             meeting_room_end_reminder: { campaign_name: 'meeting_room_end_reminder_v1', params: ['user_name', 'room_name', 'property', 'remaining_minutes', 'end_time'] },
@@ -447,6 +449,7 @@ export const WhatsAppEventProcessor = {
             'requisition_po_issued_v1': ['user_name', 'month', 'year', 'property', 'vendor_name', 'po_number', 'total_amount'],
             'requisition_po_issued': ['user_name', 'month', 'year', 'property', 'vendor_name', 'po_number', 'total_amount'],
 
+            'meeting_room_booked_v4': ['user_name', 'room_name', 'property', 'date', 'start_time', 'end_time', 'booker', 'booker_phone'],
             'meeting_room_booked_v3': ['user_name', 'room_name', 'property', 'date', 'start_time', 'end_time', 'booker', 'booker_phone'],
             'meeting_room_booked': ['user_name', 'room_name', 'property', 'date', 'start_time', 'end_time', 'booker', 'booker_phone'],
 
@@ -583,8 +586,31 @@ export const WhatsAppEventProcessor = {
         const effectiveMediaUrl = isMediaTemplate ? (options.mediaUrl || undefined) : undefined;
         const effectiveMediaType = isMediaTemplate ? options.mediaType : undefined;
 
+        // For meeting room bookings:
+        // - Booker / Requester receives v4 template (hospitality notice without staff refreshment directive)
+        // - Staff roles AND specific added users (+ Add user...) receive v3 template (staff operational directive: "Please ensure facilities and refreshments are arranged")
+        const isMeetingRoomBooked = templateEventKey === 'meeting_room_booked';
+        const requesterId = (isMeetingRoomBooked && contextualUserIds?.requesterId)
+            ? String(contextualUserIds.requesterId).trim()
+            : null;
+
         // Dispatch per recipient to personalize `user_name` / `approver_name` with recipient's actual name
         for (const recipient of recipients) {
+            let recipientTemplateName = template.campaign_name;
+            let currentParamKeys = paramKeys;
+
+            if (isMeetingRoomBooked) {
+                const isRequester = Boolean(requesterId && recipient.id === requesterId);
+                if (isRequester) {
+                    // Only the actual booker/requester receives v4
+                    recipientTemplateName = templatesMap['meeting_room_booked_v4']?.campaign_name || 'meeting_room_booked_v4';
+                } else {
+                    // Staff, property admins, and specific added users (+ Add user...) receive v3
+                    recipientTemplateName = templatesMap['meeting_room_booked_v3']?.campaign_name || templatesMap['meeting_room_booked']?.campaign_name || 'meeting_room_booked_v3';
+                }
+                currentParamKeys = CANONICAL_CAMPAIGN_PARAMS[recipientTemplateName] || paramKeys;
+            }
+
             const recipientName = recipient.name?.trim() || paramValues['user_name'] || 'Team';
 
             const recipientParamValues: Record<string, string> = {
@@ -593,7 +619,7 @@ export const WhatsAppEventProcessor = {
                 approver_name: recipient.name?.trim() || paramValues['approver_name'] || 'Approver'
             };
 
-            const orderedParams: string[] = paramKeys.map((key: string) => {
+            const orderedParams: string[] = currentParamKeys.map((key: string) => {
                 let value = recipientParamValues[key];
                 // Resolve aliases if direct key is empty
                 if (value === undefined || value === null || value === '') {
@@ -614,7 +640,7 @@ export const WhatsAppEventProcessor = {
                 eventType: templateEventKey.toUpperCase(),
                 organizationId,
                 propertyId: propertyId || undefined,
-                templateName: template.campaign_name,
+                templateName: recipientTemplateName,
                 templateParams: orderedParams,
                 entityId: entityId || undefined,
                 mediaUrl: effectiveMediaUrl,
@@ -819,13 +845,43 @@ export const WhatsAppEventProcessor = {
             ? `Meeting room cancelled: ${roomName} on ${formattedDate} at ${formattedStartTime}`
             : `Meeting room booked: ${roomName} at ${property.name} on ${formattedDate} (${formattedStartTime} - ${formattedEndTime}) by ${booker.name}`;
 
+        // Resolve any attendee emails into user IDs so custom invited users receive the v4 template
+        let attendeeEmail = payload.attendee_email;
+        if (!attendeeEmail && payload.id) {
+            const { data: bookingRow } = await supabaseAdmin
+                .from('meeting_room_bookings')
+                .select('attendee_email')
+                .eq('id', payload.id)
+                .maybeSingle();
+            if (bookingRow?.attendee_email) {
+                attendeeEmail = bookingRow.attendee_email;
+            }
+        }
+
+        const extraUserIds: string[] = [];
+        if (attendeeEmail) {
+            const emails = String(attendeeEmail)
+                .split(/[,;]+/)
+                .map(e => e.trim().toLowerCase())
+                .filter(e => e.includes('@'));
+            if (emails.length > 0) {
+                const { data: attendeeUsers } = await supabaseAdmin
+                    .from('users')
+                    .select('id')
+                    .in('email', emails);
+                if (attendeeUsers && attendeeUsers.length > 0) {
+                    extraUserIds.push(...attendeeUsers.map((u: any) => u.id));
+                }
+            }
+        }
+
         await this.dispatch({
             featureKey: isCancellation ? 'meeting_room_cancelled' : 'meeting_room_booked',
             templateEventKey: isCancellation ? 'meeting_room_cancelled' : 'meeting_room_booked',
             organizationId: property.organization_id,
             propertyId,
             entityId: payload.id,
-            contextualUserIds: { requesterId: payload.user_id },
+            contextualUserIds: { requesterId: payload.user_id, extraUserIds },
             paramValues,
             summaryMessage
         });
