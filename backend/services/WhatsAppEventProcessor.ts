@@ -447,6 +447,7 @@ export const WhatsAppEventProcessor = {
             'requisition_po_issued_v1': ['user_name', 'month', 'year', 'property', 'vendor_name', 'po_number', 'total_amount'],
             'requisition_po_issued': ['user_name', 'month', 'year', 'property', 'vendor_name', 'po_number', 'total_amount'],
 
+            'meeting_room_booked_v4': ['user_name', 'room_name', 'property', 'date', 'start_time', 'end_time', 'booker', 'booker_phone'],
             'meeting_room_booked_v3': ['user_name', 'room_name', 'property', 'date', 'start_time', 'end_time', 'booker', 'booker_phone'],
             'meeting_room_booked': ['user_name', 'room_name', 'property', 'date', 'start_time', 'end_time', 'booker', 'booker_phone'],
 

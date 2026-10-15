@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { X, Send, Loader2, CheckCircle, AlertCircle, Camera, Image as ImageIcon, Video, Play, Pause, AtSign } from 'lucide-react';
+import { X, Send, Loader2, CheckCircle, AlertCircle, Camera, Image as ImageIcon, Video, Play, Pause, AtSign, Search } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { createClient } from '@/frontend/utils/supabase/client';
 import { playTickleSound } from '@/frontend/utils/sounds';
@@ -56,8 +56,11 @@ export default function TicketCreateModal({
 
     // @mention state
     const textareaRef = useRef<HTMLTextAreaElement>(null);
-    const [propertyUsers, setPropertyUsers] = useState<{ id: string; full_name: string; role?: string }[]>([]);
+    const mentionDropdownRef = useRef<HTMLDivElement>(null);
+    const [propertyUsers, setPropertyUsers] = useState<{ id: string; full_name: string; role?: string; designation?: string; email?: string }[]>([]);
+    const [isLoadingUsers, setIsLoadingUsers] = useState(false);
     const [mentionQuery, setMentionQuery] = useState('');
+    const [mentionSearch, setMentionSearch] = useState('');
     const [mentionStartIndex, setMentionStartIndex] = useState(-1);
     const [showMentionDropdown, setShowMentionDropdown] = useState(false);
     const [taggedUser, setTaggedUser] = useState<{ id: string; full_name: string } | null>(null);
@@ -68,22 +71,52 @@ export default function TicketCreateModal({
         }
     }, [properties]);
 
-    // Fetch property users for @mention
+    // Fetch property users for @mention via backend API
     useEffect(() => {
         const pid = isAdminMode ? selectedPropId : propertyId;
-        if (!pid) return;
-        supabase
-            .from('property_memberships')
-            .select('user:users(id, full_name), role')
-            .eq('property_id', pid)
-            .eq('is_active', true)
-            .then(({ data }) => {
-                const users = (data || [])
-                    .map((m: any) => ({ id: m.user?.id, full_name: m.user?.full_name, role: m.role }))
-                    .filter((u: any) => u.id && u.full_name);
-                setPropertyUsers(users);
+        const oid = isAdminMode ? selectedOrgId : organizationId;
+        if (!pid && !oid) {
+            setPropertyUsers([]);
+            return;
+        }
+
+        let isMounted = true;
+        setIsLoadingUsers(true);
+        const params = new URLSearchParams();
+        if (pid) params.append('propertyId', pid);
+        if (oid) params.append('organizationId', oid);
+
+        fetch(`/api/tickets/mention-users?${params.toString()}`)
+            .then(res => res.json())
+            .then(data => {
+                if (isMounted && data.users) {
+                    setPropertyUsers(data.users);
+                }
+            })
+            .catch(err => console.error('Failed to load mention users:', err))
+            .finally(() => {
+                if (isMounted) setIsLoadingUsers(false);
             });
-    }, [propertyId, selectedPropId]);
+
+        return () => { isMounted = false; };
+    }, [propertyId, selectedPropId, organizationId, selectedOrgId, isAdminMode]);
+
+    // Close mention dropdown when clicking outside
+    useEffect(() => {
+        const handleClickOutside = (e: MouseEvent) => {
+            if (
+                mentionDropdownRef.current &&
+                !mentionDropdownRef.current.contains(e.target as Node) &&
+                textareaRef.current &&
+                !textareaRef.current.contains(e.target as Node)
+            ) {
+                setShowMentionDropdown(false);
+                setMentionSearch('');
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
 
     const handleOrgChange = async (orgId: string) => {
         setSelectedOrgId(orgId);
@@ -125,17 +158,26 @@ export default function TicketCreateModal({
     };
 
     const handleMentionSelect = (user: { id: string; full_name: string }) => {
-        const before = description.slice(0, mentionStartIndex);
-        const after = description.slice(mentionStartIndex + 1 + mentionQuery.length);
-        setDescription(`${before}@${user.full_name} ${after}`);
+        const atIdx = mentionStartIndex >= 0 ? mentionStartIndex : description.lastIndexOf('@');
+        const queryLen = mentionQuery.length;
+        const before = atIdx >= 0 ? description.slice(0, atIdx) : description;
+        const after = atIdx >= 0 ? description.slice(atIdx + 1 + queryLen) : '';
+        setDescription(`${before}@${user.full_name} ${after}`.trimStart());
         setTaggedUser(user);
         setShowMentionDropdown(false);
         setMentionQuery('');
+        setMentionSearch('');
         setTimeout(() => textareaRef.current?.focus(), 0);
     };
 
-    const filteredMentionUsers = mentionQuery
-        ? propertyUsers.filter(u => u.full_name.toLowerCase().includes(mentionQuery.toLowerCase()))
+    const activeFilter = (mentionSearch || mentionQuery).trim().toLowerCase();
+    const filteredMentionUsers = activeFilter
+        ? propertyUsers.filter(u =>
+            u.full_name.toLowerCase().includes(activeFilter) ||
+            (u.role && u.role.toLowerCase().includes(activeFilter)) ||
+            (u.designation && u.designation.toLowerCase().includes(activeFilter)) ||
+            (u.email && u.email.toLowerCase().includes(activeFilter))
+          )
         : propertyUsers;
 
     const handleSubmit = async () => {
@@ -291,9 +333,33 @@ export default function TicketCreateModal({
 
                                 {/* Description */}
                                 <div>
-                                    <label className="text-sm font-bold text-slate-700 mb-2 block">
-                                        Description
-                                        <span className="ml-2 text-xs font-normal text-slate-400">type @ to assign someone</span>
+                                    <label className="text-sm font-bold text-slate-700 mb-2 flex items-center justify-between">
+                                        <span>
+                                            Description
+                                            <span className="ml-2 text-xs font-normal text-slate-400">type @ to assign someone</span>
+                                        </span>
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                if (!showMentionDropdown) {
+                                                    const cursor = textareaRef.current?.selectionStart ?? description.length;
+                                                    const newDesc = description.slice(0, cursor) + '@' + description.slice(cursor);
+                                                    setDescription(newDesc);
+                                                    setMentionStartIndex(cursor);
+                                                    setMentionQuery('');
+                                                    setMentionSearch('');
+                                                    setShowMentionDropdown(true);
+                                                    setTimeout(() => textareaRef.current?.focus(), 0);
+                                                } else {
+                                                    setShowMentionDropdown(false);
+                                                    setMentionSearch('');
+                                                }
+                                            }}
+                                            className="inline-flex items-center gap-1 text-xs font-semibold text-primary hover:text-primary-focus transition-colors px-2 py-0.5 rounded-md hover:bg-primary/5"
+                                        >
+                                            <AtSign className="w-3.5 h-3.5" />
+                                            <span>Mention / Assign</span>
+                                        </button>
                                     </label>
                                     <div className="relative">
                                         <textarea
@@ -303,6 +369,7 @@ export default function TicketCreateModal({
                                             onKeyDown={(e) => {
                                                 if (showMentionDropdown && e.key === 'Escape') {
                                                     setShowMentionDropdown(false);
+                                                    setMentionSearch('');
                                                     e.preventDefault();
                                                 }
                                             }}
@@ -311,30 +378,97 @@ export default function TicketCreateModal({
                                         />
 
                                         {/* @mention dropdown */}
-                                        {showMentionDropdown && filteredMentionUsers.length > 0 && (
-                                            <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-slate-200 rounded-xl shadow-xl z-50 max-h-48 overflow-y-auto">
-                                                <div className="px-3 py-2 border-b border-slate-100 flex items-center gap-1.5">
-                                                    <AtSign className="w-3 h-3 text-primary" />
-                                                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Assign to</span>
-                                                </div>
-                                                {filteredMentionUsers.map(user => (
+                                        {showMentionDropdown && (
+                                            <div
+                                                ref={mentionDropdownRef}
+                                                className="absolute left-0 right-0 top-full mt-1 bg-white border border-slate-200 rounded-xl shadow-xl z-50 overflow-hidden flex flex-col max-h-64 animate-in fade-in zoom-in-95 duration-100"
+                                            >
+                                                {/* Dropdown Header */}
+                                                <div className="px-3 py-2 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+                                                    <div className="flex items-center gap-1.5">
+                                                        <AtSign className="w-3.5 h-3.5 text-primary" />
+                                                        <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wider">Assign to user</span>
+                                                        <span className="text-[10px] text-slate-400">({filteredMentionUsers.length})</span>
+                                                    </div>
                                                     <button
-                                                        key={user.id}
                                                         type="button"
-                                                        onMouseDown={(e) => { e.preventDefault(); handleMentionSelect(user); }}
-                                                        className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-slate-50 transition-colors text-left"
+                                                        onClick={() => {
+                                                            setShowMentionDropdown(false);
+                                                            setMentionSearch('');
+                                                        }}
+                                                        className="text-slate-400 hover:text-slate-600 p-0.5 rounded"
                                                     >
-                                                        <div className="w-7 h-7 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
-                                                            <span className="text-[10px] font-bold text-primary">
-                                                                {user.full_name.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase()}
-                                                            </span>
-                                                        </div>
-                                                        <div>
-                                                            <p className="text-sm font-semibold text-slate-900">{user.full_name}</p>
-                                                            {user.role && <p className="text-[10px] text-slate-400 capitalize">{user.role.replace(/_/g, ' ')}</p>}
-                                                        </div>
+                                                        <X className="w-3.5 h-3.5" />
                                                     </button>
-                                                ))}
+                                                </div>
+
+                                                {/* Search Input */}
+                                                <div className="p-2 border-b border-slate-100 bg-white">
+                                                    <div className="relative">
+                                                        <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                                                        <input
+                                                            type="text"
+                                                            value={mentionSearch}
+                                                            onChange={(e) => setMentionSearch(e.target.value)}
+                                                            placeholder="Search name or role..."
+                                                            className="w-full pl-8 pr-7 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-primary focus:bg-white transition-all"
+                                                            autoFocus
+                                                        />
+                                                        {mentionSearch && (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => setMentionSearch('')}
+                                                                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                                                            >
+                                                                <X className="w-3 h-3" />
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                </div>
+
+                                                {/* User List */}
+                                                <div className="overflow-y-auto max-h-48 divide-y divide-slate-50">
+                                                    {isLoadingUsers ? (
+                                                        <div className="p-4 flex items-center justify-center gap-2 text-xs text-slate-500">
+                                                            <Loader2 className="w-4 h-4 animate-spin text-primary" />
+                                                            <span>Loading users...</span>
+                                                        </div>
+                                                    ) : filteredMentionUsers.length === 0 ? (
+                                                        <div className="p-4 text-center text-xs text-slate-400">
+                                                            {activeFilter ? (
+                                                                <>No users matching &ldquo;{activeFilter}&rdquo;</>
+                                                            ) : (
+                                                                <>No users available for assignment</>
+                                                            )}
+                                                        </div>
+                                                    ) : (
+                                                        filteredMentionUsers.map(user => (
+                                                            <button
+                                                                key={user.id}
+                                                                type="button"
+                                                                onMouseDown={(e) => { e.preventDefault(); handleMentionSelect(user); }}
+                                                                className="w-full flex items-center justify-between px-3 py-2 hover:bg-slate-50 transition-colors text-left"
+                                                            >
+                                                                <div className="flex items-center gap-2.5 min-w-0">
+                                                                    <div className="w-7 h-7 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
+                                                                        <span className="text-[10px] font-bold text-primary">
+                                                                            {user.full_name.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase()}
+                                                                        </span>
+                                                                    </div>
+                                                                    <div className="min-w-0">
+                                                                        <p className="text-xs font-semibold text-slate-900 truncate">{user.full_name}</p>
+                                                                        {user.email && <p className="text-[10px] text-slate-400 truncate">{user.email}</p>}
+                                                                    </div>
+                                                                </div>
+                                                                {user.role && (
+                                                                    <span className="text-[10px] font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full capitalize flex-shrink-0 ml-2">
+                                                                        {user.role.replace(/_/g, ' ')}
+                                                                    </span>
+                                                                )}
+                                                            </button>
+                                                        ))
+                                                    )}
+                                                </div>
                                             </div>
                                         )}
                                     </div>
