@@ -346,6 +346,7 @@ export const WhatsAppEventProcessor = {
                     : empPhoneMap.get(u.id);
                 if (phone) {
                     userMap.set(u.id, { id: u.id, phone, name: u.full_name || null });
+                }
             });
         }
 
