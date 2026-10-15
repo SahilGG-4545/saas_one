@@ -28,7 +28,8 @@ const TenantRoomBooking: React.FC<TenantRoomBookingProps> = ({ propertyId, user,
     };
     
     const roomsCacheKey = `rooms-avail-${propertyId}-${formatLocalDate(selectedDate)}-${selectedCapacity}`;
-    const historyCacheKey = `tenant-bookings-${user?.id}`;
+    // HR/CRM (creditFree) see only their own bookings at this property, so cache them apart
+    const historyCacheKey = creditFree ? `tenant-bookings-${user?.id}-${propertyId}-mine` : `tenant-bookings-${user?.id}`;
     const creditCacheKey = `tenant-credits-${propertyId}-${user?.id}`;
     
     const [rooms, setRooms] = useState<any[]>(() => getCachedData(roomsCacheKey) || []);
@@ -86,11 +87,14 @@ const TenantRoomBooking: React.FC<TenantRoomBookingProps> = ({ propertyId, user,
     const [historyTab, setHistoryTab] = useState<'bookings' | 'requests'>('bookings');
 
     const fetchMyBookings = useCallback(async () => {
-        if (!propertyId) return;
+        if (!propertyId || (creditFree && !user?.id)) return;
         setIsLoadingHistory(true);
         try {
-            // Fetch ALL room bookings for the property so security and staff see everyone's bookings
-            const url = `/api/meeting-room-bookings?propertyId=${propertyId}`;
+            // Fetch ALL room bookings for the property so security and staff see everyone's bookings.
+            // HR/CRM users only see the bookings they made themselves.
+            const url = creditFree
+                ? `/api/meeting-room-bookings?propertyId=${propertyId}&tenantId=${user.id}`
+                : `/api/meeting-room-bookings?propertyId=${propertyId}`;
             const res = await fetch(url);
             const data = await res.json();
             if (res.ok) {
@@ -103,7 +107,7 @@ const TenantRoomBooking: React.FC<TenantRoomBookingProps> = ({ propertyId, user,
         } finally {
             setIsLoadingHistory(false);
         }
-    }, [propertyId]);
+    }, [propertyId, creditFree, user?.id, historyCacheKey]);
 
     const handleDeleteBooking = async (bookingId: string) => {
         if (!confirm(creditFree ? 'Cancel this booking?' : 'Cancel this booking? Your credits will be refunded.')) return;
@@ -291,6 +295,82 @@ const TenantRoomBooking: React.FC<TenantRoomBookingProps> = ({ propertyId, user,
             setIsBooking(false);
         }
     };
+
+    // One card per booking, with a Cancel button for upcoming ones
+    const renderMyBookingCards = () => (
+        myBookings.map((booking) => {
+            const cleanDate = String(booking.booking_date).split('T')[0];
+            const [y, m, d] = cleanDate.split('-').map(Number);
+            const [sh, smin] = String(booking.start_time).split(':').map(Number);
+            const bookingStartUtc = Date.UTC(y, m - 1, d, sh - 5, smin - 30);
+            const isPast = !isNaN(bookingStartUtc) && bookingStartUtc <= Date.now();
+            const isCancelled = booking.status === 'cancelled';
+            const statusColor = isCancelled
+                ? 'bg-rose-50 text-rose-600 border border-rose-100'
+                : isPast
+                    ? 'bg-slate-100 text-slate-500'
+                    : booking.status === 'confirmed'
+                        ? 'bg-emerald-50 text-emerald-600 border border-emerald-100'
+                        : 'bg-amber-50 text-amber-600 border border-amber-100';
+
+            const formatTime = (t: string) => {
+                const [h, m] = t.split(':').map(Number);
+                const ampm = h >= 12 ? 'PM' : 'AM';
+                const h12 = h % 12 || 12;
+                return `${h12.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')} ${ampm}`;
+            };
+
+            return (
+                <div key={booking.id} className={`p-4 rounded-xl border transition-all ${isCancelled ? 'border-rose-100 bg-rose-50/20' : isPast ? 'border-border bg-muted/30 opacity-70' : 'border-border bg-white shadow-sm'}`}>
+                    <div className="flex items-start justify-between gap-3">
+                        <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-1.5">
+                                <p className="font-bold text-foreground text-sm truncate">{booking.meeting_room?.name || 'Meeting Room'}</p>
+                                <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider ${statusColor}`}>
+                                    {isCancelled ? 'Cancelled' : isPast ? 'Past' : booking.status}
+                                </span>
+                            </div>
+                            <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                                <span className="flex items-center gap-1">
+                                    <Calendar className="w-3 h-3" />
+                                    {new Date(booking.booking_date + 'T00:00:00').toLocaleDateString('en-GB')}
+                                </span>
+                                <span className="flex items-center gap-1">
+                                    <Clock className="w-3 h-3" />
+                                    {formatTime(booking.start_time)} – {formatTime(booking.end_time)}
+                                </span>
+                            </div>
+                            {booking.meeting_room?.location && (
+                                <p className="text-[11px] text-muted-foreground mt-1 truncate">{booking.meeting_room.location}</p>
+                            )}
+                            {booking.attendee_email && (
+                                <p className="text-xs text-primary/80 font-medium mt-1">
+                                    Invited: <span className="font-semibold">{booking.attendee_email}</span>
+                                </p>
+                            )}
+                            {booking.comment && (
+                                <p className="text-xs text-foreground mt-2 italic bg-muted/30 p-2 rounded-lg border border-border">"{booking.comment}"</p>
+                            )}
+                            <p className="text-[9px] font-black text-primary/70 uppercase tracking-widest mt-2">
+                                Booked at: {new Date(booking.created_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                            </p>
+                        </div>
+                        {!isPast && !isCancelled && (
+                            <button
+                                onClick={() => handleDeleteBooking(booking.id)}
+                                disabled={deletingId === booking.id}
+                                className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold text-xs transition-all border border-rose-100 hover:border-rose-200 cursor-pointer disabled:opacity-50 flex-shrink-0"
+                                title="Cancel booking"
+                            >
+                                {deletingId === booking.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                                <span>Cancel</span>
+                            </button>
+                        )}
+                    </div>
+                </div>
+            );
+        })
+    );
 
     return (
         <>
@@ -491,6 +571,26 @@ const TenantRoomBooking: React.FC<TenantRoomBookingProps> = ({ propertyId, user,
                             )}
                         </div>
                     </>
+                ) : creditFree ? (
+                    /* HR/CRM: only the bookings this user made */
+                    <div className="space-y-3">
+                        {isLoadingHistory && myBookings.length === 0 ? (
+                            <div className="flex flex-col items-center justify-center py-12">
+                                <Loader2 className="w-8 h-8 text-primary animate-spin mb-3" />
+                                <p className="text-muted-foreground text-xs font-bold uppercase tracking-widest">Loading bookings...</p>
+                            </div>
+                        ) : myBookings.length === 0 ? (
+                            <div className="flex flex-col items-center justify-center py-12 text-center">
+                                <div className="w-14 h-14 bg-muted rounded-full flex items-center justify-center mb-3">
+                                    <Calendar className="w-6 h-6 text-muted-foreground" />
+                                </div>
+                                <p className="font-bold text-foreground text-sm">No bookings yet</p>
+                                <p className="text-muted-foreground text-xs mt-1">Rooms you book at this property will appear here</p>
+                            </div>
+                        ) : (
+                            renderMyBookingCards()
+                        )}
+                    </div>
                 ) : (
                     /* Bookings View */
                     <AdminBookingList propertyId={propertyId} />
@@ -742,78 +842,7 @@ const TenantRoomBooking: React.FC<TenantRoomBookingProps> = ({ propertyId, user,
                                     </div>
                                 ) : historyTab === 'bookings' ? (
                                     <>
-                                        {myBookings.map((booking) => {
-                                            const cleanDate = String(booking.booking_date).split('T')[0];
-                                            const [y, m, d] = cleanDate.split('-').map(Number);
-                                            const [sh, smin] = String(booking.start_time).split(':').map(Number);
-                                            const bookingStartUtc = Date.UTC(y, m - 1, d, sh - 5, smin - 30);
-                                            const isPast = !isNaN(bookingStartUtc) && bookingStartUtc <= Date.now();
-                                            const isCancelled = booking.status === 'cancelled';
-                                            const statusColor = isCancelled
-                                                ? 'bg-rose-50 text-rose-600 border border-rose-100'
-                                                : isPast
-                                                    ? 'bg-slate-100 text-slate-500'
-                                                    : booking.status === 'confirmed'
-                                                        ? 'bg-emerald-50 text-emerald-600 border border-emerald-100'
-                                                        : 'bg-amber-50 text-amber-600 border border-amber-100';
-
-                                            const formatTime = (t: string) => {
-                                                const [h, m] = t.split(':').map(Number);
-                                                const ampm = h >= 12 ? 'PM' : 'AM';
-                                                const h12 = h % 12 || 12;
-                                                return `${h12.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')} ${ampm}`;
-                                            };
-
-                                            return (
-                                                <div key={booking.id} className={`p-4 rounded-xl border transition-all ${isCancelled ? 'border-rose-100 bg-rose-50/20' : isPast ? 'border-border bg-muted/30 opacity-70' : 'border-border bg-white shadow-sm'}`}>
-                                                    <div className="flex items-start justify-between gap-3">
-                                                        <div className="flex-1 min-w-0">
-                                                            <div className="flex items-center gap-2 mb-1.5">
-                                                                <p className="font-bold text-foreground text-sm truncate">{booking.meeting_room?.name || 'Meeting Room'}</p>
-                                                                <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider ${statusColor}`}>
-                                                                    {isCancelled ? 'Cancelled' : isPast ? 'Past' : booking.status}
-                                                                </span>
-                                                            </div>
-                                                            <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                                                                <span className="flex items-center gap-1">
-                                                                    <Calendar className="w-3 h-3" />
-                                                                    {new Date(booking.booking_date + 'T00:00:00').toLocaleDateString('en-GB')}
-                                                                </span>
-                                                                <span className="flex items-center gap-1">
-                                                                    <Clock className="w-3 h-3" />
-                                                                    {formatTime(booking.start_time)} – {formatTime(booking.end_time)}
-                                                                </span>
-                                                            </div>
-                                                            {booking.meeting_room?.location && (
-                                                                <p className="text-[11px] text-muted-foreground mt-1 truncate">{booking.meeting_room.location}</p>
-                                                            )}
-                                                            {booking.attendee_email && (
-                                                                <p className="text-xs text-primary/80 font-medium mt-1">
-                                                                    Invited: <span className="font-semibold">{booking.attendee_email}</span>
-                                                                </p>
-                                                            )}
-                                                            {booking.comment && (
-                                                                <p className="text-xs text-foreground mt-2 italic bg-muted/30 p-2 rounded-lg border border-border">"{booking.comment}"</p>
-                                                            )}
-                                                            <p className="text-[9px] font-black text-primary/70 uppercase tracking-widest mt-2">
-                                                                Booked at: {new Date(booking.created_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
-                                                            </p>
-                                                        </div>
-                                                        {!isPast && !isCancelled && (
-                                                            <button
-                                                                onClick={() => handleDeleteBooking(booking.id)}
-                                                                disabled={deletingId === booking.id}
-                                                                className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold text-xs transition-all border border-rose-100 hover:border-rose-200 cursor-pointer disabled:opacity-50 flex-shrink-0"
-                                                                title="Cancel booking"
-                                                            >
-                                                                {deletingId === booking.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
-                                                                <span>Cancel</span>
-                                                            </button>
-                                                        )}
-                                                    </div>
-                                                </div>
-                                            );
-                                        })}
+                                        {renderMyBookingCards()}
                                     </>
                                 ) : isLoadingRequests ? (
                                     <div className="flex flex-col items-center justify-center py-12">
