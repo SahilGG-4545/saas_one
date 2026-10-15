@@ -140,7 +140,8 @@ async function run() {
     check('morning rule → v2 (three blanks)', N.usesMorningV2('morning_digest') && !N.usesMorningV2('pending_reminder') && !N.usesMorningV2('eod_summary'));
     const mt = [t('Submit EOD report', '2026-10-12'), { ...t('Call vendor', '2026-10-12'), status: 'in_progress' }, { ...t('Old one', '2026-10-11'), isCarriedForward: true }];
     const mv = N.buildMorningV2Params('Harsh Patel', mt, '2026-10-12');
-    check('with tasks: [first name, date, one-line summary]', JSON.stringify(mv) === JSON.stringify(['Harsh', '12 Oct 2026', 'You have 3 tasks today: 1. Submit EOD report ⏳ | 2. Call vendor 🔄 | 3. 🔄 Old one ⏳']), mv);
+    // 2026-10-14: carry-forward and today's tasks are labelled on the one line; each task keeps its own number.
+    check('with tasks: [first name, date, one-line summary]', JSON.stringify(mv) === JSON.stringify(['Harsh', '12 Oct 2026', 'You have 3 tasks today: Carry forward: 3. Old one ⏳ — Today: 1. Submit EOD report ⏳ | 2. Call vendor 🔄']), mv);
     const me = N.buildMorningV2Params('Harsh Patel', [], '2026-10-12');
     check('no tasks: the approved nudge sentence', me[2] === 'You have no tasks logged yet. Speak or type your priorities for today to add them to your board.' && oneLine(me));
     check('the preview is the approved template text', /^Daily Task Standup 📋\n\nGood morning Harsh!\nYour Task Manager workspace is open for today \(12 Oct 2026\)\./.test(N.morningV2Preview(me)));

@@ -38,12 +38,15 @@ export async function GET(request: NextRequest) {
 
         // The superuser's cross-department view (the console "My tasks" sub-tab). Superusers only; the service checks.
         if (request.nextUrl.searchParams.get('scope') === 'console') {
-            const consoleView = await WorkspaceService.loadConsole(userId);
+            const from = request.nextUrl.searchParams.get('from'), to = request.nextUrl.searchParams.get('to');
+            const consoleView = await WorkspaceService.loadConsole(userId, from && to ? { from, to } : undefined);
             return NextResponse.json({ success: true, console: consoleView });
         }
 
         const workspace = await WorkspaceService.load(userId, {
-            date: request.nextUrl.searchParams.get('date') || undefined,
+            // Owner 2026-10-15: a date range (from / to); the old single `date` still works.
+            date: request.nextUrl.searchParams.get('from') || request.nextUrl.searchParams.get('date') || undefined,
+            to: request.nextUrl.searchParams.get('to') || undefined,
             departmentName: request.nextUrl.searchParams.get('department') || undefined,
         });
         return NextResponse.json({ success: true, workspace });

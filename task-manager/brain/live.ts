@@ -7,7 +7,7 @@ import { BrainDeps, BrainResult, composeBrainReply, runBrain } from './index';
 import { shadowDetails } from './shadow';
 import { addDays, clip } from './text';
 import { FIND_MAX_ROWS, type FoundTask } from './findTasks';
-import type { Action, BrainContext, PendingState } from './types';
+import { DEFAULT_CONFIRM_POLICY, type Action, type BrainContext, type PendingState } from './types';
 import { AI_DOWN_HELP, ExactPlan, LastChange, UNDO_HINT, UndoIO, changeFromAction, normalizeChange, parseExactCommand, planExact, runUndo } from './frontDoor';
 import { isExplicitTaskCommand } from '@/backend/lib/whatsapp/interpreter/coordinator.mjs';
 import { tasksDomainWithTeam } from './tasksDomain';
@@ -32,6 +32,8 @@ export const LIVE_STATE_TYPE = 'BRAIN_STATE';
 /** How long a question the bot asked stays answerable. Part B (2026-10-13): 15 → 120 minutes — Priyanka's "yes" 15 minutes
  *  after "should I mark … as done?" found nothing waiting. A late yes is still safe: the change is re-checked when carried out. */
 export const STATE_TTL_MIN = 120;
+
+const SORRY_RETRY = 'Sorry, something went wrong on my side. Please try that again in a moment.';
 
 export interface LiveState {
     /** Short memory of the last turns (interpretation + the bot's own replies), newest last. */
@@ -98,7 +100,7 @@ export interface LiveIO {
     /** Phase 4: the "Team reports" switch (Task Access panel). Absent / false = the AI's instructions are exactly as before. */
     teamReportsOn?(): Promise<boolean>;
     beginLearning?(input: { messageId?: string | null; phone?: string | null; text?: string | null; context?: BrainContext | null }): Promise<void>;
-    observeLearning?(input: { messageId?: string | null; phone?: string | null; text: string; context: BrainContext; intent?: string | null; outcome?: string | null; previousOutcome?: string | null; exact?: string | null; apology?: boolean; interpretation?: unknown }): Promise<void>;
+    observeLearning?(input: { messageId?: string | null; phone?: string | null; text: string; context: BrainContext; intent?: string | null; outcome?: string | null; previousOutcome?: string | null; exact?: string | null; apology?: boolean; interpretation?: unknown; reply?: string | null }): Promise<void>;
     /** Phase 3: reversing a change for "undo" (the same permission-checked functions as the Tasks tab). */
     undo?: UndoIO;
     brain: BrainDeps;
@@ -188,7 +190,9 @@ export async function claimSmartChat(body: unknown, io?: LiveIO, opts: LiveOptio
         // Phase 4 "Team reports" (switch OFF → the domains, and so the AI's instructions, are exactly as before).
         const teamReports = teamReportsSwitch;
         const brainIO = teamReports ? { ...real, brain: { ...real.brain, domains: [tasksDomainWithTeam, facilityDomain] } } : real;
-        const result = await runBrain(cand.text, ctx, { ...brainIO.brain, skipReply: true });
+        // Owner 2026-10-14: with "One front door" ON (it provides undo), marking one's own tasks done needs no "Reply YES".
+        const policy = { ...DEFAULT_CONFIRM_POLICY, ...(brainIO.brain.policy || {}), confirmCompletions: !frontDoor };
+        const result = await runBrain(cand.text, ctx, { ...brainIO.brain, policy, skipReply: true });
         if (result.status !== 'ok' || !result.decision || !result.interpretation) {
             await real.audit({ phoneMasked: cand.phone.replace(/\d(?=\d{4})/g, '•'), messageId: cand.messageId ?? null, live: true, status: 'ai_unavailable', fallback: !frontDoor || isExplicitTaskCommand(cand.text), ms: Date.now() - started }, employee).catch(() => undefined);
             // AI down. Front door ON: old exact commands still go to the old bot; anything else gets one short help line (no menu).
@@ -250,14 +254,14 @@ async function respondExact(t: {
             next = { ...state };
             kind = 'view';
         }
-        if (io.observeLearning) await io.observeLearning({ messageId: t.messageId, phone, text: t.text, context: ctx, exact: kind, outcome: plan.kind === 'undo' ? 'ACT' : null }).catch(() => undefined);
+        if (io.observeLearning) await io.observeLearning({ messageId: t.messageId, phone, text: t.text, context: ctx, exact: kind, outcome: plan.kind === 'undo' ? 'ACT' : null, reply }).catch(() => undefined);
         await io.setState(phone, { ...next, recent: remember(next.recent, `exact command: ${clip(t.text, 40)}`, reply) });
         await io.reply(phone, prefixedText(t.opts, reply));
         await io.audit({ phoneMasked: phone.replace(/\d(?=\d{4})/g, '•'), messageId: t.messageId ?? null, live: true, exact: kind, executed, ms: Date.now() - t.started, ...(t.opts?.via ? { via: t.opts.via } : {}) }, employee);
     } catch (err) {
         console.warn('[TaskBrainLive] exact command failed:', err instanceof Error ? err.message : err);
-        if (io.observeLearning) await io.observeLearning({ messageId: t.messageId, phone, text: t.text, context: ctx, apology: true }).catch(() => undefined);
-        try { await io.reply(phone, 'Sorry, something went wrong on my side. Please try that again in a moment.'); } catch { /* nothing more to do */ }
+        if (io.observeLearning) await io.observeLearning({ messageId: t.messageId, phone, text: t.text, context: ctx, apology: true, reply: SORRY_RETRY }).catch(() => undefined);
+        try { await io.reply(phone, SORRY_RETRY); } catch { /* nothing more to do */ }
     }
 }
 
@@ -267,8 +271,8 @@ async function respond(t: Turn): Promise<void> {
         await handle(t);
     } catch (err) {
         console.warn('[TaskBrainLive] failed while answering:', err instanceof Error ? err.message : err);
-        if (t.io.observeLearning) await t.io.observeLearning({ messageId: t.messageId, phone: t.phone, text: t.text, context: t.ctx, apology: true }).catch(() => undefined);
-        try { await t.io.reply(t.phone, 'Sorry, something went wrong on my side. Please try that again in a moment.'); } catch { /* nothing more to do */ }
+        if (t.io.observeLearning) await t.io.observeLearning({ messageId: t.messageId, phone: t.phone, text: t.text, context: t.ctx, apology: true, reply: SORRY_RETRY }).catch(() => undefined);
+        try { await t.io.reply(t.phone, SORRY_RETRY); } catch { /* nothing more to do */ }
     }
 }
 
@@ -286,7 +290,7 @@ async function handle(t: Turn): Promise<void> {
         // Group 2: the learning note and saving the conversation do not depend on each other → side by side. The state is
         // still saved BEFORE the reply is sent, so a quick "yes" always finds the question.
         await Promise.all([
-            io.observeLearning ? io.observeLearning({ messageId: t.messageId, phone, text: t.text, context: ctx, intent: result.interpretation!.intent, outcome: result.decision!.outcome, previousOutcome: t.state.lastOutcome ?? null, interpretation: { intent: result.interpretation!.intent, outcome: result.decision!.outcome, summary: result.interpretation!.summary } }).catch(() => undefined) : undefined,
+            io.observeLearning ? io.observeLearning({ messageId: t.messageId, phone, text: t.text, context: ctx, intent: result.interpretation!.intent, outcome: result.decision!.outcome, previousOutcome: t.state.lastOutcome ?? null, interpretation: { intent: result.interpretation!.intent, outcome: result.decision!.outcome, summary: result.interpretation!.summary }, reply: reply?.text ?? null }).catch(() => undefined) : undefined,
             next === 'clear' ? io.clearState(phone) : io.setState(phone, { ...next, lastOutcome: result.decision!.outcome, recent: remember(t.state.recent, result.interpretation!.summary || 'a message', reply?.text ?? null) }),
         ]);
         const w0 = Date.now();
@@ -314,7 +318,7 @@ async function handle(t: Turn): Promise<void> {
                 const message = a.answer === 'pick' ? `${t.state.originalSummary}. Specifically: ${label}` : `${t.state.originalSummary}. Change of mind: ${a.instruction}`;
                 const waiting = t.state.relay ? await io.openPingPending(employee) : null;
                 const ctx2: BrainContext = { ...ctx, pending: waiting?.pending ?? null };
-                const again = await runBrain(message, ctx2, { ...io.brain, skipReply: true });
+                const again = await runBrain(message, ctx2, { ...io.brain, policy: { ...DEFAULT_CONFIRM_POLICY, ...(io.brain.policy || {}), confirmCompletions: !t.frontDoor }, skipReply: true });
                 if (again.status === 'ok' && again.decision && again.interpretation && again.decision.outcome !== 'HANDOFF') {
                     return handle({ ...t, text: message, ctx: ctx2, result: again, state: { ...t.state, pending: null, action: null, pickOptions: [] }, depth: 1, relay: !!waiting, titles: waiting?.titles ?? {} });
                 }

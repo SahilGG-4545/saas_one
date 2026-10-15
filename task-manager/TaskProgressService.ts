@@ -1,5 +1,10 @@
 import { supabaseAdmin } from '@/backend/lib/supabase/admin';
-import { TaskDatabaseService } from './TaskDatabaseService';
+import { CARRY_LOOKBACK_DAYS, TaskDatabaseService, carryDaysOf } from './TaskDatabaseService';
+import { addDaysIso } from './dateRange';
+
+/** Owner 2026-10-15: progress for a date RANGE (to), optionally counting unfinished tasks carried in from before it
+ *  (each department's carry-forward setting). Without options: exactly the old single-day numbers. */
+export interface ProgressOptions { to?: string; includeCarried?: boolean }
 import { Employee, TaskAssignment } from './types';
 
 export interface ProgressStats {
@@ -52,14 +57,16 @@ export class TaskProgressService {
      * LEVEL 1 — Employee Progress
      * completed tasks / total assigned tasks
      */
-    static async getEmployeeProgress(employeeId: string, date?: string): Promise<EmployeeProgress> {
+    static async getEmployeeProgress(employeeId: string, date?: string, opts: ProgressOptions = {}): Promise<EmployeeProgress> {
         const targetDate = date || new Date().toISOString().slice(0, 10);
         const emp = await TaskDatabaseService.getEmployeeById(employeeId);
 
-        const tasks = await TaskDatabaseService.getDailyAssignments({
-            employeeId,
-            date: targetDate
-        });
+        const tasks = (opts.to && opts.to !== targetDate) || opts.includeCarried
+            ? await this.rangeAssignments([employeeId], targetDate, opts, emp?.department_id ?? null)
+            : await TaskDatabaseService.getDailyAssignments({
+                employeeId,
+                date: targetDate
+            });
 
         const completed = tasks.filter(t => t.status === 'completed').length;
         const inProgress = tasks.filter(t => t.status === 'in_progress').length;
@@ -87,7 +94,24 @@ export class TaskProgressService {
      * LEVEL 2 — Department Progress
      * Aggregates all employees within a single department.
      */
-    static async getDepartmentProgress(departmentId: string, date?: string): Promise<DepartmentProgress> {
+    /** Tasks given in [date, opts.to], plus (includeCarried) unfinished ones from the department's carry-forward days before it. */
+    private static async rangeAssignments(empIds: string[], date: string, opts: ProgressOptions, departmentId: string | null): Promise<TaskAssignment[]> {
+        const to = opts.to || date;
+        const days = opts.includeCarried ? carryDaysOf(await TaskDatabaseService.getCarryForward(departmentId)) : 0;
+        const [inRange, carried] = await Promise.all([
+            supabaseAdmin.from('task_assignments').select('*').gte('assigned_date', date).lte('assigned_date', to).in('employee_id', empIds),
+            days > 0
+                ? supabaseAdmin.from('task_assignments').select('*').gte('assigned_date', addDaysIso(date, -Math.min(days, CARRY_LOOKBACK_DAYS))).lt('assigned_date', date).neq('status', 'completed').in('employee_id', empIds)
+                : Promise.resolve({ data: [], error: null }),
+        ]);
+        if (inRange.error || carried.error) {
+            console.error('[TaskProgressService] Error fetching range assignments:', inRange.error || carried.error);
+            throw inRange.error || carried.error;
+        }
+        return [...((carried.data || []) as TaskAssignment[]), ...((inRange.data || []) as TaskAssignment[])];
+    }
+
+    static async getDepartmentProgress(departmentId: string, date?: string, opts: ProgressOptions = {}): Promise<DepartmentProgress> {
         const targetDate = date || new Date().toISOString().slice(0, 10);
 
         // Fetch dept metadata and employees in parallel (was 2 sequential round trips)
@@ -113,18 +137,22 @@ export class TaskProgressService {
         }
 
         const empIds = employees.map(e => e.id);
-        const { data: rawAssignments, error } = await supabaseAdmin
-            .from('task_assignments')
-            .select('*')
-            .eq('assigned_date', targetDate)
-            .in('employee_id', empIds);
+        let assignments: TaskAssignment[];
+        if ((opts.to && opts.to !== targetDate) || opts.includeCarried) {
+            assignments = await this.rangeAssignments(empIds, targetDate, opts, departmentId);
+        } else {
+            const { data: rawAssignments, error } = await supabaseAdmin
+                .from('task_assignments')
+                .select('*')
+                .eq('assigned_date', targetDate)
+                .in('employee_id', empIds);
 
-        if (error) {
-            console.error('[TaskProgressService] Error fetching department assignments:', error);
-            throw error;
+            if (error) {
+                console.error('[TaskProgressService] Error fetching department assignments:', error);
+                throw error;
+            }
+            assignments = (rawAssignments || []) as TaskAssignment[];
         }
-
-        const assignments = (rawAssignments || []) as TaskAssignment[];
 
         // Group tasks by employee
         const tasksByEmp = new Map<string, TaskAssignment[]>();
@@ -190,7 +218,7 @@ export class TaskProgressService {
      * LEVEL 3 — Organisation Progress
      * Aggregates all departments across the organisation.
      */
-    static async getOrganisationProgress(date?: string): Promise<OrganisationProgress> {
+    static async getOrganisationProgress(date?: string, opts: ProgressOptions = {}): Promise<OrganisationProgress> {
         const targetDate = date || new Date().toISOString().slice(0, 10);
         const departments = await TaskDatabaseService.getDepartments();
 
@@ -202,7 +230,7 @@ export class TaskProgressService {
 
         // Fetch all department progress in parallel (was N sequential round trips)
         const deptProgressList = await Promise.all(
-            departments.map(dept => this.getDepartmentProgress(dept.id, targetDate))
+            departments.map(dept => this.getDepartmentProgress(dept.id, targetDate, opts))
         );
 
         for (const deptProg of deptProgressList) {

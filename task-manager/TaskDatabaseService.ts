@@ -15,10 +15,30 @@ import {
     NotificationRule,
     NotificationTaskFilters,
     WhatsAppKillSwitches,
+    CarryForwardSetting,
 } from './types';
 
-/** How many days back an unfinished task stays on a person's list. One window for every message and the bot. */
+/** How many days back an unfinished task stays on a person's list. One window for every message and the bot. Since
+ *  2026-10-14 each department can turn this off or shorten it (1–7 days, Notifications tab); 7 is the most and the default. */
 export const CARRY_LOOKBACK_DAYS = 7;
+export const DEFAULT_CARRY_FORWARD: CarryForwardSetting = { enabled: true, days: CARRY_LOOKBACK_DAYS };
+
+/** A stored or submitted setting → a safe one: on/off, and a whole number of days from 1 to 7. Anything odd → the default. */
+export function normalizeCarryForward(value: unknown): CarryForwardSetting {
+    if (!value || typeof value !== 'object') return { ...DEFAULT_CARRY_FORWARD };
+    const v = value as Record<string, unknown>;
+    const days = Number(v.days);
+    return {
+        enabled: v.enabled !== false,
+        days: Number.isInteger(days) && days >= 1 && days <= CARRY_LOOKBACK_DAYS ? days : CARRY_LOOKBACK_DAYS,
+    };
+}
+
+/** How many days back to look for a department (0 = carry-forward is off). */
+export const carryDaysOf = (s: CarryForwardSetting) => (s.enabled ? s.days : 0);
+
+let carryCache: { at: number; map: Record<string, CarryForwardSetting> } | null = null;
+export const resetCarryForwardCache = () => { carryCache = null; };
 
 /** Builds the numbered list from raw rows (pure, so it can be tested without the database). See NumberedAssignment. */
 export function buildNumberedList(today: TaskAssignment[], earlierOpen: TaskAssignment[]): NumberedAssignment[] {
@@ -405,17 +425,40 @@ export class TaskDatabaseService {
         return (data || []) as TaskAssignment[];
     }
 
-    static async getNumberedList(params: { employeeId: string; date?: string }): Promise<NumberedAssignment[]> {
+    /** The department's carry-forward setting (cached 30 s). No department or no saved setting → on, 7 days. */
+    static async getCarryForward(departmentId: string | null | undefined): Promise<CarryForwardSetting> {
+        if (!departmentId) return { ...DEFAULT_CARRY_FORWARD };
+        if (!carryCache || Date.now() - carryCache.at > 30_000) {
+            try { carryCache = { at: Date.now(), map: (await this.getTestingConfig()).carryForward || {} }; }
+            catch { return { ...DEFAULT_CARRY_FORWARD }; }
+        }
+        return normalizeCarryForward(carryCache.map[departmentId]);
+    }
+
+    static async saveCarryForward(departmentId: string, value: unknown): Promise<CarryForwardSetting> {
+        const setting = normalizeCarryForward(value);
+        const existing = (await this.getTestingConfig()).carryForward || {};
+        await this.saveTestingConfig({ carryForward: { ...existing, [departmentId]: setting } });
+        carryCache = null;
+        return setting;
+    }
+
+    static async getNumberedList(params: { employeeId: string; date?: string; departmentId?: string | null }): Promise<NumberedAssignment[]> {
         const targetDate = params.date || new Date().toISOString().slice(0, 10);
+        // The person's department decides how far back unfinished tasks are carried (one setting, so every list matches).
+        const departmentId = params.departmentId !== undefined ? params.departmentId : (await this.getEmployeeById(params.employeeId))?.department_id ?? null;
+        const carryDays = carryDaysOf(await this.getCarryForward(departmentId));
         const start = new Date(`${targetDate}T12:00:00Z`);
-        start.setUTCDate(start.getUTCDate() - CARRY_LOOKBACK_DAYS);
+        start.setUTCDate(start.getUTCDate() - carryDays);
 
         const [today, earlier] = await Promise.all([
             supabaseAdmin.from('task_assignments').select('*, template:task_templates(*)')
                 .eq('employee_id', params.employeeId).eq('assigned_date', targetDate),
-            supabaseAdmin.from('task_assignments').select('*, template:task_templates(*)')
-                .eq('employee_id', params.employeeId).gte('assigned_date', start.toISOString().slice(0, 10)).lt('assigned_date', targetDate)
-                .neq('status', 'completed'),
+            carryDays > 0
+                ? supabaseAdmin.from('task_assignments').select('*, template:task_templates(*)')
+                    .eq('employee_id', params.employeeId).gte('assigned_date', start.toISOString().slice(0, 10)).lt('assigned_date', targetDate)
+                    .neq('status', 'completed')
+                : Promise.resolve({ data: [], error: null }),
         ]);
         if (today.error || earlier.error) {
             console.error('[TaskDatabaseService] Error fetching numbered task list:', today.error || earlier.error);
@@ -432,13 +475,14 @@ export class TaskDatabaseService {
         employeeId: string;
         date?: string; // YYYY-MM-DD
         filters?: NotificationTaskFilters;
+        departmentId?: string | null;
     }): Promise<NumberedAssignment[]> {
         const filters = params.filters || {
             includeTodayFixed: true,
             includeTodayAssigned: true,
             includeYesterdayPending: false
         };
-        const list = await this.getNumberedList({ employeeId: params.employeeId, date: params.date });
+        const list = await this.getNumberedList({ employeeId: params.employeeId, date: params.date, departmentId: params.departmentId });
         return list.filter(t => {
             if (t.isCarriedForward) return Boolean(filters.includeYesterdayPending);
             const isFixed = Boolean(t.task_template_id);
@@ -777,6 +821,9 @@ export class TaskDatabaseService {
             nightlyAutoTuneEnabled: raw.nightlyAutoTuneEnabled === true,
             voiceNotesEnabled: raw.voiceNotesEnabled === true,
             botAlertAdmins: Array.isArray(raw.botAlertAdmins) ? raw.botAlertAdmins.filter(isBotAlertAdmin).slice(0, 10) : [],
+            carryForward: raw.carryForward && typeof raw.carryForward === 'object' && !Array.isArray(raw.carryForward)
+                ? Object.fromEntries(Object.entries(raw.carryForward).map(([k, v]) => [k, normalizeCarryForward(v)]))
+                : {},
         };
     }
 

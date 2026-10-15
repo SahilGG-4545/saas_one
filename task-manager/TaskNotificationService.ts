@@ -4,6 +4,8 @@ import { TaskDailyGeneratorService } from './TaskDailyGeneratorService';
 import { TaskAccessService } from './TaskAccessService';
 import { Employee, TaskAssignment, NotificationRule } from './types';
 import { firstName, formatDate, oneLine, sendTeamDigest } from './taskAlerts';
+import { openChatWindows, phoneKey } from './InboundLedger';
+import { headedList, headedOneLine } from './brain/text';
 
 /** A task as messages show it. `listNumber` comes from the person's numbered list (getNumberedList); old callers without it
  *  fall back to the position in the message. */
@@ -323,18 +325,63 @@ export class TaskNotificationService {
     static buildMorningV2Params(employeeName: string, tasks: Array<ListTask>, targetDate: string): [string, string, string] {
         if (!tasks.length) return [firstName(employeeName), formatDate(targetDate), this.MORNING_NO_TASKS];
         const mark = (s: string) => (s === 'completed' ? '✅' : s === 'in_progress' ? '🔄' : '⏳');
-        const items = tasks.map((t, i) => `${t.listNumber ?? i + 1}. ${t.isCarriedForward ? '🔄 ' : ''}${oneLine(t.title, 120)} ${mark(t.status)}`);
-        let list = '';
-        for (let i = 0; i < items.length; i++) {
-            const next = list ? `${list} | ${items[i]}` : items[i];
-            if (next.length > 650) { list = `${list} | …and ${items.length - i} more`; break; }
-            list = next;
-        }
+        // Carry-forward and today's tasks are labelled ("Carry forward: 1. … — Today: 3. …"); the numbers stay the same.
+        const list = headedOneLine(tasks.map((t, i) => ({ carried: !!t.isCarriedForward, line: `${t.listNumber ?? i + 1}. ${oneLine(t.title, 120)} ${mark(t.status)}` })), 650);
         return [firstName(employeeName), formatDate(targetDate), `You have ${tasks.length} task${tasks.length === 1 ? '' : 's'} today: ${list}`];
     }
 
     static morningV2Preview(p: [string, string, string]): string {
         return `Daily Task Standup 📋\n\nGood morning ${p[0]}!\nYour Task Manager workspace is open for today (${p[1]}).\n${p[2]}\n💡 Quick Guide:\n• 🎙️ Send a voice note or text to add or assign tasks\n• Ask "how is my team doing" to check team progress\n• Reply "tasks" to view your board, or "done 1" when finished`;
+    }
+
+    /**
+     * The normal-message version of a scheduled rule, one task per line (owner 2026-10-14, "option 1"). Sent only to people
+     * who messaged the bot in the last 24 hours; everyone else gets the one-line approved template. Same wording as the
+     * templates. A rule with a custom template keeps its own layout.
+     */
+    static buildChatMessage(rule: NotificationRule | undefined, employeeName: string, tasks: Array<ListTask>, targetDate: string): string {
+        if (rule?.customTemplate) return this.buildFormattedDigest(rule, employeeName, tasks, targetDate);
+        const name = firstName(employeeName);
+        const short = (d: string) => formatDate(d).replace(/ \d{4}$/, '');   // "13 Oct"
+        const mark = (s: string) => (s === 'completed' ? '✅' : s === 'in_progress' ? '🔄' : '⏳');
+        const num = (t: ListTask, i: number) => t.listNumber ?? i + 1;
+        const line = (t: ListTask, i: number) => `${num(t, i)}. ${oneLine(t.title, 200)}${t.isCarriedForward && t.assigned_date ? ` (from ${short(t.assigned_date)})` : ''} ${mark(t.status)}`;
+        // WhatsApp's limit for a normal message is 4,096 characters; keep the list well under it.
+        // Carry-forward tasks and today's tasks under their own headings (owner 2026-10-14).
+        const lines = (list: ListTask[], text: (t: ListTask, i: number) => string = line, max = 3000) => {
+            const kept: Array<{ carried: boolean; line: string }> = []; let size = 0;
+            for (let i = 0; i < list.length; i++) {
+                const l = text(list[i], i);
+                if (size + l.length > max) return `${headedList(kept)}\n…and ${list.length - i} more`;
+                kept.push({ carried: !!list[i].isCarriedForward, line: l }); size += l.length + 1;
+            }
+            return headedList(kept);
+        };
+        const s = (n: number) => (n === 1 ? '' : 's');
+
+        if (rule?.ruleType === 'pending_reminder') {
+            const open = tasks.filter(t => t.status !== 'completed');
+            if (!open.length) return `Hi ${name}! 🌟 You have completed all your tasks for today. Great work!`;
+            return [`Hi ${name}! ⏳ Midday check-in`, '', `You have ${open.length} pending task${s(open.length)}:`, lines(open), '',
+                `Reply "done ${num(open[0], 0)}" when you finish a task, or "tasks" to see your full list.`].join('\n');
+        }
+        if (rule?.ruleType === 'eod_summary') {
+            const done = tasks.filter(t => t.status === 'completed').length;
+            return ['🌙 End-of-Day Task Summary', '', `Completed ${done}/${tasks.length} today:`, lines(tasks), '',
+                done === tasks.length ? '🎉 Great work today! Every task is done.' : 'Great work today! Any unfinished items will be carried forward to tomorrow.'].join('\n');
+        }
+        if (rule?.ruleType === 'overdue_alert') {
+            const overdue = this.overdueTasks(tasks, targetDate).sort((a, b) => a.assigned_date.localeCompare(b.assigned_date));
+            return [`⚠️ Hello ${name}, you have ${overdue.length} overdue task${s(overdue.length)} needing your attention:`, '',
+                // Every overdue task is from an earlier day, so no headings here.
+                lines(overdue.map(t => ({ ...t, isCarriedForward: false })), (t, i) => `${num(t, i)}. ${oneLine(t.title, 200)} (Due: ${short(t.assigned_date)})`), '',
+                'Please update your progress or mark them completed today.'].join('\n');
+        }
+        // Morning (standup)
+        const guide = ['💡 Quick Guide:', '• 🎙️ Send a voice note or text to add or assign tasks', '• Ask "how is my team doing" to check team progress', '• Reply "tasks" to view your board, or "done 1" when finished'].join('\n');
+        const head = `Good morning ${name}! 📋\nYour Task Manager workspace is open for today (${formatDate(targetDate)}).`;
+        if (!tasks.length) return [head, '', this.MORNING_NO_TASKS, '', guide].join('\n');
+        return [head, '', `You have ${tasks.length} task${s(tasks.length)} today:`, lines(tasks), '', guide].join('\n');
     }
 
     /** Open tasks from an earlier day than `targetDate`. */
@@ -371,18 +418,11 @@ export class TaskNotificationService {
 
         // ONE line: Meta rejects line breaks, tabs and long runs of spaces inside a template variable.
         const clean = (s: string) => String(s ?? '').replace(/\s+/g, ' ').trim();
+        // Carry-forward and today's tasks are labelled ("Carry forward: 1. … — Today: 3. …"); the numbers stay the same.
         const item = (task: ListTask, idx: number, status: string) =>
-            `${task.listNumber ?? idx + 1}. ${task.isCarriedForward ? '🔄 ' : ''}${clean(task.title).slice(0, 120)} ${status}`;
+            ({ carried: !!task.isCarriedForward, line: `${task.listNumber ?? idx + 1}. ${clean(task.title).slice(0, 120)} ${status}` });
         // Keep the whole message well under WhatsApp's 1,024-character body limit.
-        const join = (items: string[], max = 700) => {
-            let out = '';
-            for (let i = 0; i < items.length; i++) {
-                const next = out ? `${out} | ${items[i]}` : items[i];
-                if (next.length > max) return `${out} | …and ${items.length - i} more`;
-                out = next;
-            }
-            return out;
-        };
+        const join = (items: Array<{ carried: boolean; line: string }>, max = 700) => headedOneLine(items, max);
 
         if (ruleType === 'eod_summary') {
             const completed = tasks.filter(t => t.status === 'completed');
@@ -498,6 +538,11 @@ export class TaskNotificationService {
         }
         const simulate = Boolean(options.dryRun) || pretend;
 
+        // Option 1 (owner 2026-10-14): people who messaged the bot in the last 24 hours get a normal message with one task per
+        // line; everyone else gets the approved one-line template (WhatsApp blocks normal messages outside that window).
+        // Read-only check; any doubt → template. TASK_RULES_CHAT_WHEN_OPEN=false turns this off.
+        const chatOpen = process.env.TASK_RULES_CHAT_WHEN_OPEN === 'false' ? new Set<string>() : await openChatWindows(employees.map(e => e.phone_number));
+
         let sentCount = 0;
         let skippedNoTasksCount = 0;
         let skippedNoPhoneCount = 0;
@@ -524,11 +569,13 @@ export class TaskNotificationService {
                 ? await TaskDatabaseService.getFilteredAssignments({
                     employeeId: emp.id,
                     date: targetDate,
-                    filters: options.rule.taskFilters
+                    filters: options.rule.taskFilters,
+                    departmentId: emp.department_id ?? null
                 })
                 : await TaskDatabaseService.getFilteredAssignments({
                     employeeId: emp.id,
-                    date: targetDate
+                    date: targetDate,
+                    departmentId: emp.department_id ?? null
                 });
 
             // Condition 1: skip if 0 tasks — EXCEPT the morning standup (task_morning_kickoff_v2) on a rule that says
@@ -569,9 +616,12 @@ export class TaskNotificationService {
 
             // Format message based on rule and customTemplate
             // The morning standup (v2) preview is the template itself filled in, so Pretend Mode / history show what is sent.
-            const digest = this.usesMorningV2(options.rule?.ruleType)
-                ? this.morningV2Preview(this.buildMorningV2Params(emp.name, tasks, targetDate))
-                : this.buildFormattedDigest(options.rule, emp.name, tasks, targetDate);
+            const asChat = chatOpen.has(phoneKey(phone));
+            const digest = asChat
+                ? this.buildChatMessage(options.rule, emp.name, tasks, targetDate)
+                : this.usesMorningV2(options.rule?.ruleType)
+                    ? this.morningV2Preview(this.buildMorningV2Params(emp.name, tasks, targetDate))
+                    : this.buildFormattedDigest(options.rule, emp.name, tasks, targetDate);
 
             if (simulate) {
                 sentCount++;
@@ -599,6 +649,7 @@ export class TaskNotificationService {
                         date: targetDate,
                         dryRun: true,
                         status: 'simulated',
+                        format: asChat ? 'chat' : 'template',
                         pretend,
                         preview: digest
                     }
@@ -614,12 +665,13 @@ export class TaskNotificationService {
                     : this.usesMorningV2(options.rule?.ruleType)
                         ? this.buildMorningV2Params(emp.name, tasks, targetDate)
                         : [this.buildTemplateTaskParam(options.rule?.ruleType, tasks)];
-                // Scheduled rules use the approved template directly (set TASK_RULES_TEMPLATE_ONLY=false to go back to free text first).
+                // Scheduled rules use the approved template directly (set TASK_RULES_TEMPLATE_ONLY=false to go back to free text first),
+                // except inside the 24-hour window: the normal message first, the template if that send fails.
                 const sent = await TaskMessagingService.sendMessage(phone, digest, {
                     departmentId: options.departmentId,
                     ruleType: options.rule?.ruleType,
                     templateParams,
-                    templateOnly: process.env.TASK_RULES_TEMPLATE_ONLY !== 'false',
+                    templateOnly: asChat ? false : process.env.TASK_RULES_TEMPLATE_ONLY !== 'false',
                 });
 
                 if (sent) {
@@ -648,6 +700,7 @@ export class TaskNotificationService {
                             date: targetDate,
                             dryRun: false,
                             status: 'sent',
+                            format: asChat ? 'chat' : 'template',
                             preview: digest
                         }
                     });
