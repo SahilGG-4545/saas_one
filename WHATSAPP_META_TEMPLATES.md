@@ -90,9 +90,8 @@ A new ticket has been raised on AutoPilot.
 Our team has been notified to attend to this request.
 ```
 - **Footer:** `AutoPilot Property Management`
-- **Button Type:** `Call to Action (Dynamic URL)`
+- **Button Type:** `Call to Action`
   - **Button Text:** `View Ticket`
-  - **URL Type:** `Dynamic` &rarr; `https://fms-dev-saas-one.vercel.app/tickets/{{10}}`
 - **Sample Values:**
   - `Header Image`: Upload any sample equipment/issue photo
   - `{{1}}`: `Property Team`
@@ -104,7 +103,6 @@ Our team has been notified to attend to this request.
   - `{{7}}`: `+91 98765 43210`
   - `{{8}}`: `Sunil Kumar (MST)`
   - `{{9}}`: `+91 98111 22334`
-  - `{{10}}` *(Button URL Ticket UUID)*: `d35372d1-bee2-403f-8578-00da66f16984`
 
 ---
 
@@ -127,10 +125,9 @@ A ticket has been assigned to you for resolution.
 
 Please inspect the issue on site and update progress.
 ```
-- **Footer:** `AutoPilot Maintenance`
-- **Button Type:** `Call to Action (Dynamic URL)`
-  - **Button Text:** `Open Ticket`
-  - **URL Type:** `Dynamic` &rarr; `https://fms-dev-saas-one.vercel.app/tickets/{{8}}`
+- **Footer:** `AutoPilot Property Management`
+- **Button Type:** `Call to Action`
+  - **Button Text:** `View Ticket`
 - **Sample Values:**
   - `{{1}}`: `Sunil Kumar`
   - `{{2}}`: `TICK-1042`
@@ -139,7 +136,6 @@ Please inspect the issue on site and update progress.
   - `{{5}}`: `High`
   - `{{6}}`: `Amit Patel`
   - `{{7}}`: `+91 98765 43210`
-  - `{{8}}` *(Button URL Ticket UUID)*: `d35372d1-bee2-403f-8578-00da66f16984`
 
 ---
 
@@ -147,30 +143,27 @@ Please inspect the issue on site and update progress.
 - **Template Name:** `ticket_completed_v1`
 - **Category:** `UTILITY`
 - **Language:** `English (en)`
-- **Header:** `Text` &rarr; `Ticket Resolved & Completed ✅` *(or None)*
+- **Header:** `Text` &rarr; `Ticket Resolved & Completed` *(or None)*
 - **Body:**
 ```text
 Hello {{1}},
 
 Ticket #{{2}} has been marked completed.
 
-📋 Title: {{3}}
+📄 Title: {{3}}
 🏢 Property: {{4}}
-👷 Resolved By: {{5}}
+👤 Resolved By: {{5}}
 
-Click below to verify the completion and rate the service.
+verify the completion and rate the service.
 ```
-- **Footer:** `AutoPilot Quality Assurance`
-- **Button Type:** `Call to Action (Dynamic URL)`
-  - **Button Text:** `Verify & Rate`
-  - **URL Type:** `Dynamic` &rarr; `https://fms-dev-saas-one.vercel.app/tickets/{{6}}`
+- **Footer:** `Autopilot Property Management`
+- **Button Type:** `None`
 - **Sample Values:**
   - `{{1}}`: `Amit Patel`
   - `{{2}}`: `TICK-1042`
   - `{{3}}`: `Main AC cooling leakage in cafeteria`
   - `{{4}}`: `WorkSquare Hub 1`
   - `{{5}}`: `Sunil Kumar (MST)`
-  - `{{6}}` *(Button URL Ticket UUID)*: `d35372d1-bee2-403f-8578-00da66f16984`
 
 ---
 
@@ -185,16 +178,14 @@ Hello {{1}},
 
 Ticket #{{2}} has been marked completed.
 
-📋 Title: {{3}}
+📄 Title: {{3}}
 🏢 Property: {{4}}
-👷 Resolved By: {{5}}
+👤 Resolved By: {{5}}
 
-Click below to verify the completion and rate the service.
+verify the completion and rate the service.
 ```
-- **Footer:** `AutoPilot Quality Assurance`
-- **Button Type:** `Call to Action (Dynamic URL)`
-  - **Button Text:** `Verify & Rate`
-  - **URL Type:** `Dynamic` &rarr; `https://fms-dev-saas-one.vercel.app/tickets/{{6}}`
+- **Footer:** `Autopilot Property Management`
+- **Button Type:** `None`
 - **Sample Values:**
   - `Header Image`: Upload sample repaired equipment photo
   - `{{1}}`: `Amit Patel`
@@ -202,7 +193,6 @@ Click below to verify the completion and rate the service.
   - `{{3}}`: `Main AC cooling leakage in cafeteria`
   - `{{4}}`: `WorkSquare Hub 1`
   - `{{5}}`: `Sunil Kumar (MST)`
-  - `{{6}}` *(Button URL Ticket UUID)*: `d35372d1-bee2-403f-8578-00da66f16984`
 
 ---
 
