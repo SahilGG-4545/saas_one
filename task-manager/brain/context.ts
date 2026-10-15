@@ -19,7 +19,7 @@ export async function buildBrainContext(emp: Employee, phone: string, opts: { pe
     // Older open tasks first, then today's: the same numbers as the person's morning / overdue messages.
     const [pool, rows, departments] = await Promise.all([
         TaskDatabaseService.getAllEmployees(),
-        TaskDatabaseService.getNumberedList({ employeeId: emp.id, date: today }),
+        TaskDatabaseService.getNumberedList({ employeeId: emp.id, date: today, departmentId: emp.department_id ?? null }),
         TaskDatabaseService.getDepartments(),
     ]);
     const permitted = await PermissionService.visibleAndAssignable(emp, pool);

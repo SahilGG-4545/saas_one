@@ -1,4 +1,5 @@
 import type { Action, BrainContext, BrainTask } from './types';
+import { headedList } from './text';
 
 /**
  * "One front door" — Phase 3 of docs/WHATSAPP_BOT_PRODUCTION_PLAN.md (owner decisions 2026-10-11).
@@ -99,7 +100,7 @@ export type ExactPlan =
     | { kind: 'undo'; change: LastChange | null };
 
 const since = (d: string) => new Date(`${d}T12:00:00Z`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' });   // "10 Oct"
-const list = (tasks: BrainTask[]) => tasks.map(t => `${t.n}. ${t.title}${t.from ? ` (from ${since(t.from)})` : ''} ${t.status === 'completed' ? '✅' : t.status === 'in_progress' ? '🔄' : '⏳'}`).join('\n');
+const list = (tasks: BrainTask[]) => headedList(tasks.map(t => ({ carried: !!t.from, line: `${t.n}. ${t.title}${t.from ? ` (from ${since(t.from)})` : ''} ${t.status === 'completed' ? '✅' : t.status === 'in_progress' ? '🔄' : '⏳'}` })));
 
 /** null = not something code should answer → the AI handles it as before (e.g. "done 7" when there is no task 7). */
 export function planExact(cmd: ExactCommand, ctx: BrainContext): ExactPlan | null {

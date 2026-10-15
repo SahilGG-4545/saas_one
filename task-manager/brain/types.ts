@@ -31,7 +31,12 @@ export type ProgressState = 'working' | 'partly_done' | 'blocked' | 'done_all' |
 export type ViewScope = 'self' | 'person' | 'team' | 'department' | 'org' | 'pending_overview';   // 'team' only while "Team reports" is ON
 
 /** Which of the sender's numbered tasks a message points at. Numbers come from the list the AI was shown. */
-export interface Which { all: boolean; numbers: number[]; hints: string[] }
+export interface Which {
+    all: boolean; numbers: number[]; hints: string[];
+    /** Owner 2026-10-15: a GROUP of the sender's tasks instead of naming each one — "carried" (overdue / left from earlier
+     *  days), "today", or one day "YYYY-MM-DD" ("yesterday's", "13 Oct's"). Only tasks on their list (today + carry-forward). */
+    group?: 'carried' | 'today' | string;
+}
 
 export type Slots =
     | { intent: 'view_tasks'; scope: ViewScope; person: string | null; department: string | null; /** only tasks carried over from earlier days (own list) */ carriedOnly?: boolean }
@@ -123,7 +128,7 @@ export type ClarifyReason =
     | 'person_not_found' | 'several_people_match' | 'no_recipient' | 'no_task_content'
     | 'nothing_pending' | 'unsure_answer' | 'bad_pick' | 'too_many_tasks' | 'not_grounded' | 'department_not_found';
 
-export type RefuseReason = 'not_allowed_to_assign' | 'task_already_done' | 'not_allowed_to_view' | 'cannot_hand_over_to_self' | 'nothing_to_do';
+export type RefuseReason = 'not_allowed_to_assign' | 'task_already_done' | 'not_allowed_to_view' | 'cannot_hand_over_to_self' | 'nothing_to_do' | 'nothing_in_group';
 
 export type Decision =
     | { outcome: 'ACT'; action: Action }
@@ -140,8 +145,13 @@ export type Outcome = Decision['outcome'];
  * status, is easy to correct, and asking every time would make a simple reply feel heavy). "done" is ALWAYS confirmed, and an
  * unclear update is always asked about, whatever this setting says.
  */
-export interface ConfirmPolicy { confirmProgressUpdates: boolean }
-export const DEFAULT_CONFIRM_POLICY: ConfirmPolicy = { confirmProgressUpdates: false };
+export interface ConfirmPolicy {
+    confirmProgressUpdates: boolean;
+    /** Owner 2026-10-14: false = marking one's OWN tasks done goes straight through, with "Reply undo within 10 minutes".
+     *  The live bot sets it false only while "One front door" (which provides undo) is ON. Absent / true = asked first. */
+    confirmCompletions?: boolean;
+}
+export const DEFAULT_CONFIRM_POLICY: ConfirmPolicy = { confirmProgressUpdates: false, confirmCompletions: true };
 
 /** Confidence below which a CHANGE is never proposed; the bot asks instead. Reads use the lower bar. */
 export const CHANGE_CONFIDENCE_MIN = 0.8;

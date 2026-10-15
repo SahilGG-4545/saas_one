@@ -4,8 +4,9 @@ import {
     Action, BrainContext, BrainPerson, BrainTask, CHANGE_CONFIDENCE_MIN, ClarifyReason, ConfirmPolicy, Decision, Intent,
     Interpretation, MAX_TASKS_PER_MESSAGE, MAX_TITLE_LENGTH, ProgressState, READ_CONFIDENCE_MIN, Slots, TASK_INTENTS, ViewScope, Which,
 } from './types';
-import { addDays, clip, contentWords, dayLabel, isGrounded, isIsoDate, norm, similarity } from './text';
+import { addDays, clip, contentWords, dayLabel, headedList, isGrounded, isIsoDate, norm, similarity } from './text';
 import { TaskQuery, findQuerySchema, periodRange, validateQuery, wordsGrounded } from './findTasks';
+import { UNDO_HINT } from './frontDoor';
 
 /**
  * The language brain — the TASKS domain.
@@ -15,11 +16,14 @@ import { TaskQuery, findQuerySchema, periodRange, validateQuery, wordsGrounded }
  *   ACT (a read or a chat reply) · CONFIRM (a change, asked about first) · CLARIFY (unclear → ask) · REFUSE · HANDOFF.
  */
 
+// Owner 2026-10-15: a whole group of tasks in one message (complete or delete). Dates use "today" from the context.
+const GROUP_HELP = 'For a whole GROUP, set "group" and leave numbers and hints empty: "overdue", "carry forward", "old" or "pending from earlier days" → "carried"; "today\'s" → "today"; one day ("yesterday\'s", "13 Oct\'s", "Monday\'s") → that date as YYYY-MM-DD. Otherwise "group" is null.';
+
 const INTENT_SPECS: IntentSpec[] = [
     { name: 'view_tasks', description: 'wants to SEE tasks or progress: their own ("what do I have today", "anything pending?", "what are my carry forward tasks?") or another person\'s / a department\'s / the whole company\'s — for TODAY only. Any other day or range ("tomorrow", "yesterday", "this week", "last month") is "find_tasks".',
         slots: '{"scope":"self"|"person"|"department"|"org"|"pending_overview","person":string|null,"department":string|null,"carried_forward_only":boolean}  — carried_forward_only = true only when they ask for their OWN tasks carried over / left from earlier days.' },
     { name: 'complete_tasks', description: 'says they FINISHED one or more of THEIR OWN tasks ("done 2", "finished the carpet one", "all done"). If the message is about another person\'s tasks it is NOT this intent: use "unknown" and say why in ambiguities. To delete / remove a task use "delete_tasks"; to rename one use "rename_task".',
-        slots: '{"which":{"all":boolean,"numbers":[int],"hints":[string]}}  — numbers refer to the numbered task list you were given; put a task number there whenever the person names a task you can match to the list. For "my carry forward / old / yesterday\'s tasks are done", put the numbers of the tasks marked "open since" (all of them, and only them).' },
+        slots: `{"which":{"all":boolean,"numbers":[int],"hints":[string],"group":"carried"|"today"|"YYYY-MM-DD"|null}}  — numbers refer to the numbered task list you were given; put a task number there whenever the person names a task you can match to the list. ${GROUP_HELP}` },
     { name: 'progress_update', description: 'reports PROGRESS short of finishing, or a status on tasks they were sent: "working on it", "half done", "stuck waiting for the vendor", or "done"/"done all" in reply to someone\'s request.',
         slots: '{"state":"working"|"partly_done"|"blocked"|"done_all"|"done_some"|"other","which":{"all":boolean,"numbers":[int],"hints":[string]},"note":string|null}' },
     { name: 'create_tasks', description: 'wants to ADD one or more tasks, for themself ("remind me to…") or for someone else ("assign Lohit a task about…"). Split distinct jobs into separate tasks.',
@@ -28,8 +32,8 @@ const INTENT_SPECS: IntentSpec[] = [
         slots: '{"which":{"all":false,"numbers":[int],"hints":[string]},"to":<person name>|null}' },
     { name: 'answer_pending', description: 'is ANSWERING a question the bot just asked (only possible when a question is pending): "yes", "no", "the second one", "make it tomorrow instead".',
         slots: '{"answer":"yes"|"no"|"pick"|"edit"|"unsure","pick":int|null,"instruction":string|null}' },
-    { name: 'delete_tasks', description: 'wants to DELETE / REMOVE one or more of THEIR OWN tasks from their list ("delete task 2", "remove the carpet one", "task 3 hata do"). Not for marking done.',
-        slots: '{"which":{"all":false,"numbers":[int],"hints":[string]}}  — never "all": each task must be named or numbered.' },
+    { name: 'delete_tasks', description: 'wants to DELETE / REMOVE one or more of THEIR OWN tasks from their list ("delete task 2", "remove the carpet one", "task 3 hata do", "delete all overdue tasks", "delete yesterday\'s tasks"). Not for marking done.',
+        slots: `{"which":{"all":boolean,"numbers":[int],"hints":[string],"group":"carried"|"today"|"YYYY-MM-DD"|null}}  — "all": true only when they say ALL their tasks. ${GROUP_HELP}` },
     { name: 'rename_task', description: 'wants to RENAME / change the name of ONE of their own tasks ("rename task 2 to Vendor follow-up", "change the carpet task name to Carpet PO").',
         slots: '{"which":{"all":false,"numbers":[int],"hints":[string]},"new_title":string|null}  — new_title is the new name in their own words (max 12 words); null if they did not give one.' },
     { name: 'find_tasks', description: 'asks any OTHER question about tasks (read-only), using filters: past or future days ("yesterday", "last week", "this month"), finished tasks ("what did I finish yesterday?"), who gave them ("what did Saniel give me?", "what have I assigned to Lohit?"), words in them ("anything about AMC?"), overdue / open for N days, fixed daily tasks, counts ("how many did Vidya finish this week?") or grouped ("by person", "by department"). For the person\'s own list for today, their team today, a department or the company today, use "view_tasks". NEVER for a change.',
@@ -59,8 +63,21 @@ function parseWhich(raw: unknown): Which {
         .map(n => (typeof n === 'number' ? n : typeof n === 'string' && /^\d{1,3}$/.test(n.trim()) ? Number(n) : NaN))
         .filter(n => Number.isInteger(n) && n >= 1 && n <= 999);
     const hints = (Array.isArray(o.hints) ? o.hints : []).map(h => str(h, 80)).filter((h): h is string => !!h).slice(0, 6);
-    return { all: o.all === true, numbers: [...new Set(numbers)].slice(0, 30), hints };
+    const g = typeof o.group === 'string' ? o.group.trim().toLowerCase() : '';
+    const group = g === 'carried' || g === 'overdue' || g === 'carry_forward' ? 'carried' : g === 'today' ? 'today' : isIsoDate(g) ? g : undefined;
+    return { all: o.all === true, numbers: [...new Set(numbers)].slice(0, 30), hints, ...(group ? { group } : {}) };
 }
+
+/** Is this task in the group the person named? (carried = from an earlier day; today; or one exact day) */
+function inGroup(t: BrainTask, group: string, today: string): boolean {
+    if (group === 'carried') return !!t.from;
+    if (group === 'today' || group === today) return !t.from;
+    return t.from === group;
+}
+const groupLabel = (group: string, today: string) => group === 'carried' ? 'earlier days' : group === 'today' || group === today ? 'today' : dayLabel(group);
+
+/** A group with nothing named inside it ("delete all overdue", "complete yesterday's") → every task of that group. */
+const groupOnly = (w: Which) => !!w.group && !w.numbers.length && !w.hints.length;
 
 function validateSlots(intent: Intent, raw: Record<string, unknown>, ctx: BrainContext): Slots | null {
     switch (intent) {
@@ -100,7 +117,7 @@ function validateSlots(intent: Intent, raw: Record<string, unknown>, ctx: BrainC
             return { intent, answer: answer as 'yes' | 'no' | 'pick' | 'edit' | 'unsure', pick, instruction: str(raw.instruction, 200) };
         }
         case 'delete_tasks':
-            return { intent, which: { ...parseWhich(raw.which), all: false } };
+            return { intent, which: parseWhich(raw.which) };   // a whole group / "all" is allowed (always previewed, then YES)
         case 'rename_task':
             return { intent, which: { ...parseWhich(raw.which), all: false }, newTitle: str(raw.new_title, MAX_TITLE_LENGTH) };
         case 'find_tasks': {
@@ -185,6 +202,15 @@ function resolveTasks(which: Which, ctx: BrainContext, opts: { allowAll: boolean
     const open = ctx.tasks.filter(t => t.status !== 'completed');
     let targets: BrainTask[] = [];
 
+    if (groupOnly(which)) {
+        // "Complete all overdue / yesterday's / today's": every OPEN task of that group on the person's list.
+        if (!opts.allowAll || opts.exactlyOne) return { ok: false, decision: clarify('no_task_referenced', open.map(taskLine)) };
+        const members = ctx.tasks.filter(t => inGroup(t, which.group!, ctx.today));
+        targets = members.filter(t => t.status !== 'completed');
+        if (!members.length) return { ok: false, decision: { outcome: 'REFUSE', reason: 'nothing_in_group', detail: groupLabel(which.group!, ctx.today) } };
+        if (!targets.length) return { ok: false, decision: { outcome: 'REFUSE', reason: 'task_already_done', detail: members.map(t => t.title).join('; ') } };
+        return { ok: true, tasks: targets };
+    }
     if (which.all) {
         if (!opts.allowAll || opts.exactlyOne) return { ok: false, decision: clarify('no_task_referenced', open.map(taskLine)) };
         targets = open;
@@ -315,7 +341,8 @@ function decideOne(interp: Interpretation, ctx: BrainContext, policy: ConfirmPol
         case 'complete_tasks': {
             const r = resolveTasks(slots.which, ctx, { allowAll: true, exactlyOne: false });
             if (!r.ok) return r.decision;
-            return { outcome: 'CONFIRM', action: { type: 'complete_tasks', taskIds: r.tasks.map(t => t.id) } };
+            // With undo available (policy), the person's own tasks are marked done straight away; otherwise asked first.
+            return { outcome: policy.confirmCompletions === false ? 'ACT' : 'CONFIRM', action: { type: 'complete_tasks', taskIds: r.tasks.map(t => t.id) } };
         }
 
         case 'progress_update': {
@@ -351,7 +378,10 @@ function decideOne(interp: Interpretation, ctx: BrainContext, policy: ConfirmPol
                 ids = r.tasks.map(t => t.id);
             }
             const action: Action = { type: 'progress_update', state: slots.state, taskIds: ids, note: slots.note };
-            const mustConfirm = policy.confirmProgressUpdates || slots.state === 'done_all' || slots.state === 'done_some';
+            // "Done" is asked first, unless undo is available (policy) AND these are the person's OWN tasks — a reply to someone's
+            // reminder (ping) is relayed to other people and is not undoable, so it is always asked first.
+            const finished = slots.state === 'done_all' || slots.state === 'done_some';
+            const mustConfirm = policy.confirmProgressUpdates || (finished && (policy.confirmCompletions !== false || ctx.pending?.kind === 'ping_reply'));
             return mustConfirm ? { outcome: 'CONFIRM', action } : { outcome: 'ACT', action };
         }
 
@@ -392,7 +422,7 @@ function decideOne(interp: Interpretation, ctx: BrainContext, policy: ConfirmPol
         case 'find_tasks': return resolveFind(slots.query, ctx);
 
         case 'delete_tasks': {
-            // Any of their OWN tasks, open or done; each one named or numbered (never "all"). Always previewed, then YES.
+            // Any of their OWN tasks, open or done; named, numbered, or a whole group / "all". Always previewed, then YES.
             const r = resolveOwnAny(slots.which, ctx, false);
             if (!r.ok) return r.decision;
             return { outcome: 'CONFIRM', action: { type: 'delete_tasks', taskIds: r.tasks.map(t => t.id) } };
@@ -455,6 +485,12 @@ function resolveGroup(g: { whose: 'team' | 'department' | 'everyone'; department
 function resolveOwnAny(which: Which, ctx: BrainContext, exactlyOne: boolean): TaskResolution {
     const all = ctx.tasks;
     let targets: BrainTask[] = [];
+    if (!exactlyOne && (groupOnly(which) || (which.all && !which.numbers.length && !which.hints.length))) {
+        // Owner 2026-10-15: "delete all overdue / today's / 13 Oct's / all my tasks" — open or done, always previewed, then YES.
+        targets = which.group ? all.filter(t => inGroup(t, which.group!, ctx.today)) : all;
+        if (!targets.length) return { ok: false, decision: { outcome: 'REFUSE', reason: which.group ? 'nothing_in_group' : 'nothing_to_do', detail: which.group ? groupLabel(which.group, ctx.today) : null } };
+        return { ok: true, tasks: targets };
+    }
     if (which.numbers.length) {
         const bad = which.numbers.filter(n => !all.some(t => t.n === n));
         if (bad.length) return { ok: false, decision: clarify('task_number_out_of_range', all.map(taskLine), `You have no task ${bad.join(', ')} on your list.`) };
@@ -557,9 +593,9 @@ const MAX_SHOWN_OPEN = 8;
 function openTasksBlock(ctx: BrainContext): { list: string; hint: string } | null {
     const open = ctx.tasks.filter(t => t.status !== 'completed');
     if (!open.length) return null;
-    const shown = open.slice(0, MAX_SHOWN_OPEN).map(taskLine);
-    if (open.length > MAX_SHOWN_OPEN) shown.push(`…and ${open.length - MAX_SHOWN_OPEN} more (reply *tasks* to see all)`);
-    return { list: shown.join('\n'), hint: `Reply *done ${open[0].n}* when you finish task ${open[0].n}, or tell me what you'd like in your own words.` };
+    const shown = headedList(open.slice(0, MAX_SHOWN_OPEN).map(t => ({ carried: !!t.from, line: taskLine(t) })));
+    const more = open.length > MAX_SHOWN_OPEN ? `\n…and ${open.length - MAX_SHOWN_OPEN} more (reply *tasks* to see all)` : '';
+    return { list: shown + more, hint: `Reply *done ${open[0].n}* when you finish task ${open[0].n}, or tell me what you'd like in your own words.` };
 }
 
 function clarifyFacts(d: Extract<Decision, { outcome: 'CLARIFY' }>, ctx: BrainContext): ReplyFacts {
@@ -627,6 +663,7 @@ function replyFacts(decision: Decision, ctx: BrainContext, result?: ExecutionRes
             not_allowed_to_view: [d ? `They asked to see ${d}'s tasks, but they are not allowed to. Say so kindly.` : 'They asked for information they are not allowed to see. Say so kindly.', 'Sorry, that isn\'t something you can see.'],
             cannot_hand_over_to_self: ['They tried to give a task to themself. Say it is already theirs and ask who it should go to.', 'That task is already yours. Who should it go to?'],
             nothing_to_do: ['They have no open tasks left to act on. Say so cheerfully.', 'You have no open tasks right now.'],
+            nothing_in_group: [`There are no tasks from ${d || 'that day'} on their list. Say so briefly.`, `There are no tasks from ${d || 'that day'} on your list.`],
         };
         const [describe, fallback] = texts[decision.reason];
         // Part B4: "already done" also shows what is still open, so the next step is obvious (Lohit, 2026-10-12).
@@ -720,7 +757,7 @@ function replyFacts(decision: Decision, ctx: BrainContext, result?: ExecutionRes
         const open = ctx.tasks.filter(t => t.status !== 'completed').length;
         const total = ctx.tasks.length;
         // An older open task is marked with the day it was given (same as the "tasks" list).
-        const list = ctx.tasks.map(t => `${taskLine(t)} (${t.from ? `from ${fromLabel(t.from)}, ` : ''}${STATUS_WORD[t.status]})`).join('\n');
+        const list = headedList(ctx.tasks.map(t => ({ carried: !!t.from, line: `${taskLine(t)} (${t.from ? `from ${fromLabel(t.from)}, ` : ''}${STATUS_WORD[t.status]})` })));
         if (!total) return { kind: 'view_none', describe: 'The person has no tasks for today. Say so in a friendly way.', values: {}, required: [], asksQuestion: false, claimsNothingDone: false, names: [sender.name], fallback: 'You don\'t have any tasks for today.' };
         return { kind: 'view_self', describe: `Introduce the person's task list for today (${total} task${total === 1 ? '' : 's'}, ${open} still open). The list itself is inserted by the system.`,
             values: { list, count: String(total), open: String(open), done: String(total - open) }, required: ['list'], asksQuestion: false, claimsNothingDone: false, names: [sender.name],
@@ -733,13 +770,16 @@ function replyFacts(decision: Decision, ctx: BrainContext, result?: ExecutionRes
     }
     // What REALLY happened (a change was carried out, or data was looked up): the reply may now say so, and the details are
     // inserted by code. Without a result a reply may only ask or explain.
-    const resultFacts = (kind: string, r: ExecutionResult): ReplyFacts => {
+    const resultFacts = (kind: string, r: ExecutionResult, hint?: string): ReplyFacts => {
         const details = r.values.details || '';
-        return { kind, describe: `Tell the person what happened, in one or two short, warm sentences. Outcome: ${r.summary}${details ? ' (Do not repeat the numbers or titles: the system inserts the details.)' : ''}`,
-            values: details ? { details } : {}, required: details ? ['details'] : [], asksQuestion: false, claimsNothingDone: false, names: [sender.name],
-            fallback: details ? `${r.summary}\n${details}` : r.summary };
+        return { kind, describe: `Tell the person what happened, in one or two short, warm sentences. Outcome: ${r.summary}${details ? ' (Do not repeat the numbers or titles: the system inserts the details.)' : ''}${hint ? ' End with the undo hint (inserted by the system).' : ''}`,
+            values: { ...(details ? { details } : {}), ...(hint ? { hint } : {}) }, required: [...(details ? ['details'] : []), ...(hint ? ['hint'] : [])], asksQuestion: false, claimsNothingDone: false, names: [sender.name],
+            fallback: [details ? `${r.summary}\n${details}` : r.summary, ...(hint ? [hint] : [])].join('\n\n') };
     };
 
+    // Owner 2026-10-14: marked done straight away (no "Reply YES") → say what was done, then "Reply undo within 10 minutes".
+    const finishedNow = a.type === 'complete_tasks' || (a.type === 'progress_update' && (a.state === 'done_all' || a.state === 'done_some'));
+    if (!confirming && finishedNow && result && /^Marked\b/.test(result.summary)) return resultFacts('complete_result', result, UNDO_HINT);
     if (a.type === 'answer_pending' && a.answer === 'yes' && result) return resultFacts('answer_yes_result', result);
     if (a.type === 'progress_update' && result) return resultFacts('progress_result', result);
     if (a.type === 'answer_pending') {

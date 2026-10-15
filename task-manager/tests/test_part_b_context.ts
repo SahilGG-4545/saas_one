@@ -179,7 +179,8 @@ async function run() {
     check('"mark my carry forward task as done" → the usual preview first (nothing changed yet)', w.exec.length === 0 && w.state?.data?.action?.taskIds?.[0] === 'c1' && /Work on optimizing FMS dashboard slow loading/.test(w.sent[0]), w.sent[0]);
     await turn(w, 'yes', 'cf5');
     check('…YES → the carried-over task is marked done', JSON.stringify(w.exec) === JSON.stringify([['setStatus', 'u1', 'c1', 'completed']]), w.exec);
-    check('the AI is told how: "carry forward tasks are done" = the numbers of the tasks marked "open since"', /tasks marked "open since" \(all of them, and only them\)/.test(read('task-manager/brain/tasksDomain.ts')));
+    // 2026-10-15: "carry forward tasks are done" is now a GROUP ("carried"); the code picks exactly the carried-over tasks.
+    check('the AI is told how: "carry forward tasks are done" = the group "carried"', /"carry forward", "old" or "pending from earlier days" → "carried"/.test(read('task-manager/brain/tasksDomain.ts')));
 
     console.log('\n11b. Two new tasks for the same person → ONE "add 2 tasks"; a side remark keeps the open question');
     w = mk(m => (/vidya/i.test(m) ? UNDERSTOOD('create_tasks', { assignee: 'Vidya', tasks: [{ title: 'Chase the carpet vendor', details: null }], date: null }, 'Give Vidya two tasks.', {

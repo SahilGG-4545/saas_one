@@ -17,7 +17,8 @@ export interface Toast {
  *  - moves a card OPTIMISTICALLY: the UI changes at once, and snaps back with a message if the server refuses
  *  - adds / assigns tasks
  */
-export function useWorkspace(date: string, departmentName: string) {
+/** `date` … `to`: the days shown (owner 2026-10-15: a range of up to 31 days; `to` = `date` for one day). */
+export function useWorkspace(date: string, departmentName: string, to: string = date) {
     const [ws, setWs] = useState<Workspace | null>(null);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
@@ -39,7 +40,7 @@ export function useWorkspace(date: string, departmentName: string) {
     const load = useCallback(async () => {
         if (wsRef.current) setRefreshing(true); else setLoading(true);
         try {
-            const res = await fetch(`/api/task-manager/workspace?date=${date}&department=${encodeURIComponent(departmentName)}`);
+            const res = await fetch(`/api/task-manager/workspace?from=${date}&to=${to}&department=${encodeURIComponent(departmentName)}`);
             const data = await res.json();
             if (!res.ok || !data.success) throw new Error(data.error || 'Could not load tasks');
             setWs(data.workspace);
@@ -50,7 +51,7 @@ export function useWorkspace(date: string, departmentName: string) {
             setLoading(false);
             setRefreshing(false);
         }
-    }, [date, departmentName]);
+    }, [date, to, departmentName]);
 
     useEffect(() => { load(); }, [load]);
 

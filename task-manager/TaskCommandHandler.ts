@@ -6,6 +6,7 @@ import { TaskErrorHandler } from './TaskErrorHandler';
 import { TaskAccessService } from './TaskAccessService';
 import { PermissionService } from './PermissionService';
 import { Employee, TaskAssignment } from './types';
+import { headedList } from './brain/text';
 
 export interface CommandExecutionResult {
     success: boolean;
@@ -87,7 +88,8 @@ export class TaskCommandHandler {
         // 2. The numbered list: older open tasks first, then today's — the same numbers as the person's messages
         const tasks = await TaskDatabaseService.getNumberedList({
             employeeId: employee.id,
-            date: targetDate
+            date: targetDate,
+            departmentId: employee.department_id ?? null
         });
 
         // ── Command 1: Cancel ─────────────────────────────────────────────────
@@ -331,11 +333,12 @@ export class TaskCommandHandler {
             const completedCount = tasks.filter(t => t.status === 'completed').length;
             const percent = Math.round((completedCount / tasks.length) * 100);
 
-            const taskLines = tasks.map((t, idx) => {
+            // Carry-forward tasks and today's tasks under their own headings; the numbers stay the same.
+            const taskLines = headedList(tasks.map((t, idx) => {
                 const icon = t.status === 'completed' ? '✅' : '⏳';
                 const statusStr = t.status === 'completed' ? 'Completed' : 'Pending';
-                return `${idx + 1}. ${t.isCarriedForward ? '🔄 ' : ''}${t.title} [${statusStr} ${icon}]`;
-            }).join('\n');
+                return { carried: !!t.isCarriedForward, line: `${idx + 1}. ${t.title} [${statusStr} ${icon}]` };
+            }));
 
             const reply = [
                 `📋 Tasks for today (${targetDate}):`,

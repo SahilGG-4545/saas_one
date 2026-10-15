@@ -1,5 +1,5 @@
 import { supabaseAdmin } from '@/backend/lib/supabase/admin';
-import { TaskDatabaseService } from './TaskDatabaseService';
+import { CARRY_LOOKBACK_DAYS, TaskDatabaseService, carryDaysOf } from './TaskDatabaseService';
 import { TaskAccessService } from './TaskAccessService';
 import { PermissionService } from './PermissionService';
 import { HierarchyService } from './HierarchyService';
@@ -55,6 +55,8 @@ export type WorkspaceResponse =
         actor: { userId: string; name: string; role: string; departmentName: string | null };
         teamSharing: boolean;
         date: string;
+        /** Last day shown (owner 2026-10-15: a range). Same as `date` for one day. */
+        to: string;
         members: WorkspaceMember[];
         tasks: WorkspaceTask[];
         assignable: Array<{ userId: string; name: string; isMe: boolean }>;
@@ -76,6 +78,8 @@ export interface ConsoleTask {
     canLock: boolean;
     /** Who gave it (mine) or who holds it (given) */
     personId: string | null;
+    /** Owner 2026-10-15: still open from before the chosen dates. */
+    isCarriedForward?: boolean;
     personName: string;
     department: string;
 }
@@ -87,8 +91,11 @@ export interface ConsoleResponse {
     given: ConsoleTask[];
 }
 
-const CARRY_DAYS = 14;
+// Owner 2026-10-15: carry-forward follows each person's DEPARTMENT setting (Notifications tab, 1–7 days or off), the same
+// window the bot and the messages use — no longer a fixed 14 days here.
 const CONSOLE_DONE_DAYS = 7;
+const MAX_RANGE = 31;
+const spanOk = (from: string, to: string) => from <= to && (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000 < MAX_RANGE;
 
 export function todayIST(): string {
     const ist = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
@@ -140,8 +147,10 @@ export class WorkspaceService {
         return actor;
     }
 
-    static async load(actorUserId: string, options: { date?: string; departmentName?: string } = {}): Promise<WorkspaceResponse> {
+    static async load(actorUserId: string, options: { date?: string; to?: string; departmentName?: string } = {}): Promise<WorkspaceResponse> {
         const date = isDate(options.date) ? options.date : todayIST();
+        // Owner 2026-10-15: a date range (date … to, at most 31 days). Without `to`: one day, as before.
+        const to = isDate(options.to) && spanOk(date, options.to) ? options.to : date;
 
         const actor = await TaskDatabaseService.getEmployeeById(actorUserId);
         if (!actor || !actor.active) {
@@ -175,13 +184,23 @@ export class WorkspaceService {
         if (ids.length > 0) {
             const select = 'id, title, description, employee_id, assigned_date, status, created_at, task_template_id';
             const [today, carried] = await Promise.all([
-                supabaseAdmin.from('task_assignments').select(select).in('employee_id', ids).eq('assigned_date', date),
+                supabaseAdmin.from('task_assignments').select(select).in('employee_id', ids).gte('assigned_date', date).lte('assigned_date', to),
                 supabaseAdmin.from('task_assignments').select(select).in('employee_id', ids)
-                    .lt('assigned_date', date).gte('assigned_date', addDays(date, -CARRY_DAYS)).neq('status', 'completed'),
+                    .lt('assigned_date', date).gte('assigned_date', addDays(date, -CARRY_LOOKBACK_DAYS)).neq('status', 'completed'),
             ]);
             if (today.error) throw today.error;
             if (carried.error) throw carried.error;
-            rows = [...(today.data || []), ...(carried.data || [])];
+            // Each person's department decides how far back their unfinished tasks are carried (or not at all).
+            const daysByDept = new Map<string | null, number>();
+            for (const m of members) {
+                const dept = m.department_id ?? null;
+                if (!daysByDept.has(dept)) daysByDept.set(dept, carryDaysOf(await TaskDatabaseService.getCarryForward(dept)));
+            }
+            const keepCarried = (r: { employee_id: string; assigned_date: string }) => {
+                const days = daysByDept.get(byId.get(r.employee_id)?.department_id ?? null) ?? 0;
+                return days > 0 && r.assigned_date >= addDays(date, -days);
+            };
+            rows = [...(today.data || []), ...(carried.data || []).filter(keepCarried)];
         }
 
         const templates = await this.templateInfo(rows.map(r => r.task_template_id));
@@ -241,6 +260,7 @@ export class WorkspaceService {
             actor: { userId: actor.id, name: actor.name, role: actor.role, departmentName: actor.department_name },
             teamSharing: await TaskAccessService.isPeerAssignEnabled(actor.department_id),
             date,
+            to,
             members: memberViews,
             tasks,
             assignable,
@@ -252,7 +272,8 @@ export class WorkspaceService {
      * The superuser's own view across ALL departments: tasks held by them, and tasks they gave to others.
      * Open tasks of any age, plus finished ones from the last week. Superusers only.
      */
-    static async loadConsole(actorUserId: string): Promise<ConsoleResponse> {
+    /** With `range` (owner 2026-10-15): tasks given in that range, plus anything still open from before it (carry forward). */
+    static async loadConsole(actorUserId: string, range?: { from: string; to: string }): Promise<ConsoleResponse> {
         const actor = await TaskDatabaseService.getEmployeeById(actorUserId);
         if (!actor || !actor.active) throw new WorkspaceError(403, 'Your account is not linked to an active employee profile.', 'NO_PROFILE');
         if (actor.role !== 'superuser') throw new WorkspaceError(403, 'This view is only for superusers.', 'NOT_SUPERUSER');
@@ -263,8 +284,11 @@ export class WorkspaceService {
         const select = 'id, title, description, employee_id, assigned_by, assigned_date, status, task_template_id';
 
         const fetchSide = async (column: 'employee_id' | 'assigned_by') => {
+            const r = range && isDate(range.from) && isDate(range.to) && spanOk(range.from, range.to) ? range : null;
             let open = supabaseAdmin.from('task_assignments').select(select).eq(column, actor.id).neq('status', 'completed');
-            let done = supabaseAdmin.from('task_assignments').select(select).eq(column, actor.id).eq('status', 'completed').gte('assigned_date', since);
+            if (r) open = open.lte('assigned_date', r.to);
+            let done = supabaseAdmin.from('task_assignments').select(select).eq(column, actor.id).eq('status', 'completed');
+            done = r ? done.gte('assigned_date', r.from).lte('assigned_date', r.to) : done.gte('assigned_date', since);
             if (column === 'assigned_by') { open = open.neq('employee_id', actor.id); done = done.neq('employee_id', actor.id); }
             const [o, d] = await Promise.all([open, done]);
             if (o.error) throw o.error;
@@ -289,6 +313,7 @@ export class WorkspaceService {
                 personId,
                 personName: kind === 'mine' && (!personId || personId === actor.id) ? 'Yourself' : person?.name || 'Unknown',
                 department: person?.department_name || (kind === 'mine' ? actor.department_name : null) || 'No department',
+                ...(range && r.status !== 'completed' && (r.assigned_date as string) < range.from ? { isCarriedForward: true } : {}),
             };
         };
         const newestFirst = (a: ConsoleTask, b: ConsoleTask) => b.assignedDate.localeCompare(a.assignedDate);

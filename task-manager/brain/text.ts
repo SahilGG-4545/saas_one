@@ -63,3 +63,40 @@ export function dayLabel(iso: string): string {
 }
 
 export const clip = (s: unknown, n: number): string => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, n);
+
+/**
+ * Carry-forward tasks and today's tasks under their own headings (owner 2026-10-14). Lines keep their real numbers, so
+ * "done 3" still means the same task. With nothing carried over the list is exactly as before (no headings).
+ */
+export const CARRY_HEADING = '🔄 *Carry forward tasks*';
+export const TODAY_HEADING = "📋 *Today's tasks*";
+export function headedList(items: Array<{ carried: boolean; line: string }>): string {
+    const carried = items.filter(i => i.carried).map(i => i.line), today = items.filter(i => !i.carried).map(i => i.line);
+    if (!carried.length) return today.join('\n');
+    return [CARRY_HEADING, ...carried, ...(today.length ? ['', TODAY_HEADING, ...today] : [])].join('\n');
+}
+
+/** The same grouping on ONE line, for approved templates (no line breaks allowed): "Carry forward: 1. A | 2. B — Today: 3. C".
+ *  Cut at `max` characters with "…and N more". */
+export function headedOneLine(input: Array<{ carried: boolean; line: string }>, max = 700): string {
+    const items = [...input.filter(i => i.carried), ...input.filter(i => !i.carried)];   // carried first, like headedList
+    const grouped = items.some(i => i.carried);
+    let out = '';
+    for (let i = 0; i < items.length; i++) {
+        const label = !grouped ? '' : i === 0 ? (items[0].carried ? 'Carry forward: ' : 'Today: ') : (!items[i].carried && items[i - 1].carried ? 'Today: ' : '');
+        const sep = i === 0 ? '' : label ? ' — ' : ' | ';
+        const next = `${out}${sep}${label}${items[i].line}`;
+        if (next.length > max) return `${out} | …and ${items.length - i} more`;
+        out = next;
+    }
+    return out;
+}
+
+/**
+ * A placeholder value that must sit on its own line(s) in a reply (owner 2026-10-14: every reply structured): a list, a
+ * bullet, a numbered line, a status line, or a "Reply …" hint. Short values (a name, a date, a count) stay inside the sentence.
+ */
+export function isBlockValue(value: string): boolean {
+    const v = String(value ?? '').trim();
+    return v.includes('\n') || /^(?:[•\-]\s|\d+\.\s|✅|⚠️|🔄|📋|Reply\b|\*Reply)/u.test(v);
+}
