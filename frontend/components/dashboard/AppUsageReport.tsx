@@ -14,7 +14,7 @@ import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Toolti
 
 type Cadence = 'scheduled' | 'daily' | 'weekly' | 'monthly';
 
-interface Cell { actions: number; pct: number | null; detail: string }
+interface Cell { actions: number; pct: number | null; done?: number | null; expected?: number | null; detail: string }
 interface UsageUser {
     userId: string; name: string; email: string | null; role: string | null; propertyId: string | null;
     byModule: Record<string, number>; total: number; activeDays: number; lastActive: string | null;
@@ -42,12 +42,36 @@ const PRESETS: { id: Preset; label: string }[] = [
 ];
 
 const CADENCE_LABEL: Record<Cadence, string> = { scheduled: 'Scheduled', daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly' };
-const CADENCE_RULE: Record<Cadence, string> = {
-    scheduled: 'completed ÷ scheduled',
-    daily: 'days with an entry ÷ days in range',
-    weekly: 'weeks with an entry ÷ weeks in range',
-    monthly: 'months submitted ÷ months in range',
+// How each rhythm turns into a %. Shown on screen so every number can be checked.
+const CADENCE_RULE: Record<Cadence, { modules: string; formula: string; example: (r: Report['range']) => string }> = {
+    scheduled: {
+        modules: 'SOP Checklists, PPM',
+        formula: 'Completed ÷ scheduled × 100',
+        example: () => '412 of 480 checklists completed = 86%',
+    },
+    daily: {
+        modules: 'Tickets, Electricity, Diesel, Water, Visitors, Stock',
+        formula: 'Days with at least one entry ÷ days in range × 100',
+        example: r => `Entries on ${Math.round(r.days * 0.8)} of ${r.days} days = ${Math.round((Math.round(r.days * 0.8) / r.days) * 100)}%`,
+    },
+    weekly: {
+        modules: 'Meeting Rooms, Petty Cash, Procurement, Roster, Assets',
+        formula: 'Weeks with at least one entry ÷ weeks in range × 100',
+        example: r => `Used in ${Math.max(1, r.weeks - 1)} of ${r.weeks} weeks = ${Math.round((Math.max(1, r.weeks - 1) / r.weeks) * 100)}%`,
+    },
+    monthly: {
+        modules: 'Requisitions',
+        formula: 'Months submitted ÷ months in range × 100',
+        example: r => `Submitted for ${r.months} of ${r.months} month${r.months === 1 ? '' : 's'} = 100%`,
+    },
 };
+const CADENCE_UNIT: Record<Cadence, string> = { scheduled: 'done', daily: 'days', weekly: 'wks', monthly: 'mo' };
+
+/** "24 / 30 days": the two numbers a cell's % comes from. */
+function fraction(c: Cell | undefined, cadence: Cadence): string {
+    if (!c || c.done === null || c.done === undefined || c.expected === null || c.expected === undefined) return '';
+    return `${n(c.done)} / ${n(c.expected)} ${CADENCE_UNIT[cadence]}`;
+}
 
 const ORG_WIDE = 'org';
 
@@ -201,6 +225,11 @@ export default function AppUsageReport({ orgId }: { orgId: string }) {
                 return row;
             });
             add('Adoption %', grid(c => (isUsed(c) && c?.pct !== null ? (c?.pct as number) : 'Not used')));
+            add('Adoption working', data.properties.map(p => {
+                const row: Record<string, string | number> = { Property: p.name };
+                data.modules.forEach(m => { const c = data.cells[p.id]?.[m.key]; row[`${m.label} (${CADENCE_RULE[m.cadence].formula})`] = isUsed(c) && c?.pct !== null ? `${c?.pct}% = ${fraction(c, m.cadence)}` : 'Not used'; });
+                return row;
+            }));
             add('Actions', grid(c => c?.actions || 0));
             add('Users', data.users.map(u => {
                 const row: Record<string, string | number> = {
@@ -323,9 +352,27 @@ export default function AppUsageReport({ orgId }: { orgId: string }) {
                 </div>
                 <p className="mb-3 text-xs text-slate-500">
                     {view === 'pct'
-                        ? 'Each cell scores the module against its own rhythm, so every cell is on the same 0 to 100% scale. Click a cell to look inside that property.'
+                        ? 'Each % compares what was done with what was expected for that module. The two numbers it comes from are shown under it. Click a cell to look inside that property.'
                         : 'Raw action counts. Daily modules will always show bigger numbers than monthly ones, so compare properties down a column, not modules across a row.'}
                 </p>
+                {view === 'pct' && (
+                    <div className="mb-4 rounded-xl border border-slate-100 bg-slate-50 p-3">
+                        <p className="mb-2 text-xs font-black text-slate-700">How the % is calculated</p>
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                            {(Object.keys(CADENCE_RULE) as Cadence[]).map(cad => (
+                                <div key={cad} className="rounded-lg bg-white px-3 py-2 text-xs">
+                                    <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{CADENCE_LABEL[cad]}</p>
+                                    <p className="font-bold text-slate-800">{CADENCE_RULE[cad].formula}</p>
+                                    <p className="text-slate-500">{CADENCE_RULE[cad].modules}</p>
+                                    <p className="mt-1 font-mono text-[11px] text-slate-500">e.g. {CADENCE_RULE[cad].example(data.range)}</p>
+                                </div>
+                            ))}
+                        </div>
+                        <p className="mt-2 text-[11px] text-slate-500">
+                            This range has {data.range.days} days, {data.range.weeks} week{data.range.weeks === 1 ? '' : 's'} and {data.range.months} month{data.range.months === 1 ? '' : 's'}. Weeks are counted back from the end date. Checklists due later today are not counted yet.
+                        </p>
+                    </div>
+                )}
                 <div className="overflow-x-auto">
                     <table className="w-full min-w-[900px] border-separate" style={{ borderSpacing: 3 }}>
                         <thead>
@@ -363,7 +410,12 @@ export default function AppUsageReport({ orgId }: { orgId: string }) {
                                             <td key={m.key} title={title}>
                                                 <button type="button" onClick={() => pickCell(p.id, m.key)}
                                                     className={`w-full rounded-md px-1 py-2 font-mono text-xs font-bold tabular-nums ${shade(scale)} ${selected ? 'ring-2 ring-slate-900' : ''}`}>
-                                                    {view === 'pct' ? (c?.pct === null ? '-' : `${c?.pct}%`) : n(c?.actions || 0)}
+                                                    {view === 'pct' ? (
+                                                        <>
+                                                            <span className="block">{c?.pct === null ? '-' : `${c?.pct}%`}</span>
+                                                            <span className="block text-[10px] font-semibold opacity-80">{fraction(c, m.cadence)}</span>
+                                                        </>
+                                                    ) : n(c?.actions || 0)}
                                                 </button>
                                             </td>
                                         );
@@ -380,7 +432,7 @@ export default function AppUsageReport({ orgId }: { orgId: string }) {
                         {view === 'pct' ? '100%' : 'More, within each module'}
                     </span>
                     <span className="inline-flex items-center gap-1.5"><i className="inline-block h-2.5 w-4 rounded-sm" style={NOT_USED_STYLE} /> Not used in this period</span>
-                    <span className="inline-flex items-center gap-1"><Info className="h-3 w-3" /> Scheduled: {CADENCE_RULE.scheduled} · Daily: {CADENCE_RULE.daily} · Weekly: {CADENCE_RULE.weekly} · Monthly: {CADENCE_RULE.monthly}</span>
+                    <span className="inline-flex items-center gap-1"><Info className="h-3 w-3" /> Hover a cell for its full working</span>
                 </div>
             </section>
 
@@ -415,7 +467,10 @@ export default function AppUsageReport({ orgId }: { orgId: string }) {
                                         <span className="h-2 rounded-r bg-slate-100">
                                             {used && <span className="block h-full rounded-r bg-blue-500" style={{ width: `${Math.max(2, c?.pct ?? 0)}%` }} />}
                                         </span>
-                                        <span className="text-right font-mono text-xs font-bold tabular-nums text-slate-700">{used && c?.pct !== null ? `${c?.pct}%` : '-'}</span>
+                                        <span className="text-right font-mono text-xs font-bold tabular-nums text-slate-700">
+                                            {used && c?.pct !== null ? `${c?.pct}%` : '-'}
+                                            {used && <span className="block text-[10px] font-semibold text-slate-400">{fraction(c, m.cadence)}</span>}
+                                        </span>
                                     </summary>
                                     <div className="space-y-1 px-3 pb-3 pl-11 text-xs text-slate-600">
                                         <p className="text-slate-400">{c?.detail || 'No data'} · {n(c?.actions || 0)} actions</p>

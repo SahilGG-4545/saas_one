@@ -367,19 +367,23 @@ export async function GET(request: NextRequest) {
         if (inRange(e.day)) u.days.add(e.day);
     }
 
-    const cells: Record<string, Record<string, { actions: number; pct: number | null; detail: string }>> = {};
+    // pct = done / expected * 100, with both numbers returned so the screen can show its working.
+    const cells: Record<string, Record<string, { actions: number; pct: number | null; done: number | null; expected: number | null; detail: string }>> = {};
     for (const pid of propertyIds) {
         cells[pid] = {};
         for (const m of MODULES) {
             const k = `${pid}|${m.key}`;
             const actions = cellActions.get(k) || 0;
             let pct: number | null = null;
+            let done: number | null = null;
+            let expected: number | null = null;
             let detail = '';
             if (unavailable.includes(m.key)) {
                 detail = 'Data not available';
             } else if (m.cadence === 'scheduled') {
                 const agg = scheduled.get(k);
                 if (agg && agg.scheduled > 0) {
+                    done = agg.done; expected = agg.scheduled;
                     pct = Math.round((agg.done / agg.scheduled) * 100);
                     detail = `${agg.done} of ${agg.scheduled} completed`;
                 } else {
@@ -387,18 +391,20 @@ export async function GET(request: NextRequest) {
                 }
             } else if (m.cadence === 'daily') {
                 const used = cellUnits.get(k)?.size || 0;
+                done = used; expected = days.length;
                 pct = Math.round((used / days.length) * 100);
                 detail = `Used on ${used} of ${days.length} days`;
             } else if (m.cadence === 'weekly') {
                 const used = cellUnits.get(k)?.size || 0;
+                done = used; expected = weekCount;
                 pct = Math.round((used / weekCount) * 100);
                 detail = `Used in ${used} of ${weekCount} weeks`;
             } else {
-                const done = reqMonths.get(pid)?.size || 0;
+                done = reqMonths.get(pid)?.size || 0; expected = months.length;
                 pct = Math.round((done / months.length) * 100);
                 detail = `Submitted for ${done} of ${months.length} month${months.length === 1 ? '' : 's'}`;
             }
-            cells[pid][m.key] = { actions, pct, detail };
+            cells[pid][m.key] = { actions, pct, done, expected, detail };
         }
     }
 
