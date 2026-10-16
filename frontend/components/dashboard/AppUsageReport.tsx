@@ -24,10 +24,11 @@ interface Report {
     properties: { id: string; name: string }[];
     modules: { key: string; label: string; cadence: Cadence }[];
     cells: Record<string, Record<string, Cell>>;
-    orgWide: { key: string; label: string; actions: number; users: number; available: boolean }[];
+    orgWide: { key: string; label: string; actions: number; users: number | null; available: boolean }[];
     users: UsageUser[];
     daily: { date: string; activeUsers: number; actions: number }[];
     unavailable: string[];
+    truncated: string[];
     generatedAt: string;
 }
 
@@ -132,7 +133,8 @@ export default function AppUsageReport({ orgId }: { orgId: string }) {
         const usedPcts: number[] = [];
         let notUsed = 0;
         let actions = 0;
-        data.properties.forEach(p => data.modules.forEach(m => {
+        const readable = data.modules.filter(m => !data.unavailable.includes(m.key));
+        data.properties.forEach(p => readable.forEach(m => {
             const c = data.cells[p.id]?.[m.key];
             actions += c?.actions || 0;
             if (isUsed(c) && c?.pct !== null && c?.pct !== undefined) usedPcts.push(c.pct);
@@ -205,11 +207,11 @@ export default function AppUsageReport({ orgId }: { orgId: string }) {
                     Name: u.name, Email: u.email || '', Role: fmtRole(u.role), Property: propName(u.propertyId),
                     'Total actions': u.total, 'Active days': u.activeDays, 'Last active': u.lastActive || '',
                 };
-                [...data.modules, ...data.orgWide].forEach(m => { row[m.label] = u.byModule[m.key] || 0; });
+                [...data.modules, ...data.orgWide.filter(o => o.users !== null)].forEach(m => { row[m.label] = u.byModule[m.key] || 0; });
                 return row;
             }));
             add('Daily', data.daily.map(d => ({ Date: d.date, 'Active users': d.activeUsers, Actions: d.actions })));
-            add('Org-wide', data.orgWide.map(o => ({ Module: o.label, Actions: o.actions, Users: o.users })));
+            add('Org-wide', data.orgWide.map(o => ({ Module: o.label, Actions: o.actions, Users: o.users ?? 'Not tracked' })));
             XLSX.writeFile(wb, `App_Usage_${data.range.from}_to_${data.range.to}.xlsx`);
         } catch (e) {
             console.error('[AppUsageReport] export error:', e);
@@ -283,7 +285,7 @@ export default function AppUsageReport({ orgId }: { orgId: string }) {
         .sort((a, b) => b.score - a.score)
         .slice(0, 15);
     const userMax = userList[0]?.score || 1;
-    const chipModules = [...data.modules, ...data.orgWide.filter(o => o.available)];
+    const chipModules = [...data.modules, ...data.orgWide.filter(o => o.available && o.users !== null)];
 
     return (
         <div className="space-y-6">
@@ -552,13 +554,18 @@ export default function AppUsageReport({ orgId }: { orgId: string }) {
                         <div key={o.key} className="rounded-xl bg-slate-50 px-4 py-3">
                             <p className="text-xs font-bold text-slate-500">{o.label}</p>
                             {o.available
-                                ? <p className="text-lg font-black text-slate-900">{n(o.actions)} <span className="text-xs font-semibold text-slate-500">actions · {n(o.users)} people</span></p>
+                                ? <p className="text-lg font-black text-slate-900">{n(o.actions)} <span className="text-xs font-semibold text-slate-500">{o.users === null ? 'count only, never linked to a person' : `actions · ${n(o.users)} people`}</span></p>
                                 : <p className="text-xs font-semibold text-slate-400">No data on this deployment</p>}
                         </div>
                     ))}
                 </div>
             </section>
 
+            {data.truncated?.length > 0 && (
+                <p className="text-xs font-semibold text-amber-600">
+                    Very large range: {data.truncated.map(moduleLabel).join(', ')} hit the row limit, so those numbers are partial. Pick a shorter range for exact figures.
+                </p>
+            )}
             {data.unavailable.length > 0 && (
                 <p className="text-xs text-slate-400">
                     Not shown because the data could not be read: {data.unavailable.map(moduleLabel).join(', ')}.

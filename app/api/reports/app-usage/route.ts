@@ -74,10 +74,12 @@ const MODULES: ModuleDef[] = [
     { key: 'requisitions', label: 'Requisitions', cadence: 'monthly' },
 ];
 
-const ORG_MODULES: { key: string; label: string; table: string; userCol: string }[] = [
-    { key: 'hr', label: 'HR Grievances', table: 'hr_tickets', userCol: 'raised_by_user_id' },
+// userCol null = count only. HR grievances can be anonymous or confidential, so the
+// report never ties an HR ticket to a person.
+const ORG_MODULES: { key: string; label: string; table: string; userCol: string | null }[] = [
+    { key: 'hr', label: 'HR Grievances', table: 'hr_tickets', userCol: null },
     { key: 'crm', label: 'CRM Leads', table: 'crm_leads', userCol: 'created_by' },
-    { key: 'tasks', label: 'Task Manager', table: 'tm_tasks', userCol: 'assigned_by' },
+    { key: 'tasks', label: 'Tasks Assigned', table: 'tm_tasks', userCol: 'assigned_by' },
 ];
 
 // ── Date helpers (IST calendar days, YYYY-MM-DD strings) ─────────────────────
@@ -92,8 +94,11 @@ function addDays(day: string, n: number): string {
     return d.toISOString().slice(0, 10);
 }
 
+/** A real calendar day: rejects values like 2026-02-31 that Date would roll over. */
 function isDay(v: string | null): v is string {
-    return !!v && /^\d{4}-\d{2}-\d{2}$/.test(v) && !isNaN(Date.parse(`${v}T00:00:00Z`));
+    if (!v || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
+    const t = Date.parse(`${v}T00:00:00Z`);
+    return !isNaN(t) && new Date(t).toISOString().slice(0, 10) === v;
 }
 
 /** IST calendar day of a timestamp, or the value itself for a DATE column. */
@@ -111,17 +116,17 @@ function str(v: unknown): string | null {
 
 // ── Paged reads past the PostgREST row cap ──────────────────────────────────
 
-async function fetchAll(makePage: (from: number, to: number) => Page): Promise<{ rows: Row[]; error: DbError }> {
+async function fetchAll(makePage: (from: number, to: number) => Page): Promise<{ rows: Row[]; error: DbError; truncated: boolean }> {
     const rows: Row[] = [];
     for (let page = 0; page < MAX_PAGES; page++) {
         const from = page * PAGE_SIZE;
         const { data, error } = await makePage(from, from + PAGE_SIZE - 1);
-        if (error) return { rows, error };
-        if (!data || data.length === 0) break;
+        if (error) return { rows, error, truncated: false };
+        if (!data || data.length === 0) return { rows, error: null, truncated: false };
         rows.push(...(data as Row[]));
-        if (data.length < PAGE_SIZE) break;
+        if (data.length < PAGE_SIZE) return { rows, error: null, truncated: false };
     }
-    return { rows, error: null };
+    return { rows, error: null, truncated: true };
 }
 
 function isMissingColumn(error: DbError): boolean {
@@ -139,16 +144,16 @@ export async function GET(request: NextRequest) {
     const access = await resolveCommandCenterAccess(request, readOrgId(request));
     if (isCommandCenterAccessError(access)) return access;
 
-    const isMasterAdmin = await supabaseAdmin
-        .from('users').select('is_master_admin').eq('id', access.user.id).maybeSingle()
-        .then(r => !!r.data?.is_master_admin);
-    if (!isMasterAdmin && !access.roles.some(r => VIEW_ROLES.includes(r))) {
+    // isSuperAdmin = master admin, or org_super_admin of the resolved org.
+    if (!access.isSuperAdmin && !access.roles.some(r => VIEW_ROLES.includes(r))) {
         return NextResponse.json({ error: 'Forbidden: the App Usage Report is for org super admins' }, { status: 403 });
     }
 
     // ── Range ────────────────────────────────────────────────────────────────
     const sp = request.nextUrl.searchParams;
-    const to = isDay(sp.get('to')) ? (sp.get('to') as string) : todayIst();
+    const today = todayIst();
+    const askedTo = isDay(sp.get('to')) ? (sp.get('to') as string) : today;
+    const to = askedTo > today ? today : askedTo;
     const from = isDay(sp.get('from')) ? (sp.get('from') as string) : addDays(to, -29);
     if (from > to) return NextResponse.json({ error: '"from" must be on or before "to"' }, { status: 400 });
 
@@ -165,11 +170,14 @@ export async function GET(request: NextRequest) {
 
     const fromTs = `${from}T00:00:00+05:30`;
     const toTsExclusive = `${addDays(to, 1)}T00:00:00+05:30`;
+    // Checklists due later today are not missed yet, so scheduled work stops at now.
+    const dueBefore = to === today ? new Date().toISOString() : toTsExclusive;
 
     const propertyIds = access.propertyIds;
     const propertySet = new Set(propertyIds);
     const events: UsageEvent[] = [];
     const unavailable: string[] = [];
+    const truncated: string[] = [];
     const scheduled = new Map<string, { scheduled: number; done: number }>(); // `${prop}|${module}`
     const reqMonths = new Map<string, Set<string>>(); // prop -> months submitted
 
@@ -178,14 +186,19 @@ export async function GET(request: NextRequest) {
     if (MODULES.some(m => m.source?.scope === 'water')) {
         const { rows, error } = await fetchAll((a, b) =>
             supabaseAdmin.from('water_sources').select('id, property_id').in('property_id', propertyIds).order('id').range(a, b));
-        if (!error) waterSourceProperty = new Map(rows.map(r => [String(r.id), String(r.property_id)]));
+        if (error) {
+            if (!isMissingRelation(error)) console.error('[app-usage] water_sources:', error.message);
+            unavailable.push('water');
+        } else {
+            waterSourceProperty = new Map(rows.map(r => [String(r.id), String(r.property_id)]));
+        }
     }
 
     await Promise.all(MODULES.filter(m => m.source).map(async (m) => {
         const s = m.source as Source;
         const scopeCol = s.scope === 'water' ? 'source_id' : 'property_id';
         const scopeIds = s.scope === 'water' ? Array.from(waterSourceProperty.keys()) : propertyIds;
-        if (!scopeIds.length) return;
+        if (!scopeIds.length || unavailable.includes(m.key)) return;
 
         const read = (withUser: boolean) => fetchAll((a, b) => {
             let q = supabaseAdmin
@@ -198,8 +211,9 @@ export async function GET(request: NextRequest) {
             return q.order('id').range(a, b);
         });
 
-        let { rows, error } = await read(true);
-        if (error && isMissingColumn(error)) ({ rows, error } = await read(false)); // e.g. visitor_logs.created_by not migrated
+        let { rows, error, truncated: cut } = await read(true);
+        if (error && isMissingColumn(error)) ({ rows, error, truncated: cut } = await read(false)); // e.g. visitor_logs.created_by not migrated
+        if (cut) truncated.push(m.key);
         if (error) {
             if (!isMissingRelation(error)) console.error(`[app-usage] ${s.table}:`, error.message);
             unavailable.push(m.key);
@@ -214,12 +228,14 @@ export async function GET(request: NextRequest) {
 
     // ── SOP checklists: completed vs scheduled ──────────────────────────────
     {
-        const { rows, error } = await fetchAll((a, b) =>
+        const fetched = await fetchAll((a, b) =>
             supabaseAdmin.from('sop_completions')
                 .select('id, property_id, status, completed_by, completed_at, due_at')
                 .in('property_id', propertyIds)
-                .gte('due_at', fromTs).lt('due_at', toTsExclusive)
+                .gte('due_at', fromTs).lt('due_at', dueBefore)
                 .order('id').range(a, b));
+        const { rows, error } = fetched;
+        if (fetched.truncated) truncated.push('checklists');
         if (error) {
             if (!isMissingRelation(error)) console.error('[app-usage] sop_completions:', error.message);
             unavailable.push('checklists');
@@ -259,7 +275,8 @@ export async function GET(request: NextRequest) {
                 const agg = scheduled.get(k) || { scheduled: 0, done: 0 };
                 agg.scheduled++;
                 const status = String(r.status || '').toLowerCase();
-                if (r.done_date || status === 'completed' || status === 'done') {
+                const notDone = ['postponed', 'skipped', 'cancelled', 'pending'].includes(status);
+                if (status === 'completed' || status === 'done' || (r.done_date && !notDone)) {
                     agg.done++;
                     // PPM keeps the completing user inside the attachments JSON, not as a column.
                     const att = r.attachments && typeof r.attachments === 'object' && !Array.isArray(r.attachments)
@@ -296,26 +313,26 @@ export async function GET(request: NextRequest) {
     }
 
     // ── Org-wide modules (no property column) ───────────────────────────────
-    const orgWide: { key: string; label: string; actions: number; users: number; available: boolean }[] = [];
+    const orgWide: { key: string; label: string; actions: number; users: number | null; available: boolean }[] = [];
     await Promise.all(ORG_MODULES.map(async (m) => {
         const { rows, error } = await fetchAll((a, b) =>
             supabaseAdmin.from(m.table)
-                .select(`id, ${m.userCol}, created_at`)
+                .select(m.userCol ? `id, ${m.userCol}, created_at` : 'id, created_at')
                 .eq('organization_id', access.organizationId)
                 .gte('created_at', fromTs).lt('created_at', toTsExclusive)
                 .order('id').range(a, b));
         if (error) {
             if (!isMissingRelation(error)) console.error(`[app-usage] ${m.table}:`, error.message);
-            orgWide.push({ key: m.key, label: m.label, actions: 0, users: 0, available: false });
+            orgWide.push({ key: m.key, label: m.label, actions: 0, users: null, available: false });
             return;
         }
         const users = new Set<string>();
         for (const r of rows) {
-            const userId = str(r[m.userCol]);
+            const userId = m.userCol ? str(r[m.userCol]) : null;
             if (userId) users.add(userId);
             events.push({ module: m.key, propertyId: null, userId, day: istDay(r.created_at) });
         }
-        orgWide.push({ key: m.key, label: m.label, actions: rows.length, users: users.size, available: true });
+        orgWide.push({ key: m.key, label: m.label, actions: rows.length, users: m.userCol ? users.size : null, available: true });
     }));
     orgWide.sort((a, b) => ORG_MODULES.findIndex(m => m.key === a.key) - ORG_MODULES.findIndex(m => m.key === b.key));
 
@@ -329,11 +346,11 @@ export async function GET(request: NextRequest) {
     const dailyActions = days.map(() => 0);
 
     for (const e of events) {
-        if (e.propertyId) {
+        if (e.propertyId && inRange(e.day)) {
             const k = `${e.propertyId}|${e.module}`;
             cellActions.set(k, (cellActions.get(k) || 0) + 1);
             const mod = MODULES.find(m => m.key === e.module);
-            if (mod && inRange(e.day) && (mod.cadence === 'daily' || mod.cadence === 'weekly')) {
+            if (mod && (mod.cadence === 'daily' || mod.cadence === 'weekly')) {
                 if (!cellUnits.has(k)) cellUnits.set(k, new Set());
                 (cellUnits.get(k) as Set<number | string>).add(mod.cadence === 'daily' ? e.day : weekOf(e.day));
             }
@@ -358,7 +375,9 @@ export async function GET(request: NextRequest) {
             const actions = cellActions.get(k) || 0;
             let pct: number | null = null;
             let detail = '';
-            if (m.cadence === 'scheduled') {
+            if (unavailable.includes(m.key)) {
+                detail = 'Data not available';
+            } else if (m.cadence === 'scheduled') {
                 const agg = scheduled.get(k);
                 if (agg && agg.scheduled > 0) {
                     pct = Math.round((agg.done / agg.scheduled) * 100);
@@ -392,9 +411,10 @@ export async function GET(request: NextRequest) {
         const chunk = userIds.slice(i, i + 200);
         const [usersRes, propRes, orgRes] = await Promise.all([
             supabaseAdmin.from('users').select('id, full_name, email').in('id', chunk),
-            supabaseAdmin.from('property_memberships').select('user_id, property_id, role').in('user_id', chunk).in('property_id', propertyIds),
+            supabaseAdmin.from('property_memberships').select('user_id, property_id, role').in('user_id', chunk).in('property_id', propertyIds).eq('is_active', true),
             supabaseAdmin.from('organization_memberships').select('user_id, role').in('user_id', chunk).eq('organization_id', access.organizationId),
         ]);
+        if (usersRes.error) console.error('[app-usage] users lookup:', usersRes.error.message);
         (usersRes.data || []).forEach(u => names.set(u.id, { name: u.full_name || u.email || 'Unknown user', email: u.email ?? null }));
         (propRes.data || []).forEach(m => { if (m.role) propRoles.set(`${m.user_id}|${m.property_id}`, m.role); });
         (orgRes.data || []).forEach(m => { if (m.role) orgRoles.set(m.user_id, m.role); });
@@ -425,6 +445,7 @@ export async function GET(request: NextRequest) {
         users,
         daily: days.map((d, i) => ({ date: d, activeUsers: dailyUsers[i].size, actions: dailyActions[i] })),
         unavailable,
+        truncated,
         generatedAt: new Date().toISOString(),
     });
 }
