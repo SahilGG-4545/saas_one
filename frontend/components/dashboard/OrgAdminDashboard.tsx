@@ -68,6 +68,7 @@ const AgentConsole = dynamic(() => import('@/frontend/components/agents/AgentCon
 const RosterDashboard = dynamic(() => import('@/frontend/components/roster/RosterDashboard').then(m => m.RosterDashboard), { loading: TabLoading });
 const WaterDashboard = dynamic(() => import('@/frontend/components/water/WaterDashboard').then(m => m.WaterDashboard), { loading: TabLoading });
 const ImportReportsView = dynamic(() => import('@/frontend/components/snags').then(m => m.ImportReportsView), { loading: TabLoading });
+const AppUsageReport = dynamic(() => import('@/frontend/components/dashboard/AppUsageReport'), { loading: TabLoading });
 
 // Tabs live in their own files so the dashboard opens faster; once it is on screen they are downloaded quietly in
 // the background (usePreloadTabs), so opening a tab shows no extra spinner (performance plan Phase 1).
@@ -198,6 +199,15 @@ const OrgAdminDashboard = () => {
     const [userRole, setUserRole] = useState<string>('User');
     const rawOrgRole = (membership?.org_role || userRole || '').toLowerCase();
     const isOpsSuperAdmin = rawOrgRole.includes('ops_super_admin') || rawOrgRole.includes('ops super admin');
+    // Reports → App usage is for org super admins only (the API enforces the same rule).
+    const isOrgSuperAdmin = rawOrgRole.includes('org_super_admin');
+    const reportsView: 'imports' | 'app_usage' = isOrgSuperAdmin && searchParams.get('report') === 'app_usage' ? 'app_usage' : 'imports';
+    const setReportsView = (next: 'imports' | 'app_usage') => {
+        const params = new URLSearchParams(window.location.search);
+        if (next === 'app_usage') params.set('report', 'app_usage');
+        else params.delete('report');
+        router.replace(`${window.location.pathname}?${params.toString()}`, { scroll: false });
+    };
     const [isSelectorOpen, setIsSelectorOpen] = useState(false); // Global toggle state
     const [sidebarOpen, setSidebarOpen] = useState(false);
     const [pendingStatusFilter, setPendingStatusFilter] = useState('all');
@@ -796,6 +806,8 @@ const OrgAdminDashboard = () => {
             params.delete('dateTo');
         }
         
+        if (tab !== 'reports') params.delete('report');
+
         if (tab !== 'requests') {
             params.delete('view');
         } else {
@@ -1582,11 +1594,32 @@ const OrgAdminDashboard = () => {
 
                         {activeTab === 'reports' && org && (
                             <div key="reports-tab" className="space-y-6">
-                                <AgentPulse orgId={org.id} module={AGENT_PULSE_BY_TAB.reports} consoleTab="agent_console" />
-                                <ImportReportsView
-                                    organizationId={org.id}
-                                    propertyId={selectedPropertyId === 'all' ? undefined : selectedPropertyId}
-                                />
+                                {isOrgSuperAdmin && (
+                                    <div className="inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1" role="group" aria-label="Report">
+                                        {([['imports', 'Import reports'], ['app_usage', 'App usage']] as const).map(([id, label]) => (
+                                            <button
+                                                key={id}
+                                                type="button"
+                                                onClick={() => setReportsView(id)}
+                                                aria-pressed={reportsView === id}
+                                                className={`rounded-lg px-4 py-1.5 text-xs font-bold transition ${reportsView === id ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
+                                            >
+                                                {label}
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
+                                {reportsView === 'app_usage' ? (
+                                    <AppUsageReport orgId={org.id} />
+                                ) : (
+                                    <>
+                                        <AgentPulse orgId={org.id} module={AGENT_PULSE_BY_TAB.reports} consoleTab="agent_console" />
+                                        <ImportReportsView
+                                            organizationId={org.id}
+                                            propertyId={selectedPropertyId === 'all' ? undefined : selectedPropertyId}
+                                        />
+                                    </>
+                                )}
                             </div>
                         )}
 
