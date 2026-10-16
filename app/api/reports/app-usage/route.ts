@@ -6,6 +6,7 @@ import {
     isMissingRelation,
     readOrgId,
 } from '@/backend/lib/commandCenter/access';
+import { MODULES, ORG_MODULES, type Source } from '@/backend/lib/reports/appUsageModules';
 
 /**
  * GET /api/reports/app-usage?orgId=<uuid>&from=YYYY-MM-DD&to=YYYY-MM-DD
@@ -30,7 +31,6 @@ import {
 
 export const dynamic = 'force-dynamic';
 
-type Cadence = 'scheduled' | 'daily' | 'weekly' | 'monthly';
 type Row = Record<string, unknown>;
 type DbError = { code?: string; message?: string } | null;
 type Page = PromiseLike<{ data: unknown[] | null; error: DbError }>;
@@ -40,47 +40,6 @@ const MAX_DAYS = 366;
 const PAGE_SIZE = 1000;
 const MAX_PAGES = 200;
 const VIEW_ROLES = ['org_super_admin', 'master_admin'];
-
-interface Source {
-    table: string;
-    userCol: string;
-    dateCol: string;
-    dateType: 'ts' | 'date';
-    /** 'water' resolves the property through water_sources.source_id. */
-    scope: 'property' | 'water';
-}
-
-interface ModuleDef {
-    key: string;
-    label: string;
-    cadence: Cadence;
-    source?: Source;
-}
-
-const MODULES: ModuleDef[] = [
-    { key: 'checklists', label: 'SOP Checklists', cadence: 'scheduled' },
-    { key: 'ppm', label: 'PPM', cadence: 'scheduled' },
-    { key: 'tickets', label: 'Tickets', cadence: 'daily', source: { table: 'tickets', userCol: 'raised_by', dateCol: 'created_at', dateType: 'ts', scope: 'property' } },
-    { key: 'electricity', label: 'Electricity', cadence: 'daily', source: { table: 'electricity_readings', userCol: 'created_by', dateCol: 'reading_date', dateType: 'date', scope: 'property' } },
-    { key: 'diesel', label: 'Diesel', cadence: 'daily', source: { table: 'diesel_readings', userCol: 'created_by', dateCol: 'reading_date', dateType: 'date', scope: 'property' } },
-    { key: 'water', label: 'Water', cadence: 'daily', source: { table: 'water_readings', userCol: 'created_by', dateCol: 'reading_date', dateType: 'date', scope: 'water' } },
-    { key: 'visitors', label: 'Visitors', cadence: 'daily', source: { table: 'visitor_logs', userCol: 'created_by', dateCol: 'checkin_time', dateType: 'ts', scope: 'property' } },
-    { key: 'stock', label: 'Stock', cadence: 'daily', source: { table: 'stock_movements', userCol: 'user_id', dateCol: 'created_at', dateType: 'ts', scope: 'property' } },
-    { key: 'meeting_rooms', label: 'Meeting Rooms', cadence: 'weekly', source: { table: 'meeting_room_bookings', userCol: 'user_id', dateCol: 'created_at', dateType: 'ts', scope: 'property' } },
-    { key: 'petty_cash', label: 'Petty Cash', cadence: 'weekly', source: { table: 'petty_cash_requests', userCol: 'requester_id', dateCol: 'created_at', dateType: 'ts', scope: 'property' } },
-    { key: 'procurement', label: 'Procurement', cadence: 'weekly', source: { table: 'material_requests', userCol: 'requested_by', dateCol: 'created_at', dateType: 'ts', scope: 'property' } },
-    { key: 'roster', label: 'Roster', cadence: 'weekly', source: { table: 'roster_audit_logs', userCol: 'changed_by', dateCol: 'created_at', dateType: 'ts', scope: 'property' } },
-    { key: 'assets', label: 'Assets', cadence: 'weekly', source: { table: 'asset_events', userCol: 'created_by', dateCol: 'occurred_at', dateType: 'ts', scope: 'property' } },
-    { key: 'requisitions', label: 'Requisitions', cadence: 'monthly' },
-];
-
-// userCol null = count only. HR grievances can be anonymous or confidential, so the
-// report never ties an HR ticket to a person.
-const ORG_MODULES: { key: string; label: string; table: string; userCol: string | null }[] = [
-    { key: 'hr', label: 'HR Grievances', table: 'hr_tickets', userCol: null },
-    { key: 'crm', label: 'CRM Leads', table: 'crm_leads', userCol: 'created_by' },
-    { key: 'tasks', label: 'Tasks Assigned', table: 'tm_tasks', userCol: 'assigned_by' },
-];
 
 // ── Date helpers (IST calendar days, YYYY-MM-DD strings) ─────────────────────
 
@@ -138,6 +97,14 @@ interface UsageEvent {
     propertyId: string | null;
     userId: string | null;
     day: string | null;
+    /** Exact time of the entry when known (timestamp or date), for "last entry". */
+    at: string | null;
+}
+
+/** Roles that can be picked as a SPOC: the property's own team, not tenants or vendors. */
+function isTeamRole(role: string | null | undefined): boolean {
+    const r = String(role || '').toLowerCase();
+    return !!r && !r.includes('tenant') && !r.includes('vendor');
 }
 
 export async function GET(request: NextRequest) {
@@ -203,7 +170,7 @@ export async function GET(request: NextRequest) {
         const read = (withUser: boolean) => fetchAll((a, b) => {
             let q = supabaseAdmin
                 .from(s.table)
-                .select([scopeCol, s.dateCol, withUser ? s.userCol : null].filter(Boolean).join(', '))
+                .select(Array.from(new Set([scopeCol, s.dateCol, s.atCol || s.dateCol, withUser ? s.userCol : null].filter(Boolean))).join(', '))
                 .in(scopeCol, scopeIds);
             q = s.dateType === 'date'
                 ? q.gte(s.dateCol, from).lte(s.dateCol, to)
@@ -222,7 +189,7 @@ export async function GET(request: NextRequest) {
         for (const r of rows) {
             const propertyId = s.scope === 'water' ? waterSourceProperty.get(String(r.source_id)) ?? null : str(r.property_id);
             if (!propertyId || !propertySet.has(propertyId)) continue;
-            events.push({ module: m.key, propertyId, userId: str(r[s.userCol]), day: istDay(r[s.dateCol]) });
+            events.push({ module: m.key, propertyId, userId: str(r[s.userCol]), day: istDay(r[s.dateCol]), at: str(r[s.atCol || s.dateCol]) });
         }
     }));
 
@@ -249,7 +216,7 @@ export async function GET(request: NextRequest) {
                 const done = r.status === 'completed' || !!r.completed_at;
                 if (done) {
                     agg.done++;
-                    events.push({ module: 'checklists', propertyId, userId: str(r.completed_by), day: istDay(r.completed_at) ?? istDay(r.due_at) });
+                    events.push({ module: 'checklists', propertyId, userId: str(r.completed_by), day: istDay(r.completed_at) ?? istDay(r.due_at), at: str(r.completed_at) ?? str(r.due_at) });
                 }
                 scheduled.set(k, agg);
             }
@@ -281,7 +248,7 @@ export async function GET(request: NextRequest) {
                     // PPM keeps the completing user inside the attachments JSON, not as a column.
                     const att = r.attachments && typeof r.attachments === 'object' && !Array.isArray(r.attachments)
                         ? (r.attachments as Record<string, unknown>) : {};
-                    events.push({ module: 'ppm', propertyId, userId: str(att.completed_by), day: istDay(r.done_date) ?? istDay(att.completed_at) });
+                    events.push({ module: 'ppm', propertyId, userId: str(att.completed_by), day: istDay(r.done_date) ?? istDay(att.completed_at), at: str(att.completed_at) ?? str(r.done_date) });
                 }
                 scheduled.set(k, agg);
             }
@@ -307,7 +274,7 @@ export async function GET(request: NextRequest) {
                 if (!propertyId || !months.includes(month)) continue;
                 if (!reqMonths.has(propertyId)) reqMonths.set(propertyId, new Set());
                 (reqMonths.get(propertyId) as Set<string>).add(month);
-                events.push({ module: 'requisitions', propertyId, userId: str(r.uploaded_by), day: istDay(r.created_at) });
+                events.push({ module: 'requisitions', propertyId, userId: str(r.uploaded_by), day: istDay(r.created_at), at: str(r.created_at) });
             }
         }
     }
@@ -330,7 +297,7 @@ export async function GET(request: NextRequest) {
         for (const r of rows) {
             const userId = m.userCol ? str(r[m.userCol]) : null;
             if (userId) users.add(userId);
-            events.push({ module: m.key, propertyId: null, userId, day: istDay(r.created_at) });
+            events.push({ module: m.key, propertyId: null, userId, day: istDay(r.created_at), at: str(r.created_at) });
         }
         orgWide.push({ key: m.key, label: m.label, actions: rows.length, users: m.userCol ? users.size : null, available: true });
     }));
@@ -344,11 +311,16 @@ export async function GET(request: NextRequest) {
     const userRows = new Map<string, { userId: string; propertyId: string | null; byModule: Record<string, number>; days: Set<string> }>();
     const dailyUsers = days.map(() => new Set<string>());
     const dailyActions = days.map(() => 0);
+    const lastEntries = new Map<string, { userId: string | null; at: string; t: number }>();
 
     for (const e of events) {
         if (e.propertyId && inRange(e.day)) {
             const k = `${e.propertyId}|${e.module}`;
             cellActions.set(k, (cellActions.get(k) || 0) + 1);
+            const t = e.at ? Date.parse(e.at) : NaN;
+            if (!isNaN(t) && (!lastEntries.has(k) || t > (lastEntries.get(k) as { t: number }).t)) {
+                lastEntries.set(k, { userId: e.userId, at: e.at as string, t });
+            }
             const mod = MODULES.find(m => m.key === e.module);
             if (mod && (mod.cadence === 'daily' || mod.cadence === 'weekly')) {
                 if (!cellUnits.has(k)) cellUnits.set(k, new Set());
@@ -368,7 +340,11 @@ export async function GET(request: NextRequest) {
     }
 
     // pct = done / expected * 100, with both numbers returned so the screen can show its working.
-    const cells: Record<string, Record<string, { actions: number; pct: number | null; done: number | null; expected: number | null; detail: string }>> = {};
+    const cells: Record<string, Record<string, {
+        actions: number; pct: number | null; done: number | null; expected: number | null; detail: string;
+        spoc?: { userId: string; name: string; active: boolean } | null;
+        lastEntry?: { userId: string | null; name: string | null; at: string } | null;
+    }>> = {};
     for (const pid of propertyIds) {
         cells[pid] = {};
         for (const m of MODULES) {
@@ -411,8 +387,48 @@ export async function GET(request: NextRequest) {
         }
     }
 
+    // ── SPOCs (one per property + module) and each property's team ──────────
+    let spocsAvailable = true;
+    const spocByCell = new Map<string, string>(); // `${prop}|${module}` -> user id
+    {
+        const { rows, error } = await fetchAll((a, b) =>
+            supabaseAdmin.from('module_spocs')
+                .select('id, property_id, module_key, user_id')
+                .eq('organization_id', access.organizationId)
+                .in('property_id', propertyIds)
+                .order('id').range(a, b));
+        if (error) {
+            spocsAvailable = false;
+            if (!isMissingRelation(error)) console.error('[app-usage] module_spocs:', error.message);
+        } else {
+            rows.forEach(r => spocByCell.set(`${r.property_id}|${r.module_key}`, String(r.user_id)));
+        }
+    }
+    const teamByProperty = new Map<string, { userId: string; role: string }[]>();
+    {
+        const { rows, error } = await fetchAll((a, b) =>
+            supabaseAdmin.from('property_memberships')
+                .select('user_id, property_id, role')
+                .in('property_id', propertyIds)
+                .eq('is_active', true)
+                // (user_id, property_id) is the primary key, so paging on both is stable.
+                .order('user_id').order('property_id').range(a, b));
+        if (error) console.error('[app-usage] property team:', error.message);
+        for (const r of rows) {
+            const pid = str(r.property_id), uid = str(r.user_id), role = str(r.role);
+            if (!pid || !uid || !isTeamRole(role)) continue;
+            if (!teamByProperty.has(pid)) teamByProperty.set(pid, []);
+            (teamByProperty.get(pid) as { userId: string; role: string }[]).push({ userId: uid, role: role as string });
+        }
+    }
+
     // ── People: names and roles ─────────────────────────────────────────────
-    const userIds = Array.from(new Set(Array.from(userRows.values()).map(u => u.userId)));
+    const userIds = Array.from(new Set([
+        ...Array.from(userRows.values()).map(u => u.userId),
+        ...Array.from(spocByCell.values()),
+        ...Array.from(lastEntries.values()).map(l => l.userId).filter((x): x is string => !!x),
+        ...Array.from(teamByProperty.values()).flat().map(m => m.userId),
+    ]));
     const names = new Map<string, { name: string; email: string | null }>();
     const propRoles = new Map<string, string>();
     const orgRoles = new Map<string, string>();
@@ -427,6 +443,24 @@ export async function GET(request: NextRequest) {
         (usersRes.data || []).forEach(u => names.set(u.id, { name: u.full_name || u.email || 'Unknown user', email: u.email ?? null }));
         (propRes.data || []).forEach(m => { if (m.role) propRoles.set(`${m.user_id}|${m.property_id}`, m.role); });
         (orgRes.data || []).forEach(m => { if (m.role) orgRoles.set(m.user_id, m.role); });
+    }
+
+    const nameOf = (id: string | null) => (id ? names.get(id)?.name || 'Unknown user' : null);
+    for (const pid of propertyIds) {
+        const team = new Set((teamByProperty.get(pid) || []).map(m => m.userId));
+        for (const m of MODULES) {
+            const k = `${pid}|${m.key}`;
+            const spocId = spocByCell.get(k) || null;
+            const last = lastEntries.get(k);
+            cells[pid][m.key].spoc = spocId ? { userId: spocId, name: nameOf(spocId) as string, active: team.has(spocId) } : null;
+            cells[pid][m.key].lastEntry = last ? { userId: last.userId, name: nameOf(last.userId), at: last.at } : null;
+        }
+    }
+    const members: Record<string, { userId: string; name: string; role: string }[]> = {};
+    for (const pid of propertyIds) {
+        members[pid] = (teamByProperty.get(pid) || [])
+            .map(m => ({ userId: m.userId, name: nameOf(m.userId) as string, role: m.role }))
+            .sort((a, b) => a.name.localeCompare(b.name));
     }
 
     const users = Array.from(userRows.values()).map(u => {
@@ -453,6 +487,8 @@ export async function GET(request: NextRequest) {
         orgWide,
         users,
         daily: days.map((d, i) => ({ date: d, activeUsers: dailyUsers[i].size, actions: dailyActions[i] })),
+        members,
+        spocsAvailable,
         unavailable,
         truncated,
         generatedAt: new Date().toISOString(),

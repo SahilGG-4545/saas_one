@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Download, Info, Loader2, RefreshCw } from 'lucide-react';
+import { AlertTriangle, Download, Info, Loader2, RefreshCw, UserCheck, X } from 'lucide-react';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
 
 /**
@@ -14,7 +14,12 @@ import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Toolti
 
 type Cadence = 'scheduled' | 'daily' | 'weekly' | 'monthly';
 
-interface Cell { actions: number; pct: number | null; done?: number | null; expected?: number | null; detail: string }
+interface Spoc { userId: string; name: string; active: boolean }
+interface LastEntry { userId: string | null; name: string | null; at: string }
+interface Cell {
+    actions: number; pct: number | null; done?: number | null; expected?: number | null; detail: string;
+    spoc?: Spoc | null; lastEntry?: LastEntry | null;
+}
 interface UsageUser {
     userId: string; name: string; email: string | null; role: string | null; propertyId: string | null;
     byModule: Record<string, number>; total: number; activeDays: number; lastActive: string | null;
@@ -27,6 +32,8 @@ interface Report {
     orgWide: { key: string; label: string; actions: number; users: number | null; available: boolean }[];
     users: UsageUser[];
     daily: { date: string; activeUsers: number; actions: number }[];
+    members?: Record<string, { userId: string; name: string; role: string }[]>;
+    spocsAvailable?: boolean;
     unavailable: string[];
     truncated: string[];
     generatedAt: string;
@@ -99,6 +106,24 @@ const NOT_USED_STYLE: React.CSSProperties = {
     backgroundImage: 'repeating-linear-gradient(135deg, transparent 0 4px, rgba(148,163,184,0.35) 4px 5px)',
 };
 
+/** "16 Oct, 1:19 pm" in IST, or just the date for date-only entries (meter readings without a time). */
+function fmtWhen(at: string | null | undefined): string {
+    if (!at) return '-';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(at)) return fmtDay(at);
+    const t = new Date(at);
+    if (isNaN(t.getTime())) return '-';
+    return t.toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Kolkata' });
+}
+
+/** "Imran Shaikh" -> "Imran S." so it fits inside a grid cell. */
+function shortName(name: string): string {
+    const parts = name.trim().split(/\s+/);
+    return parts.length > 1 ? `${parts[0]} ${parts[parts.length - 1][0]}.` : parts[0];
+}
+
+/** On track = 50% or more; matches the Needs attention threshold. */
+const ON_TRACK_PCT = 50;
+
 function isUsed(c: Cell | undefined): boolean {
     return !!c && (c.actions > 0 || (c.pct ?? 0) > 0);
 }
@@ -117,6 +142,10 @@ export default function AppUsageReport({ orgId }: { orgId: string }) {
     const [exporting, setExporting] = useState(false);
     const focusRef = useRef<HTMLDivElement>(null);
     const [hover, setHover] = useState<{ x: number; y: number; pid: string; mod: string } | null>(null);
+    const [spocEdit, setSpocEdit] = useState<{ pid: string; mod: string } | null>(null);
+    const [spocChoice, setSpocChoice] = useState('');
+    const [spocSaving, setSpocSaving] = useState(false);
+    const [spocError, setSpocError] = useState('');
     const showHover = (e: React.MouseEvent | React.FocusEvent, pid: string, mod: string) => {
         if ('clientX' in e) setHover({ x: e.clientX, y: e.clientY, pid, mod });
         else { const r = (e.target as HTMLElement).getBoundingClientRect(); setHover({ x: r.right, y: r.bottom, pid, mod }); }
@@ -167,16 +196,41 @@ export default function AppUsageReport({ orgId }: { orgId: string }) {
         const colMax: Record<string, number> = {};
         data.modules.forEach(m => { colMax[m.key] = Math.max(1, ...data.properties.map(p => data.cells[p.id]?.[m.key]?.actions || 0)); });
 
-        const alerts: { level: 'crit' | 'warn'; label: string; text: string; pct: number }[] = [];
+        const alerts: { level: 'crit' | 'warn'; label: string; text: string; spoc: string | null; pct: number }[] = [];
         data.properties.forEach(p => data.modules.forEach(m => {
             const c = data.cells[p.id]?.[m.key];
             if (isUsed(c) && c?.pct !== null && (c?.pct as number) < 50) {
-                alerts.push({ level: (c?.pct as number) < 35 ? 'crit' : 'warn', label: `${p.name} · ${m.label}`, text: `${c?.pct}%. ${c?.detail}.`, pct: c?.pct as number });
+                alerts.push({
+                    level: (c?.pct as number) < 35 ? 'crit' : 'warn',
+                    label: `${p.name} · ${m.label}`,
+                    text: `${c?.pct}%. ${c?.detail}.${c?.lastEntry ? ` Last entry ${fmtWhen(c.lastEntry.at)}.` : ''}`,
+                    spoc: c?.spoc?.name || null,
+                    pct: c?.pct as number,
+                });
             }
         }));
         alerts.sort((a, b) => a.pct - b.pct);
 
-        return { avgAdoption, notUsed, actions, weakest: moduleAvg[0] || null, activeUsers, colMax, alerts };
+        // SPOC scorecard: one row per SPOC, plus the boxes nobody owns yet.
+        const lastActiveOf = (uid: string) => data.users.filter(u => u.userId === uid && u.lastActive).map(u => u.lastActive as string).sort().pop() || null;
+        const bySpoc = new Map<string, { userId: string; name: string; boxes: { pid: string; property: string; module: string; pct: number | null; used: boolean; active: boolean }[] }>();
+        const unassigned: { property: string; module: string }[] = [];
+        data.properties.forEach(p => data.modules.forEach(m => {
+            if (data.unavailable.includes(m.key)) return;
+            const c = data.cells[p.id]?.[m.key];
+            if (!c?.spoc) { unassigned.push({ property: p.name, module: m.label }); return; }
+            if (!bySpoc.has(c.spoc.userId)) bySpoc.set(c.spoc.userId, { userId: c.spoc.userId, name: c.spoc.name, boxes: [] });
+            bySpoc.get(c.spoc.userId)!.boxes.push({ pid: p.id, property: p.name, module: m.label, pct: c.pct, used: isUsed(c), active: c.spoc.active });
+        }));
+        const scorecard = Array.from(bySpoc.values()).map(r => {
+            const onTrack = r.boxes.filter(b => b.used && b.pct !== null && b.pct >= ON_TRACK_PCT).length;
+            const behind = r.boxes.filter(b => b.used && b.pct !== null && b.pct < ON_TRACK_PCT).length;
+            const notUsed = r.boxes.filter(b => !b.used).length;
+            return { ...r, onTrack, behind, notUsed, lastActive: lastActiveOf(r.userId), leftTeam: r.boxes.some(b => !b.active) };
+        }).sort((a, b) => (b.behind + b.notUsed) - (a.behind + a.notUsed) || a.name.localeCompare(b.name));
+        const totalBoxes = data.properties.length * data.modules.filter(m => !data.unavailable.includes(m.key)).length;
+
+        return { avgAdoption, notUsed, actions, weakest: moduleAvg[0] || null, activeUsers, colMax, alerts, scorecard, unassigned, totalBoxes };
     }, [data]);
 
     const propName = useCallback((id: string | null) => {
@@ -195,6 +249,45 @@ export default function AppUsageReport({ orgId }: { orgId: string }) {
             .sort((a, b) => b.byModule[mod] - a.byModule[mod])
             .slice(0, count);
     }, [data]);
+
+    const openSpoc = (pid: string, mod: string) => {
+        setHover(null);
+        setSpocError('');
+        setSpocChoice(data?.cells[pid]?.[mod]?.spoc?.userId || '');
+        setSpocEdit({ pid, mod });
+    };
+
+    const saveSpoc = async () => {
+        if (!spocEdit || !data) return;
+        setSpocSaving(true);
+        setSpocError('');
+        try {
+            const res = await fetch('/api/reports/app-usage/spoc', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ orgId, propertyId: spocEdit.pid, moduleKey: spocEdit.mod, userId: spocChoice || null }),
+            });
+            const json = await res.json();
+            if (!res.ok) throw new Error(json.error || 'Could not save the SPOC');
+            const { pid, mod } = spocEdit;
+            setData(prev => prev && ({
+                ...prev,
+                cells: { ...prev.cells, [pid]: { ...prev.cells[pid], [mod]: { ...prev.cells[pid][mod], spoc: json.spoc } } },
+            }));
+            setSpocEdit(null);
+        } catch (e) {
+            setSpocError(e instanceof Error ? e.message : 'Could not save the SPOC');
+        } finally {
+            setSpocSaving(false);
+        }
+    };
+
+    useEffect(() => {
+        if (!spocEdit) return;
+        const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setSpocEdit(null); };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [spocEdit]);
 
     const pickCell = (pid: string, mod: string) => {
         setFocusProp(pid);
@@ -231,6 +324,14 @@ export default function AppUsageReport({ orgId }: { orgId: string }) {
                 return row;
             }));
             add('Daily', data.daily.map(d => ({ Date: d.date, 'Active users': d.activeUsers, Actions: d.actions })));
+            add('SPOCs', data.properties.flatMap(p => data.modules.map(m => {
+                const c = data.cells[p.id]?.[m.key];
+                return {
+                    Property: p.name, Module: m.label, SPOC: c?.spoc?.name || 'Not assigned',
+                    'Adoption %': isUsed(c) && c?.pct !== null && c?.pct !== undefined ? c.pct : 'Not used',
+                    'Last entry by': c?.lastEntry?.name || '', 'Last entry at': c?.lastEntry ? fmtWhen(c.lastEntry.at) : '',
+                };
+            })));
             add('Org-wide', data.orgWide.map(o => ({ Module: o.label, Actions: o.actions, Users: o.users ?? 'Not tracked' })));
             XLSX.writeFile(wb, `App_Usage_${data.range.from}_to_${data.range.to}.xlsx`);
         } catch (e) {
@@ -374,23 +475,32 @@ export default function AppUsageReport({ orgId }: { orgId: string }) {
                                             onFocus: (e: React.FocusEvent) => showHover(e, p.id, m.key),
                                             onBlur: () => setHover(null),
                                         };
+                                        const chip = data.spocsAvailable !== false && !unavailable && (
+                                            <button type="button" onClick={() => openSpoc(p.id, m.key)}
+                                                aria-label={`${c?.spoc ? 'Change' : 'Add'} SPOC for ${p.name} ${m.label}`}
+                                                className={`mt-1 block w-full truncate rounded px-1 py-0.5 text-[10px] font-semibold ${c?.spoc ? (c.spoc.active ? 'bg-slate-100 text-slate-700 hover:bg-slate-200' : 'bg-amber-50 text-amber-700 hover:bg-amber-100') : 'border border-dashed border-slate-300 text-slate-400 hover:text-slate-600'}`}>
+                                                {c?.spoc ? shortName(c.spoc.name) : '+ SPOC'}
+                                            </button>
+                                        );
                                         if (unavailable || !isUsed(c)) {
                                             return (
-                                                <td key={m.key}>
-                                                    <button type="button" onClick={() => pickCell(p.id, m.key)} style={NOT_USED_STYLE} {...hoverProps}
+                                                <td key={m.key} {...hoverProps}>
+                                                    <button type="button" onClick={() => pickCell(p.id, m.key)} style={NOT_USED_STYLE}
                                                         className={`w-full rounded-md px-1 py-2 text-[11px] font-bold text-rose-600 ${selected ? 'ring-2 ring-slate-900' : ''}`}>
                                                         {unavailable ? 'No data' : c?.pct === null && m.cadence === 'scheduled' ? 'None due' : 'Not used'}
                                                     </button>
+                                                    {chip}
                                                 </td>
                                             );
                                         }
                                         const scale = view === 'pct' ? (c?.pct ?? 0) : ((c?.actions || 0) / derived.colMax[m.key]) * 100;
                                         return (
-                                            <td key={m.key}>
-                                                <button type="button" onClick={() => pickCell(p.id, m.key)} {...hoverProps}
+                                            <td key={m.key} {...hoverProps}>
+                                                <button type="button" onClick={() => pickCell(p.id, m.key)}
                                                     className={`w-full rounded-md px-1 py-2 font-mono text-xs font-bold tabular-nums ${shade(scale)} ${selected ? 'ring-2 ring-slate-900' : ''}`}>
                                                     {view === 'pct' ? (c?.pct === null ? '-' : `${c?.pct}%`) : n(c?.actions || 0)}
                                                 </button>
+                                                {chip}
                                             </td>
                                         );
                                     })}
@@ -406,9 +516,44 @@ export default function AppUsageReport({ orgId }: { orgId: string }) {
                         {view === 'pct' ? '100%' : 'More, within each module'}
                     </span>
                     <span className="inline-flex items-center gap-1.5"><i className="inline-block h-2.5 w-4 rounded-sm" style={NOT_USED_STYLE} /> Not used in this period</span>
-                    <span className="inline-flex items-center gap-1"><Info className="h-3 w-3" /> Hover any cell to see how its % is calculated</span>
+                    <span className="inline-flex items-center gap-1"><Info className="h-3 w-3" /> Hover any cell to see how its % is calculated, its SPOC and the last entry. Click the name under a cell to set its SPOC.</span>
                 </div>
             </section>
+
+            {spocEdit && (() => {
+                const p = data.properties.find(x => x.id === spocEdit.pid);
+                const m = data.modules.find(x => x.key === spocEdit.mod);
+                const team = data.members?.[spocEdit.pid] || [];
+                if (!p || !m) return null;
+                return (
+                    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/40 p-4" onClick={() => !spocSaving && setSpocEdit(null)}>
+                        <div role="dialog" aria-modal="true" aria-labelledby="spoc-title" onClick={e => e.stopPropagation()}
+                            className="w-full max-w-sm space-y-3 rounded-2xl bg-white p-5 shadow-2xl">
+                            <div className="flex items-start justify-between gap-3">
+                                <div>
+                                    <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Single point of contact</p>
+                                    <h3 id="spoc-title" className="text-base font-black text-slate-900">{p.name} · {m.label}</h3>
+                                </div>
+                                <button type="button" onClick={() => setSpocEdit(null)} aria-label="Close" className="rounded-lg p-1 text-slate-400 hover:bg-slate-100"><X className="h-4 w-4" /></button>
+                            </div>
+                            <p className="text-xs text-slate-500">Who is responsible for {m.label} entries at {p.name}?</p>
+                            <select id="usage-spoc-select" value={spocChoice} onChange={e => setSpocChoice(e.target.value)} autoFocus
+                                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800" aria-label="SPOC">
+                                <option value="">No SPOC</option>
+                                {team.map(t => <option key={t.userId} value={t.userId}>{t.name} · {fmtRole(t.role)}</option>)}
+                            </select>
+                            {team.length === 0 && <p className="text-xs text-amber-600">No active team members found for this property.</p>}
+                            {spocError && <p className="text-xs font-semibold text-rose-600">{spocError}</p>}
+                            <div className="flex justify-end gap-2">
+                                <button type="button" onClick={() => setSpocEdit(null)} disabled={spocSaving} className="rounded-xl border border-slate-200 px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50">Cancel</button>
+                                <button type="button" onClick={saveSpoc} disabled={spocSaving} className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-bold text-text-inverse disabled:opacity-60">
+                                    {spocSaving && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Save SPOC
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                );
+            })()}
 
             {hover && (() => {
                 const p = data.properties.find(x => x.id === hover.pid);
@@ -419,7 +564,7 @@ export default function AppUsageReport({ orgId }: { orgId: string }) {
                 const lead = topUsers(p.id, m.key, 1)[0];
                 const width = 300;
                 const left = Math.min(hover.x + 14, (typeof window !== 'undefined' ? window.innerWidth : 1200) - width - 8);
-                const top = Math.min(hover.y + 14, (typeof window !== 'undefined' ? window.innerHeight : 800) - 190);
+                const top = Math.min(hover.y + 14, (typeof window !== 'undefined' ? window.innerHeight : 800) - 240);
                 return (
                     <div role="tooltip" className="pointer-events-none fixed z-50 rounded-xl bg-slate-900 px-3.5 py-3 text-xs text-white shadow-xl" style={{ left, top, width }}>
                         <p className="font-black">{p.name} · {m.label}</p>
@@ -433,6 +578,13 @@ export default function AppUsageReport({ orgId }: { orgId: string }) {
                                 <p className="text-slate-400">Working: <span className="text-slate-200">{c?.detail || 'No data'}{c?.pct !== null && c?.pct !== undefined ? ` = ${c.pct}%` : ''}</span></p>
                                 <p className="flex justify-between gap-3"><span className="text-slate-400">Actions in range</span><span className="font-mono">{n(c?.actions || 0)}</span></p>
                                 <p className="flex justify-between gap-3"><span className="text-slate-400">Most active</span><span>{lead ? `${lead.name} (${n(lead.byModule[m.key])})` : '-'}</span></p>
+                                <p className="flex justify-between gap-3"><span className="text-slate-400">SPOC</span><span className="text-right">{(() => {
+                                    if (!c?.spoc) return 'Not assigned';
+                                    const own = data.users.find(u => u.userId === c.spoc?.userId && u.propertyId === p.id)?.byModule[m.key] || 0;
+                                    const share = c.actions ? ` (${Math.round((own / c.actions) * 100)}% of entries)` : '';
+                                    return `${c.spoc.name}${share}${c.spoc.active ? '' : ', no longer on this team'}`;
+                                })()}</span></p>
+                                <p className="flex justify-between gap-3"><span className="text-slate-400">Last entry</span><span className="text-right">{c?.lastEntry ? `${c.lastEntry.name || 'Not recorded'} · ${fmtWhen(c.lastEntry.at)}` : 'None in this period'}</span></p>
                             </div>
                         )}
                     </div>
@@ -528,7 +680,8 @@ export default function AppUsageReport({ orgId }: { orgId: string }) {
                                     <AlertTriangle className={`mt-0.5 h-4 w-4 shrink-0 ${a.level === 'crit' ? 'text-rose-600' : 'text-amber-500'}`} />
                                     <span>
                                         <span className={`block text-[10px] font-bold uppercase tracking-wider ${a.level === 'crit' ? 'text-rose-600' : 'text-amber-600'}`}>{a.level === 'crit' ? 'Low adoption' : 'Below half'}</span>
-                                        <b className="text-slate-800">{a.label}</b>: {a.text}
+                                        <b className="text-slate-800">{a.label}</b>: {a.text}{' '}
+                                        <span className="font-semibold text-slate-700">{a.spoc ? `SPOC: ${a.spoc}` : 'No SPOC'}</span>
                                     </span>
                                 </div>
                             ))}
@@ -536,6 +689,63 @@ export default function AppUsageReport({ orgId }: { orgId: string }) {
                     </section>
                 </div>
             </div>
+
+            {/* SPOC scorecard */}
+            <section className={`rounded-2xl border border-slate-100 bg-white p-4 ${loading ? 'opacity-60' : ''}`}>
+                <div className="mb-3 flex flex-wrap items-baseline justify-between gap-3">
+                    <div>
+                        <h3 className="flex items-center gap-1.5 text-sm font-black text-slate-900"><UserCheck className="h-4 w-4" /> SPOC scorecard</h3>
+                        <p className="text-xs text-slate-500">Who owns which module at each property. On track means {ON_TRACK_PCT}% adoption or more. Open a SPOC to see their boxes.</p>
+                    </div>
+                    {data.spocsAvailable !== false && (
+                        <p className={`text-xs font-bold ${derived.unassigned.length ? 'text-amber-600' : 'text-emerald-600'}`}>
+                            {derived.unassigned.length ? `${derived.unassigned.length} of ${derived.totalBoxes} boxes have no SPOC` : 'Every box has a SPOC'}
+                        </p>
+                    )}
+                </div>
+                {data.spocsAvailable === false ? (
+                    <p className="rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-500">SPOCs need a one-time database update (migration 20261016000002_module_spocs.sql) before they can be assigned.</p>
+                ) : (
+                    <div className="space-y-1.5">
+                        {derived.scorecard.length === 0 && <p className="text-xs text-slate-500">No SPOCs yet. Click &quot;+ SPOC&quot; under any box in the grid to assign one.</p>}
+                        {derived.scorecard.length > 0 && (
+                            <div className="hidden grid-cols-[minmax(0,1.6fr)_repeat(4,minmax(0,1fr))_minmax(0,1.2fr)] gap-3 px-3 text-[10px] font-bold uppercase tracking-wider text-slate-400 md:grid">
+                                <span>SPOC</span><span className="text-right">Boxes</span><span className="text-right">On track</span><span className="text-right">Behind</span><span className="text-right">Not used</span><span className="text-right">Last active</span>
+                            </div>
+                        )}
+                        {derived.scorecard.map(r => (
+                            <details key={r.userId} className="rounded-xl border border-slate-100">
+                                <summary className="grid cursor-pointer list-none grid-cols-2 gap-x-3 gap-y-1 px-3 py-2.5 text-xs md:grid-cols-[minmax(0,1.6fr)_repeat(4,minmax(0,1fr))_minmax(0,1.2fr)]">
+                                    <span className="font-bold text-slate-800">{r.name}{r.leftTeam && <span className="ml-1.5 text-[10px] font-semibold text-amber-600">left a team</span>}</span>
+                                    <span className="text-right font-mono tabular-nums text-slate-600">{r.boxes.length}</span>
+                                    <span className="text-right font-mono tabular-nums text-emerald-600">{r.onTrack}</span>
+                                    <span className={`text-right font-mono tabular-nums ${r.behind ? 'font-bold text-rose-600' : 'text-slate-400'}`}>{r.behind}</span>
+                                    <span className={`text-right font-mono tabular-nums ${r.notUsed ? 'font-bold text-amber-600' : 'text-slate-400'}`}>{r.notUsed}</span>
+                                    <span className="text-right text-slate-500">{fmtDay(r.lastActive)}</span>
+                                </summary>
+                                <div className="grid grid-cols-1 gap-1 px-3 pb-3 text-xs sm:grid-cols-2 lg:grid-cols-3">
+                                    {r.boxes.map(b => (
+                                        <div key={`${b.pid}-${b.module}`} className="flex justify-between gap-2 rounded-lg bg-slate-50 px-2.5 py-1.5">
+                                            <span className="truncate text-slate-600">{b.property} · {b.module}</span>
+                                            <span className={`font-mono font-bold tabular-nums ${!b.used ? 'text-amber-600' : b.pct !== null && b.pct < ON_TRACK_PCT ? 'text-rose-600' : 'text-slate-700'}`}>
+                                                {!b.used ? 'Not used' : b.pct === null ? '-' : `${b.pct}%`}
+                                            </span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </details>
+                        ))}
+                        {derived.unassigned.length > 0 && (
+                            <details className="rounded-xl border border-dashed border-amber-200 bg-amber-50/40">
+                                <summary className="cursor-pointer list-none px-3 py-2.5 text-xs font-bold text-amber-700">Boxes with no SPOC ({derived.unassigned.length})</summary>
+                                <div className="grid grid-cols-1 gap-1 px-3 pb-3 text-xs text-slate-600 sm:grid-cols-2 lg:grid-cols-3">
+                                    {derived.unassigned.map(u => <span key={`${u.property}-${u.module}`}>{u.property} · {u.module}</span>)}
+                                </div>
+                            </details>
+                        )}
+                    </div>
+                )}
+            </section>
 
             {/* Most active users */}
             <section className={`rounded-2xl border border-slate-100 bg-white p-4 ${loading ? 'opacity-60' : ''}`}>
