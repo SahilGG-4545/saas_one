@@ -23,7 +23,8 @@ import ProcurementCatalogModal from '../procurement/ProcurementCatalogModal';
 import FeedbackModal from '@/frontend/components/ui/FeedbackModal';
 import ProcurementFeedbackTab from '../procurement/ProcurementFeedbackTab';
 import MonthlyRequisitionsTab from '../procurement/MonthlyRequisitionsTab';
-import SitePricingAdminTab from '../procurement/SitePricingAdminTab';
+import dynamic from 'next/dynamic';
+import TabLoading from './TabLoading';
 import { SHOW_LEGACY_PER_PROPERTY_CONTROLS } from '../procurement/procurementFeatureFlags';
 import ProcurementVendorTicketsTab from '../procurement/ProcurementVendorTicketsTab';
 import { ProcurementSettingsTab } from '../procurement/ProcurementSettingsTab';
@@ -31,6 +32,9 @@ import PaymentUrgencyTrackerTab from '../procurement/payment-urgency/PaymentUrge
 import { INITIAL_TEST_TASKS } from '../procurement/payment-urgency/mockData';
 import { Layers, DollarSign, ClipboardList } from 'lucide-react';
 import ProcurementTasksTab from '../procurement/ProcurementTasksTab';
+
+// Only drawn on its own (legacy) tab and pulls in the Excel library: load it when that tab opens (performance plan Phase 8).
+const SitePricingAdminTab = dynamic(() => import('../procurement/SitePricingAdminTab'), { loading: TabLoading });
 
 // --- Types ---
 interface MaterialRequest {

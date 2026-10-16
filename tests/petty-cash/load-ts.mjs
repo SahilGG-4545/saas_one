@@ -2,7 +2,6 @@ import { readFileSync, existsSync } from 'node:fs';
 import { resolve, dirname, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
-import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 import ts from 'typescript';
 const require = createRequire(new URL('../../package.json', import.meta.url));

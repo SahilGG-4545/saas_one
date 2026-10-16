@@ -79,6 +79,55 @@ stays the same; only the order of waiting changes.
 | 4.8 | `api/users/list/route.ts` | master-admin check and property lookup in sequence; org and property memberships in sequence; profile and approver lookups in sequence | each pair together. **The permission check still finishes before any directory data is read.** | 🟡 |
 | 4.9 | `api/accounts/summary/route.ts` `:185-196` | PO workflow flags fetched after the ledgers | fetched alongside them (errors still swallowed, as today) | 🟢 |
 
+### Phase 5A — Instant cards (added 2026-10-15, before Phase 5)
+
+Goal: the Command Center cards are already filled in when the dashboard opens. Two parts, both inside the existing card
+loader `useWidgetData` (used by all 26 card data calls), with no new library and no database change.
+
+**Part 1 — Remember the cards' last data in the browser**
+
+| Today | After |
+|---|---|
+| Cards keep data in memory only; a reload or a new visit starts empty and waits ~0.5–2.5 s per card | When a card's data arrives it is also saved in the browser. Next visit, the card shows the saved copy at once, fetches fresh data in the background, and updates when it arrives |
+
+Rules:
+- **Tied to the signed-in user**: saved under that user's id; another user on the same browser can never read it.
+- **Wiped** on logout and on user change (through the existing `clearSessionCaches`, Phase 2).
+- **Max age 24 h**: older copies are ignored and deleted.
+- **Tied to the app version** (Vercel commit id when available): after a deploy, the first load is fresh, so a card never
+  receives data in an old shape.
+- **Only successful answers are saved**; errors and "not allowed" (401/403) never are. If the background refresh fails or
+  is refused, the card behaves exactly as today (the saved copy is replaced by the error), so a removed permission never
+  keeps showing old data.
+- Each card's existing "synced X ago" stamp shows the saved copy's real age until fresh data arrives.
+- Size guard: an answer over 300 KB is not saved; every storage access is wrapped so a full or blocked storage just
+  means "no saved copy".
+
+No new exposure: the same browser profile already holds the user's login session, and the data is only what that user
+already sees.
+
+**Part 2 — Start the card requests during "Loading your dashboard…"**
+
+When the session is known and the role is org super admin / org admin, `UnifiedDashboard` starts the Command Center's
+card requests (all-properties view) while the org dashboard's code is still downloading. The cards then find those
+requests already in flight or finished (the loader already shares requests by URL). The loading screen is **not**
+held back. If the URL list ever drifts from what the cards use, the only cost is one unused request; nothing breaks.
+
+**Files**
+| File | Change |
+|---|---|
+| `frontend/lib/dashboard/useWidgetData.ts` | Save/restore successful answers per user (Part 1); new `prefetchWidgetData(urls)` (Part 2) |
+| `frontend/context/DataCacheContext.tsx` | Tell the loader who is signed in (one call next to the existing user-change effect) |
+| `frontend/components/dashboard/command-center/prefetchUrls.ts` (new, small) | The card URLs for one organisation, kept next to the cards |
+| `frontend/components/dashboard/UnifiedDashboard.tsx` | Call the prefetch for org admin roles |
+
+**Risk:** low. Worst cases: a card shows numbers up to 24 h old for 1–2 s, with its true "synced" age; or one unused
+request.
+
+**Test:** (1) first visit on a fresh browser loads as today; (2) reload → cards appear at once with an older "synced"
+stamp, then update; (3) log out, log in as another user → no cards from the first user; (4) Network tab: card requests
+start during the loading screen; (5) property-admin / staff dashboards unchanged.
+
 ### Phase 5 — Stop asking for the same data twice
 
 Same results, fewer requests. Each item needs a careful side-by-side check of the numbers before and after.
