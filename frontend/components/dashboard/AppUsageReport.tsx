@@ -137,12 +137,6 @@ function fmtWhen(at: string | null | undefined): string {
     return t.toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Kolkata' });
 }
 
-/** "Imran Shaikh" -> "Imran S." so it fits inside a grid cell. */
-function shortName(name: string): string {
-    const parts = name.trim().split(/\s+/);
-    return parts.length > 1 ? `${parts[0]} ${parts[parts.length - 1][0]}.` : parts[0];
-}
-
 /** On track = 50% or more; matches the Needs attention threshold. */
 const ON_TRACK_PCT = 50;
 
@@ -247,14 +241,14 @@ export default function AppUsageReport({ orgId }: { orgId: string }) {
 
         // SPOC scorecard: one row per SPOC, plus the boxes nobody owns yet.
         const lastActiveOf = (uid: string) => data.users.filter(u => u.userId === uid && u.lastActive).map(u => u.lastActive as string).sort().pop() || null;
-        const bySpoc = new Map<string, { userId: string; name: string; boxes: { pid: string; property: string; module: string; pct: number | null; used: boolean; active: boolean }[] }>();
-        const unassigned: { property: string; module: string }[] = [];
+        const bySpoc = new Map<string, { userId: string; name: string; boxes: { pid: string; mod: string; property: string; module: string; pct: number | null; used: boolean; active: boolean }[] }>();
+        const unassigned: { pid: string; mod: string; property: string; module: string }[] = [];
         data.properties.forEach(p => data.modules.forEach(m => {
             if (data.unavailable.includes(m.key)) return;
             const c = data.cells[p.id]?.[m.key];
-            if (!c?.spoc) { unassigned.push({ property: p.name, module: m.label }); return; }
+            if (!c?.spoc) { unassigned.push({ pid: p.id, mod: m.key, property: p.name, module: m.label }); return; }
             if (!bySpoc.has(c.spoc.userId)) bySpoc.set(c.spoc.userId, { userId: c.spoc.userId, name: c.spoc.name, boxes: [] });
-            bySpoc.get(c.spoc.userId)!.boxes.push({ pid: p.id, property: p.name, module: m.label, pct: c.pct, used: isUsed(c), active: c.spoc.active });
+            bySpoc.get(c.spoc.userId)!.boxes.push({ pid: p.id, mod: m.key, property: p.name, module: m.label, pct: c.pct, used: isUsed(c), active: c.spoc.active });
         }));
         const scorecard = Array.from(bySpoc.values()).map(r => {
             const onTrack = r.boxes.filter(b => b.used && b.pct !== null && b.pct >= ON_TRACK_PCT).length;
@@ -506,13 +500,6 @@ export default function AppUsageReport({ orgId }: { orgId: string }) {
                                             onFocus: (e: React.FocusEvent) => showHover(e, p.id, m.key),
                                             onBlur: () => setHover(null),
                                         };
-                                        const chip = data.spocsAvailable !== false && !unavailable && (
-                                            <button type="button" onClick={() => openSpoc(p.id, m.key)}
-                                                aria-label={`${c?.spoc ? 'Change' : 'Add'} SPOC for ${p.name} ${m.label}`}
-                                                className={`mt-0.5 block h-4 w-full truncate rounded px-1 text-center text-[10px] font-medium leading-4 transition-colors ${c?.spoc ? (c.spoc.active ? 'text-slate-600 hover:bg-slate-100 hover:text-slate-900' : 'bg-amber-50 text-amber-700 hover:bg-amber-100') : 'text-slate-300 hover:bg-slate-100 hover:text-slate-600'}`}>
-                                                {c?.spoc ? shortName(c.spoc.name) : '+ SPOC'}
-                                            </button>
-                                        );
                                         const cellBase = `block h-6 w-full rounded-sm px-1 text-center outline-none transition hover:ring-1 hover:ring-slate-300 focus-visible:ring-2 focus-visible:ring-primary ${selected ? 'ring-2 ring-slate-900 hover:ring-2 hover:ring-slate-900' : ''}`;
                                         if (unavailable || !isUsed(c)) {
                                             const emptyLabel = unavailable ? 'No data' : c?.pct === null && m.cadence === 'scheduled' ? 'None due' : 'Not used';
@@ -522,7 +509,6 @@ export default function AppUsageReport({ orgId }: { orgId: string }) {
                                                         className={`${cellBase} ${EMPTY_CELL} ${emptyLabel === 'Not used' ? 'text-xs font-medium' : 'text-[10px] font-medium'}`}>
                                                         {emptyLabel === 'Not used' ? '-' : emptyLabel}
                                                     </button>
-                                                    {chip}
                                                 </td>
                                             );
                                         }
@@ -533,7 +519,6 @@ export default function AppUsageReport({ orgId }: { orgId: string }) {
                                                     className={`${cellBase} text-xs font-semibold tabular-nums ${shade(scale)}`}>
                                                     {view === 'pct' ? (c?.pct === null ? '-' : `${c?.pct}%`) : n(c?.actions || 0)}
                                                 </button>
-                                                {chip}
                                             </td>
                                         );
                                     })}
@@ -554,7 +539,7 @@ export default function AppUsageReport({ orgId }: { orgId: string }) {
                     <span className="inline-flex items-center gap-1.5">
                         <i className={`inline-flex h-3.5 items-center rounded px-1 text-[9px] not-italic leading-none ring-1 ring-slate-200 ${EMPTY_CELL}`}>None due</i> Nothing was scheduled
                     </span>
-                    <span className="inline-flex items-center gap-x-1 gap-y-1"><Info className="h-3 w-3" /> Hover a cell for its working, SPOC and last entry. Click the name under a cell to set its SPOC.</span>
+                    <span className="inline-flex items-center gap-x-1 gap-y-1"><Info className="h-3 w-3" /> Hover a cell for its working, SPOC and last entry. Click a cell to open it below and set its SPOC.</span>
                 </div>
             </section>
 
@@ -634,7 +619,7 @@ export default function AppUsageReport({ orgId }: { orgId: string }) {
                 <section ref={focusRef} className={`${SECTION} scroll-mt-4 ${loading ? 'opacity-60' : ''}`}>
                     <SectionHead
                         title="Inside one property"
-                        hint="Modules ranked by adoption, with who uses each one most. Open a module to see its top users."
+                        hint="Modules ranked by adoption, with who uses each one most. Open a module to see its top users and set its SPOC."
                         right={
                             <select id="usage-focus-property" value={focusProp} onChange={e => { setFocusProp(e.target.value); setHighlight(null); }}
                                 className={`${SELECT} max-w-[220px]`} aria-label="Property to inspect">
@@ -664,6 +649,20 @@ export default function AppUsageReport({ orgId }: { orgId: string }) {
                                     </summary>
                                     <div className="space-y-1 px-3 pb-3 pl-11 text-xs text-slate-600">
                                         <p className="text-slate-400">{c?.detail || 'No data'} · {n(c?.actions || 0)} actions</p>
+                                        {data.spocsAvailable !== false && !data.unavailable.includes(m.key) && (
+                                            <div className="flex items-center justify-between gap-x-3 gap-y-2 rounded-md bg-slate-50 px-2.5 py-1.5">
+                                                <span>
+                                                    <span className="text-slate-400">SPOC: </span>
+                                                    {c?.spoc
+                                                        ? <span className="font-semibold text-slate-800">{c.spoc.name}{!c.spoc.active && <span className="ml-1.5 text-[10px] font-medium text-amber-600">no longer on this team</span>}</span>
+                                                        : <span className="text-slate-500">Not assigned</span>}
+                                                </span>
+                                                <button type="button" onClick={() => openSpoc(focusProp, m.key)}
+                                                    className="shrink-0 rounded-md px-2 py-0.5 text-[11px] font-semibold text-primary hover:bg-white">
+                                                    {c?.spoc ? 'Change' : 'Assign SPOC'}
+                                                </button>
+                                            </div>
+                                        )}
                                         {tops.length === 0 && <p>No named users for this module in the period.</p>}
                                         {tops.map((u, k) => (
                                             <div key={u.userId} className="flex justify-between gap-x-3 gap-y-3">
@@ -732,7 +731,7 @@ export default function AppUsageReport({ orgId }: { orgId: string }) {
                 <SectionHead
                     title="SPOC scorecard"
                     icon={<UserCheck className="h-4 w-4 text-slate-500" />}
-                    hint={<>Who owns which module at each property. On track means {ON_TRACK_PCT}% adoption or more. Open a SPOC to see their boxes.</>}
+                    hint={<>Who owns which module at each property. On track means {ON_TRACK_PCT}% adoption or more. Open a SPOC to see their boxes, and click a box to change its SPOC.</>}
                     right={data.spocsAvailable !== false ? (
                         <p className={`text-xs font-semibold ${derived.unassigned.length ? 'text-amber-600' : 'text-emerald-600'}`}>
                             {derived.unassigned.length ? `${derived.unassigned.length} of ${derived.totalBoxes} boxes have no SPOC` : 'Every box has a SPOC'}
@@ -743,7 +742,7 @@ export default function AppUsageReport({ orgId }: { orgId: string }) {
                     <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-500">SPOCs need a one-time database update (migration 20261016000002_module_spocs.sql) before they can be assigned.</p>
                 ) : (
                     <div className="space-y-1.5">
-                        {derived.scorecard.length === 0 && <p className="text-xs text-slate-500">No SPOCs yet. Click &quot;+ SPOC&quot; under any box in the grid to assign one.</p>}
+                        {derived.scorecard.length === 0 && <p className="text-xs text-slate-500">No SPOCs yet. Assign one from &quot;Inside one property&quot; or from the list of boxes with no SPOC below.</p>}
                         {derived.scorecard.length > 0 && (
                             <div className={`hidden grid-cols-[minmax(0,1.6fr)_repeat(4,minmax(0,1fr))_minmax(0,1.2fr)] gap-x-3 gap-y-3 px-3 pb-1 md:grid ${TH}`}>
                                 <span>SPOC</span><span className="text-right">Boxes</span><span className="text-right">On track</span><span className="text-right">Behind</span><span className="text-right">Not used</span><span className="text-right">Last active</span>
@@ -761,12 +760,13 @@ export default function AppUsageReport({ orgId }: { orgId: string }) {
                                 </summary>
                                 <div className="grid grid-cols-1 gap-x-1 gap-y-1 px-3 pb-3 text-xs sm:grid-cols-2 lg:grid-cols-3">
                                     {r.boxes.map(b => (
-                                        <div key={`${b.pid}-${b.module}`} className="flex justify-between gap-x-2 gap-y-2 rounded-sm bg-slate-50 px-2.5 py-1.5">
+                                        <button type="button" key={`${b.pid}-${b.mod}`} onClick={() => openSpoc(b.pid, b.mod)} title="Change SPOC"
+                                            className="flex justify-between gap-x-2 gap-y-2 rounded-sm bg-slate-50 px-2.5 py-1.5 text-left hover:bg-slate-100">
                                             <span className="truncate text-slate-600">{b.property} · {b.module}</span>
                                             <span className={`font-semibold tabular-nums ${!b.used ? 'text-slate-400' : b.pct !== null && b.pct < ON_TRACK_PCT ? 'text-rose-600' : 'text-slate-700'}`}>
                                                 {!b.used ? 'Not used' : b.pct === null ? '-' : `${b.pct}%`}
                                             </span>
-                                        </div>
+                                        </button>
                                     ))}
                                 </div>
                             </details>
@@ -775,7 +775,13 @@ export default function AppUsageReport({ orgId }: { orgId: string }) {
                             <details className="rounded-md border border-dashed border-slate-200">
                                 <summary className="cursor-pointer list-none rounded-md px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50">Boxes with no SPOC ({derived.unassigned.length})</summary>
                                 <div className="grid grid-cols-1 gap-x-1 gap-y-1 px-3 pb-3 text-xs text-slate-600 sm:grid-cols-2 lg:grid-cols-3">
-                                    {derived.unassigned.map(u => <span key={`${u.property}-${u.module}`}>{u.property} · {u.module}</span>)}
+                                    {derived.unassigned.map(u => (
+                                        <button type="button" key={`${u.pid}-${u.mod}`} onClick={() => openSpoc(u.pid, u.mod)}
+                                            className="flex items-center justify-between gap-x-2 gap-y-2 rounded-sm px-2.5 py-1.5 text-left hover:bg-slate-50">
+                                            <span className="truncate">{u.property} · {u.module}</span>
+                                            <span className="shrink-0 font-semibold text-primary">Assign</span>
+                                        </button>
+                                    ))}
                                 </div>
                             </details>
                         )}
