@@ -32,9 +32,10 @@ interface Report {
     generatedAt: string;
 }
 
-type Preset = '7' | '30' | 'mtd' | 'custom';
+type Preset = 'today' | '7' | '30' | 'mtd' | 'custom';
 
 const PRESETS: { id: Preset; label: string }[] = [
+    { id: 'today', label: 'Today' },
     { id: '7', label: 'Last 7 days' },
     { id: '30', label: 'Last 30 days' },
     { id: 'mtd', label: 'This month' },
@@ -42,28 +43,12 @@ const PRESETS: { id: Preset; label: string }[] = [
 ];
 
 const CADENCE_LABEL: Record<Cadence, string> = { scheduled: 'Scheduled', daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly' };
-// How each rhythm turns into a %. Shown on screen so every number can be checked.
-const CADENCE_RULE: Record<Cadence, { modules: string; formula: string; example: (r: Report['range']) => string }> = {
-    scheduled: {
-        modules: 'SOP Checklists, PPM',
-        formula: 'Completed ÷ scheduled × 100',
-        example: () => '412 of 480 checklists completed = 86%',
-    },
-    daily: {
-        modules: 'Tickets, Electricity, Diesel, Water, Visitors, Stock',
-        formula: 'Days with at least one entry ÷ days in range × 100',
-        example: r => `Entries on ${Math.round(r.days * 0.8)} of ${r.days} days = ${Math.round((Math.round(r.days * 0.8) / r.days) * 100)}%`,
-    },
-    weekly: {
-        modules: 'Meeting Rooms, Petty Cash, Procurement, Roster, Assets',
-        formula: 'Weeks with at least one entry ÷ weeks in range × 100',
-        example: r => `Used in ${Math.max(1, r.weeks - 1)} of ${r.weeks} weeks = ${Math.round((Math.max(1, r.weeks - 1) / r.weeks) * 100)}%`,
-    },
-    monthly: {
-        modules: 'Requisitions',
-        formula: 'Months submitted ÷ months in range × 100',
-        example: r => `Submitted for ${r.months} of ${r.months} month${r.months === 1 ? '' : 's'} = 100%`,
-    },
+// How each rhythm turns into a %. Shown in the hover card so every number can be checked.
+const CADENCE_RULE: Record<Cadence, string> = {
+    scheduled: 'Completed ÷ scheduled × 100',
+    daily: 'Days with at least one entry ÷ days in range × 100',
+    weekly: 'Weeks with at least one entry ÷ weeks in range × 100',
+    monthly: 'Months submitted ÷ months in range × 100',
 };
 const CADENCE_UNIT: Record<Cadence, string> = { scheduled: 'done', daily: 'days', weekly: 'wks', monthly: 'mo' };
 
@@ -85,6 +70,7 @@ function shiftDay(day: string, n: number): string {
 }
 function rangeFor(preset: Preset, custom: { from: string; to: string }): { from: string; to: string } {
     const to = istToday();
+    if (preset === 'today') return { from: to, to };
     if (preset === '7') return { from: shiftDay(to, -6), to };
     if (preset === 'mtd') return { from: `${to.slice(0, 8)}01`, to };
     if (preset === 'custom') return custom;
@@ -130,6 +116,11 @@ export default function AppUsageReport({ orgId }: { orgId: string }) {
     const [userModule, setUserModule] = useState('all');
     const [exporting, setExporting] = useState(false);
     const focusRef = useRef<HTMLDivElement>(null);
+    const [hover, setHover] = useState<{ x: number; y: number; pid: string; mod: string } | null>(null);
+    const showHover = (e: React.MouseEvent | React.FocusEvent, pid: string, mod: string) => {
+        if ('clientX' in e) setHover({ x: e.clientX, y: e.clientY, pid, mod });
+        else { const r = (e.target as HTMLElement).getBoundingClientRect(); setHover({ x: r.right, y: r.bottom, pid, mod }); }
+    };
 
     const range = rangeFor(preset, custom);
 
@@ -227,7 +218,7 @@ export default function AppUsageReport({ orgId }: { orgId: string }) {
             add('Adoption %', grid(c => (isUsed(c) && c?.pct !== null ? (c?.pct as number) : 'Not used')));
             add('Adoption working', data.properties.map(p => {
                 const row: Record<string, string | number> = { Property: p.name };
-                data.modules.forEach(m => { const c = data.cells[p.id]?.[m.key]; row[`${m.label} (${CADENCE_RULE[m.cadence].formula})`] = isUsed(c) && c?.pct !== null ? `${c?.pct}% = ${fraction(c, m.cadence)}` : 'Not used'; });
+                data.modules.forEach(m => { const c = data.cells[p.id]?.[m.key]; row[`${m.label} (${CADENCE_RULE[m.cadence]})`] = isUsed(c) && c?.pct !== null ? `${c?.pct}% = ${fraction(c, m.cadence)}` : 'Not used'; });
                 return row;
             }));
             add('Actions', grid(c => c?.actions || 0));
@@ -352,27 +343,9 @@ export default function AppUsageReport({ orgId }: { orgId: string }) {
                 </div>
                 <p className="mb-3 text-xs text-slate-500">
                     {view === 'pct'
-                        ? 'Each % compares what was done with what was expected for that module. The two numbers it comes from are shown under it. Click a cell to look inside that property.'
+                        ? 'Each cell scores the module against its own rhythm, so every cell is on the same 0 to 100% scale. Hover a cell to see how its % was worked out; click it to look inside that property.'
                         : 'Raw action counts. Daily modules will always show bigger numbers than monthly ones, so compare properties down a column, not modules across a row.'}
                 </p>
-                {view === 'pct' && (
-                    <div className="mb-4 rounded-xl border border-slate-100 bg-slate-50 p-3">
-                        <p className="mb-2 text-xs font-black text-slate-700">How the % is calculated</p>
-                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
-                            {(Object.keys(CADENCE_RULE) as Cadence[]).map(cad => (
-                                <div key={cad} className="rounded-lg bg-white px-3 py-2 text-xs">
-                                    <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{CADENCE_LABEL[cad]}</p>
-                                    <p className="font-bold text-slate-800">{CADENCE_RULE[cad].formula}</p>
-                                    <p className="text-slate-500">{CADENCE_RULE[cad].modules}</p>
-                                    <p className="mt-1 font-mono text-[11px] text-slate-500">e.g. {CADENCE_RULE[cad].example(data.range)}</p>
-                                </div>
-                            ))}
-                        </div>
-                        <p className="mt-2 text-[11px] text-slate-500">
-                            This range has {data.range.days} days, {data.range.weeks} week{data.range.weeks === 1 ? '' : 's'} and {data.range.months} month{data.range.months === 1 ? '' : 's'}. Weeks are counted back from the end date. Checklists due later today are not counted yet.
-                        </p>
-                    </div>
-                )}
                 <div className="overflow-x-auto">
                     <table className="w-full min-w-[900px] border-separate" style={{ borderSpacing: 3 }}>
                         <thead>
@@ -394,11 +367,17 @@ export default function AppUsageReport({ orgId }: { orgId: string }) {
                                         const c = data.cells[p.id]?.[m.key];
                                         const selected = focusProp === p.id && highlight === m.key;
                                         const unavailable = data.unavailable.includes(m.key);
-                                        const title = `${p.name} · ${m.label}\n${c?.detail || ''}\n${n(c?.actions || 0)} actions`;
+                                        const hoverProps = {
+                                            onMouseEnter: (e: React.MouseEvent) => showHover(e, p.id, m.key),
+                                            onMouseMove: (e: React.MouseEvent) => showHover(e, p.id, m.key),
+                                            onMouseLeave: () => setHover(null),
+                                            onFocus: (e: React.FocusEvent) => showHover(e, p.id, m.key),
+                                            onBlur: () => setHover(null),
+                                        };
                                         if (unavailable || !isUsed(c)) {
                                             return (
-                                                <td key={m.key} title={unavailable ? 'Data not available on this deployment' : title}>
-                                                    <button type="button" onClick={() => pickCell(p.id, m.key)} style={NOT_USED_STYLE}
+                                                <td key={m.key}>
+                                                    <button type="button" onClick={() => pickCell(p.id, m.key)} style={NOT_USED_STYLE} {...hoverProps}
                                                         className={`w-full rounded-md px-1 py-2 text-[11px] font-bold text-rose-600 ${selected ? 'ring-2 ring-slate-900' : ''}`}>
                                                         {unavailable ? 'No data' : c?.pct === null && m.cadence === 'scheduled' ? 'None due' : 'Not used'}
                                                     </button>
@@ -407,15 +386,10 @@ export default function AppUsageReport({ orgId }: { orgId: string }) {
                                         }
                                         const scale = view === 'pct' ? (c?.pct ?? 0) : ((c?.actions || 0) / derived.colMax[m.key]) * 100;
                                         return (
-                                            <td key={m.key} title={title}>
-                                                <button type="button" onClick={() => pickCell(p.id, m.key)}
+                                            <td key={m.key}>
+                                                <button type="button" onClick={() => pickCell(p.id, m.key)} {...hoverProps}
                                                     className={`w-full rounded-md px-1 py-2 font-mono text-xs font-bold tabular-nums ${shade(scale)} ${selected ? 'ring-2 ring-slate-900' : ''}`}>
-                                                    {view === 'pct' ? (
-                                                        <>
-                                                            <span className="block">{c?.pct === null ? '-' : `${c?.pct}%`}</span>
-                                                            <span className="block text-[10px] font-semibold opacity-80">{fraction(c, m.cadence)}</span>
-                                                        </>
-                                                    ) : n(c?.actions || 0)}
+                                                    {view === 'pct' ? (c?.pct === null ? '-' : `${c?.pct}%`) : n(c?.actions || 0)}
                                                 </button>
                                             </td>
                                         );
@@ -432,9 +406,38 @@ export default function AppUsageReport({ orgId }: { orgId: string }) {
                         {view === 'pct' ? '100%' : 'More, within each module'}
                     </span>
                     <span className="inline-flex items-center gap-1.5"><i className="inline-block h-2.5 w-4 rounded-sm" style={NOT_USED_STYLE} /> Not used in this period</span>
-                    <span className="inline-flex items-center gap-1"><Info className="h-3 w-3" /> Hover a cell for its full working</span>
+                    <span className="inline-flex items-center gap-1"><Info className="h-3 w-3" /> Hover any cell to see how its % is calculated</span>
                 </div>
             </section>
+
+            {hover && (() => {
+                const p = data.properties.find(x => x.id === hover.pid);
+                const m = data.modules.find(x => x.key === hover.mod);
+                if (!p || !m) return null;
+                const c = data.cells[p.id]?.[m.key];
+                const unavailable = data.unavailable.includes(m.key);
+                const lead = topUsers(p.id, m.key, 1)[0];
+                const width = 300;
+                const left = Math.min(hover.x + 14, (typeof window !== 'undefined' ? window.innerWidth : 1200) - width - 8);
+                const top = Math.min(hover.y + 14, (typeof window !== 'undefined' ? window.innerHeight : 800) - 190);
+                return (
+                    <div role="tooltip" className="pointer-events-none fixed z-50 rounded-xl bg-slate-900 px-3.5 py-3 text-xs text-white shadow-xl" style={{ left, top, width }}>
+                        <p className="font-black">{p.name} · {m.label}</p>
+                        <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">{CADENCE_LABEL[m.cadence]} module</p>
+                        {unavailable ? (
+                            <p className="text-slate-300">This module&apos;s data could not be read on this deployment.</p>
+                        ) : (
+                            <div className="space-y-1">
+                                <p className="flex justify-between gap-3"><span className="text-slate-400">Adoption</span><b>{c?.pct === null || c?.pct === undefined ? '-' : `${c.pct}%`}</b></p>
+                                <p className="text-slate-400">Formula: <span className="text-slate-200">{CADENCE_RULE[m.cadence]}</span></p>
+                                <p className="text-slate-400">Working: <span className="text-slate-200">{c?.detail || 'No data'}{c?.pct !== null && c?.pct !== undefined ? ` = ${c.pct}%` : ''}</span></p>
+                                <p className="flex justify-between gap-3"><span className="text-slate-400">Actions in range</span><span className="font-mono">{n(c?.actions || 0)}</span></p>
+                                <p className="flex justify-between gap-3"><span className="text-slate-400">Most active</span><span>{lead ? `${lead.name} (${n(lead.byModule[m.key])})` : '-'}</span></p>
+                            </div>
+                        )}
+                    </div>
+                );
+            })()}
 
             <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1.4fr_1fr]">
                 {/* Inside one property */}
@@ -467,10 +470,7 @@ export default function AppUsageReport({ orgId }: { orgId: string }) {
                                         <span className="h-2 rounded-r bg-slate-100">
                                             {used && <span className="block h-full rounded-r bg-blue-500" style={{ width: `${Math.max(2, c?.pct ?? 0)}%` }} />}
                                         </span>
-                                        <span className="text-right font-mono text-xs font-bold tabular-nums text-slate-700">
-                                            {used && c?.pct !== null ? `${c?.pct}%` : '-'}
-                                            {used && <span className="block text-[10px] font-semibold text-slate-400">{fraction(c, m.cadence)}</span>}
-                                        </span>
+                                        <span className="text-right font-mono text-xs font-bold tabular-nums text-slate-700">{used && c?.pct !== null ? `${c?.pct}%` : '-'}</span>
                                     </summary>
                                     <div className="space-y-1 px-3 pb-3 pl-11 text-xs text-slate-600">
                                         <p className="text-slate-400">{c?.detail || 'No data'} · {n(c?.actions || 0)} actions</p>

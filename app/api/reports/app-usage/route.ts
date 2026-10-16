@@ -394,6 +394,9 @@ export async function GET(request: NextRequest) {
                 done = used; expected = days.length;
                 pct = Math.round((used / days.length) * 100);
                 detail = `Used on ${used} of ${days.length} days`;
+            } else if (m.cadence === 'weekly' && days.length < 7) {
+                // A weekly module cannot be judged on less than a week.
+                detail = 'Weekly module: pick a range of 7 days or more to score it';
             } else if (m.cadence === 'weekly') {
                 const used = cellUnits.get(k)?.size || 0;
                 done = used; expected = weekCount;
