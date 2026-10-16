@@ -5,7 +5,7 @@ import { TaskAccessService } from './TaskAccessService';
 import { Employee, TaskAssignment, NotificationRule } from './types';
 import { firstName, formatDate, oneLine, sendTeamDigest } from './taskAlerts';
 import { openChatWindows, phoneKey } from './InboundLedger';
-import { headedList, headedOneLine } from './brain/text';
+import { headedList, headedOneLine, sectionedList, sectionedOneLine, type SectionItem } from './brain/text';
 
 /** A task as messages show it. `listNumber` comes from the person's numbered list (getNumberedList); old callers without it
  *  fall back to the position in the message. */
@@ -264,9 +264,22 @@ export class TaskNotificationService {
         const already = new Set(((await TaskDatabaseService.getAuditLogs({ eventType: 'team_digest_sent', limit: 500 })) || [])
             .filter((r: { details?: { date?: string; kind?: string } }) => r?.details?.date === date && (r?.details?.kind ?? 'evening') === kind).map((r: { target_employee_id?: string }) => r.target_employee_id as string));
         const { TaskProgressService } = await import('./TaskProgressService');
+        type CarriedMap = Awaited<ReturnType<typeof TaskProgressService.getCarriedForwardSplit>>;
         let org: Awaited<ReturnType<typeof TaskProgressService.getOrganisationProgress>> | null = null;
         let active: Set<string> | null = null;
         const depts = new Map<string, Awaited<ReturnType<typeof TaskProgressService.getDepartmentProgress>>>();
+        // Carried-forward tasks per department (owner 2026-10-16), read once each. If they cannot be read, the summary
+        // simply goes out without them — never blocked.
+        const carriedByDept = new Map<string, CarriedMap>();
+        const carriedFor = async (departmentId: string, employeeIds: string[]): Promise<CarriedMap> => {
+            if (!carriedByDept.has(departmentId)) {
+                try { carriedByDept.set(departmentId, await TaskProgressService.getCarriedForwardSplit(employeeIds, date, departmentId)); }
+                catch (err) { console.warn('[TaskNotificationService] carried-forward counts skipped:', err instanceof Error ? err.message : err); carriedByDept.set(departmentId, new Map()); }
+            }
+            return carriedByDept.get(departmentId)!;
+        };
+        // Someone who messaged the bot in the last 24 hours gets the normal message with headings (same switch as the rules).
+        const chatOpen = process.env.TASK_RULES_CHAT_WHEN_OPEN === 'false' ? new Set<string>() : await openChatWindows(managers.map(e => e.phone_number));
         let sent = 0;
         for (const m of managers) {
             if (already.has(m.id)) continue;
@@ -277,18 +290,27 @@ export class TaskNotificationService {
                 active = active ?? await TaskAccessService.activeDepartmentIds();
                 const live = org.departmentProgress.filter(d => active!.has(d.departmentId));
                 const sum = (f: (d: typeof live[number]) => number) => live.reduce((a, d) => a + f(d), 0);
+                const rows = await Promise.all(live.map(async d => {
+                    const c = await carriedFor(d.departmentId, d.employeeProgress.map(p => p.employeeId));
+                    const total = (k: 'done' | 'pending') => [...c.values()].reduce((a, x) => a + x[k], 0);
+                    return { label: d.departmentName, done: d.completed, total: d.total, carriedDone: total('done'), carriedPending: total('pending') };
+                }));
                 input = { recipientName: m.name, scope: 'All Active Departments', date, members: sum(d => d.activeEmployeeCount), completed: sum(d => d.completed), pending: Math.max(0, sum(d => d.total) - sum(d => d.completed)),
-                    rows: live.map(d => ({ label: d.departmentName, done: d.completed, total: d.total })) };
+                    rows, rowsArePeople: false };
             } else {
                 if (!m.department_id) continue;
                 const d = depts.get(m.department_id) ?? await TaskProgressService.getDepartmentProgress(m.department_id, date);
                 depts.set(m.department_id, d);
+                const c = await carriedFor(m.department_id, d.employeeProgress.map(p => p.employeeId));
                 input = { recipientName: m.name, scope: `${d.departmentName} Department`, date, members: d.activeEmployeeCount, completed: d.completed, pending: Math.max(0, d.total - d.completed),
-                    rows: d.employeeProgress.map(p => ({ label: p.employeeName, done: p.completed, total: p.total })) };
+                    rows: d.employeeProgress.map(p => ({ label: p.employeeName, done: p.completed, total: p.total, carriedDone: c.get(p.employeeId)?.done ?? 0, carriedPending: c.get(p.employeeId)?.pending ?? 0 })),
+                    rowsArePeople: true };
             }
-            // Midday: only when something in that scope is still pending (owner decision 2026-10-12).
-            if (kind === 'midday' && input.pending <= 0) continue;
-            if (await sendTeamDigest(m.phone_number, { ...input, departmentId: m.department_id || undefined })) {
+            // Midday: only when something in that scope is still pending (owner decision 2026-10-12) — today's tasks or,
+            // since 2026-10-16, carried-forward ones (they are pending work too).
+            const carriedPending = input.rows.reduce((a, r) => a + (r.carriedPending || 0), 0);
+            if (kind === 'midday' && input.pending <= 0 && carriedPending <= 0) continue;
+            if (await sendTeamDigest(m.phone_number, { ...input, departmentId: m.department_id || undefined, asChat: chatOpen.has(phoneKey(m.phone_number)) })) {
                 sent++;
                 await TaskDatabaseService.logAudit({ eventType: 'team_digest_sent', actorId: m.id, targetEmployeeId: m.id, details: { date, kind, scope: input.scope } });
             }
@@ -362,8 +384,18 @@ export class TaskNotificationService {
         if (rule?.ruleType === 'pending_reminder') {
             const open = tasks.filter(t => t.status !== 'completed');
             if (!open.length) return `Hi ${name}! 🌟 You have completed all your tasks for today. Great work!`;
-            return [`Hi ${name}! ⏳ Midday check-in`, '', `You have ${open.length} pending task${s(open.length)}:`, lines(open), '',
-                `Reply "done ${num(open[0], 0)}" when you finish a task, or "tasks" to see your full list.`].join('\n');
+            // Three sections (owner 2026-10-16), the same as the "tasks" reply: carry forward → pending today → completed.
+            const sectioned = (list: ListTask[], max = 3000) => {
+                const kept: SectionItem[] = []; let size = 0;
+                for (let i = 0; i < list.length; i++) {
+                    const l = line(list[i], i);
+                    if (size + l.length > max) return `${sectionedList(kept)}\n…and ${list.length - i} more`;
+                    kept.push({ carried: !!list[i].isCarriedForward, done: list[i].status === 'completed', line: l }); size += l.length + 1;
+                }
+                return sectionedList(kept);
+            };
+            return [`Hi ${name}! ⏳ Midday check-in`, '', sectioned(tasks), '',
+                `Reply "done ${num(open[0], tasks.indexOf(open[0]))}" when you finish a task, or "tasks" to see your full list.`].join('\n');
         }
         if (rule?.ruleType === 'eod_summary') {
             const done = tasks.filter(t => t.status === 'completed').length;
@@ -431,9 +463,9 @@ export class TaskNotificationService {
         }
 
         if (ruleType === 'pending_reminder') {
-            const pending = tasks.filter(t => t.status !== 'completed');
-            const targetTasks = pending.length > 0 ? pending : tasks;
-            return join(targetTasks.map((task, idx) => item(task, idx, '⏳')));
+            // Three sections on one line (owner 2026-10-16): "Carry forward: … — Pending today: … — Completed: …".
+            const mark = (s: string) => (s === 'completed' ? '✅' : s === 'in_progress' ? '🔄' : '⏳');
+            return sectionedOneLine(tasks.map((task, idx) => ({ ...item(task, idx, mark(task.status)), done: task.status === 'completed' })), 700);
         }
 
         // Default / morning_digest:
@@ -564,12 +596,17 @@ export class TaskNotificationService {
                 continue;
             }
 
-            // Fetch tasks using filter rules if provided, or default daily assignments
-            const tasks = options.rule?.taskFilters
+            // Fetch tasks using filter rules if provided, or default daily assignments.
+            // The midday check-in also shows what is already completed (owner 2026-10-16), so it reads its tasks without the
+            // stored "only pending" filter. Who gets it is unchanged: the "something still pending" condition below decides that.
+            const filters = options.rule?.taskFilters && options.rule.ruleType === 'pending_reminder'
+                ? { ...options.rule.taskFilters, onlyPending: false }
+                : options.rule?.taskFilters;
+            const tasks = filters
                 ? await TaskDatabaseService.getFilteredAssignments({
                     employeeId: emp.id,
                     date: targetDate,
-                    filters: options.rule.taskFilters,
+                    filters,
                     departmentId: emp.department_id ?? null
                 })
                 : await TaskDatabaseService.getFilteredAssignments({
@@ -594,7 +631,8 @@ export class TaskNotificationService {
             }
 
             // Condition 2: requirePendingOnly - if rule requires pending and all tasks are completed, skip!
-            if (options.rule?.conditions?.requirePendingOnly && tasks.every(t => t.status === 'completed')) {
+            // The midday check-in always skips someone with nothing pending, exactly as when it read only pending tasks.
+            if ((options.rule?.conditions?.requirePendingOnly || options.rule?.ruleType === 'pending_reminder') && tasks.every(t => t.status === 'completed')) {
                 skippedNoTasksCount++;
                 details.push({
                     employeeId: emp.id,

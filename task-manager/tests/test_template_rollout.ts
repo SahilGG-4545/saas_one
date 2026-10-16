@@ -41,7 +41,7 @@ async function run() {
     const c = A.completedParams('Priyanka Shah', ['Carpet Installation PO'], 'Vidya Nair', 'Procurement', new Date('2026-10-11T11:00:00.000Z'));
     check('completed: [first name, task, who, dept, India time]', JSON.stringify(c) === JSON.stringify(['Priyanka', 'Carpet Installation PO', 'Vidya Nair', 'Procurement', '11 Oct 2026, 04:30 PM']), c);
     const d = A.teamDigestParams({ recipientName: 'Lohitaksha R', scope: 'Tech Department', date: '2026-10-11', members: 5, completed: 12, pending: 3, rows: [{ label: 'Tech', done: 12, total: 12 }, { label: 'Ops', done: 18, total: 20 }, { label: 'New', done: 0, total: 0 }] });
-    check('team digest: 7 blanks, status list like the approved sample', d.length === 7 && d[0] === 'Lohitaksha' && d[2] === '11 Oct 2026' && d[6] === '• Tech: 12/12 Done (100% ✅) | • Ops: 18/20 Done (2 Pending ⏳) | • New: 0/0 Done (no tasks)', d);
+    check('team digest: 7 blanks, status list like the approved sample', d.length === 7 && d[0] === 'Lohitaksha' && d[2] === '11 Oct 2026' && d[6] === 'Today: • Tech: 12/12 Done (100% ✅) | • Ops: 18/20 Done (2 Pending ⏳) | • New: 0/0 Done (no tasks)', d);   // "Today:" added 2026-10-16
     check('a huge team list is cut with "…and N more"', /…and \d+ more$/.test(A.digestStatusList(Array.from({ length: 60 }, (_, i) => ({ label: `Person number ${i}`, done: 1, total: 2 })))));
     const t = (title: string, date: string, status = 'pending') => ({ id: title, title, assigned_date: date, status }) as any;
     const o = N.buildOverdueTemplateParams('Rahul Mehta', [t('Chiller Filter Check', '2026-10-09'), t('DG Meter\nLog', '2026-10-10'), t('Today task', '2026-10-12'), t('Done one', '2026-10-08', 'completed')], '2026-10-12');

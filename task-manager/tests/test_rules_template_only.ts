@@ -55,7 +55,8 @@ async function run() {
     const eod = N.buildTemplateTaskParam('eod_summary', tasks);
     const bad = (s: string) => /[\n\r\t]| {5,}/.test(s);
     check('morning: one line, no tabs, no long space runs', !bad(morning), morning);
-    check('midday: one line, pending only', !bad(midday) && !midday.includes('lift AMC') && midday.includes('2. submit eod report ⏳'), midday);
+    // Owner 2026-10-16: the midday line shows three groups (carry forward → pending today → completed), still on one line.
+    check('midday: one line, carry forward / pending today / completed', !bad(midday) && midday === 'Carry forward: 1. submit daily report ⏳ — Pending today: 2. submit eod report ⏳ — Completed: 3. lift AMC ✅', midday);
     check('eod: one line with the completed count', !bad(eod) && eod.startsWith('Completed 1/3 — '), eod);
     check('carried-forward tasks are labelled apart from today\'s', morning === 'Carry forward: 1. submit daily report ⏳ — Today: 2. submit eod report ⏳ | 3. lift AMC ✅', morning);
     check('without carried tasks: no labels, items separated by " | "', N.buildTemplateTaskParam('morning_digest', tasks.slice(1)) === '1. submit eod report ⏳ | 2. lift AMC ✅', N.buildTemplateTaskParam('morning_digest', tasks.slice(1)));
@@ -119,7 +120,9 @@ async function run() {
     check('EOD chat: header, count, carry-forward and today\'s tasks under headings, one per line',
         eodChat === '🌙 End-of-Day Task Summary\n\nCompleted 1/3 today:\n🔄 *Carry forward tasks*\n1. dry-run test (from 8 Oct) ⏳\n2. 7th-floor VRV AC repair (from 13 Oct) 🔄\n\n📋 *Today\'s tasks*\n3. AMC renewal ✅\n\nGreat work today! Any unfinished items will be carried forward to tomorrow.', eodChat);
     const middayChat = N.buildChatMessage(rule('pending_reminder'), 'Sahil Dhuri', day, '2026-10-14');
-    check('midday chat: only pending tasks, each on its own line, "done 1" hint', middayChat.split('\n').filter(l => /^\d+\. /.test(l)).length === 2 && !middayChat.includes('AMC renewal') && middayChat.includes('Reply "done 1"'), middayChat);
+    // Owner 2026-10-16: three sections, one task per line, completed tasks included, "done 1" hint (first open task).
+    check('midday chat: carry forward / pending today / completed sections, one task per line, "done 1" hint',
+        middayChat === 'Hi Sahil! ⏳ Midday check-in\n\n🔄 *Carry forward* (2)\n1. dry-run test (from 8 Oct) ⏳\n2. 7th-floor VRV AC repair (from 13 Oct) 🔄\n\n✅ *Completed* (1)\n3. AMC renewal ✅\n\nReply "done 1" when you finish a task, or "tasks" to see your full list.', middayChat);
     const overdueChat = N.buildChatMessage(rule('overdue_alert'), 'Sahil Dhuri', day, '2026-10-14');
     check('overdue chat: open tasks from earlier days, oldest first, with due dates', /1\. dry-run test \(Due: 8 Oct\)\n2\. 7th-floor VRV AC repair \(Due: 13 Oct\)/.test(overdueChat) && overdueChat.startsWith('⚠️ Hello Sahil, you have 2 overdue tasks'), overdueChat);
     const morningChat = N.buildChatMessage(rule('morning_digest'), 'Sahil Dhuri', day, '2026-10-14');

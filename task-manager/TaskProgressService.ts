@@ -1,5 +1,5 @@
 import { supabaseAdmin } from '@/backend/lib/supabase/admin';
-import { CARRY_LOOKBACK_DAYS, TaskDatabaseService, carryDaysOf } from './TaskDatabaseService';
+import { CARRY_LOOKBACK_DAYS, TaskDatabaseService, buildNumberedList, carryDaysOf } from './TaskDatabaseService';
 import { addDaysIso } from './dateRange';
 
 /** Owner 2026-10-15: progress for a date RANGE (to), optionally counting unfinished tasks carried in from before it
@@ -42,7 +42,46 @@ export interface OrganisationProgress extends ProgressStats {
     date: string;
 }
 
+/** Carried-forward tasks of one person on one day: finished that day, and still open. */
+export interface CarriedSplit { done: number; pending: number }
+
 export class TaskProgressService {
+    /**
+     * Owner 2026-10-16 (team summaries): per person, the carried-forward tasks on their numbered list for `date` — the SAME
+     * list (and carry-forward window) as their morning message — split into finished that day and still open. Separate from
+     * the progress numbers below, which stay "tasks given today" exactly as before. People with none are left out.
+     */
+    static async getCarriedForwardSplit(employeeIds: string[], date: string, departmentId: string | null): Promise<Map<string, CarriedSplit>> {
+        const out = new Map<string, CarriedSplit>();
+        if (!employeeIds.length) return out;
+        const days = carryDaysOf(await TaskDatabaseService.getCarryForward(departmentId));
+        if (days <= 0) return out;
+        const dayStart = new Date(`${date}T00:00:00+05:30`).toISOString();
+        const [today, earlier] = await Promise.all([
+            supabaseAdmin.from('task_assignments').select('*').eq('assigned_date', date).in('employee_id', employeeIds),
+            supabaseAdmin.from('task_assignments').select('*').gte('assigned_date', addDaysIso(date, -days)).lt('assigned_date', date)
+                .in('employee_id', employeeIds).or(`status.neq.completed,completed_at.gte.${dayStart}`),
+        ]);
+        if (today.error || earlier.error) {
+            console.error('[TaskProgressService] Error fetching carried-forward tasks:', today.error || earlier.error);
+            throw today.error || earlier.error;
+        }
+        const byEmp = (rows: TaskAssignment[]) => {
+            const m = new Map<string, TaskAssignment[]>();
+            for (const r of rows) m.set(r.employee_id, [...(m.get(r.employee_id) || []), r]);
+            return m;
+        };
+        const todayBy = byEmp((today.data || []) as TaskAssignment[]);
+        const earlierBy = byEmp((earlier.data || []) as TaskAssignment[]);
+        for (const id of employeeIds) {
+            const carried = buildNumberedList(todayBy.get(id) || [], earlierBy.get(id) || [], date).filter(t => t.isCarriedForward);
+            if (!carried.length) continue;
+            const done = carried.filter(t => t.status === 'completed').length;
+            out.set(id, { done, pending: carried.length - done });
+        }
+        return out;
+    }
+
     /**
      * Renders a text progress bar (e.g. ████████░░ 80%)
      */
