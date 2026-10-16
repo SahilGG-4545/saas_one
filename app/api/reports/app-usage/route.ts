@@ -156,7 +156,23 @@ export async function GET(request: NextRequest) {
     // Checklists due later today are not missed yet, so scheduled work stops at now.
     const dueBefore = to === today ? new Date().toISOString() : toTsExclusive;
 
-    const propertyIds = access.propertyIds;
+    // CAPEX-only properties (projects, fit-outs) have no day-to-day operations, so
+    // they are left out. Until the operation_type column exists every property counts.
+    const capexIds = new Set<string>();
+    if (access.propertyIds.length) {
+        const { data: kinds, error: kindError } = await supabaseAdmin
+            .from('properties')
+            .select('id, operation_type')
+            .eq('organization_id', access.organizationId)
+            .in('id', access.propertyIds);
+        if (kindError) {
+            if (kindError.code !== '42703') console.error('[app-usage] operation_type:', kindError.message);
+        } else {
+            for (const k of kinds || []) if (k.operation_type === 'capex') capexIds.add(String(k.id));
+        }
+    }
+    const reportProperties = access.properties.filter(p => !capexIds.has(p.id));
+    const propertyIds = reportProperties.map(p => p.id);
     const propertySet = new Set(propertyIds);
     const events: UsageEvent[] = [];
     const unavailable: string[] = [];
@@ -512,7 +528,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
         organizationId: access.organizationId,
         range: { from, to, days: days.length, weeks: weekCount, months: months.length },
-        properties: access.properties.map(p => ({ id: p.id, name: p.name })),
+        properties: reportProperties.map(p => ({ id: p.id, name: p.name })),
+        capexHidden: access.properties.filter(p => capexIds.has(p.id)).map(p => p.name),
         modules: MODULES.map(m => ({ key: m.key, label: m.label, cadence: m.cadence })),
         cells,
         orgWide,

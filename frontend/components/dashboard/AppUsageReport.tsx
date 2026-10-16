@@ -36,6 +36,8 @@ interface Report {
     spocsAvailable?: boolean;
     unavailable: string[];
     truncated: string[];
+    /** Names of CAPEX-only properties left out of the report. */
+    capexHidden?: string[];
     generatedAt: string;
 }
 
@@ -540,6 +542,11 @@ export default function AppUsageReport({ orgId }: { orgId: string }) {
                         <i className={`inline-flex h-3.5 items-center rounded px-1 text-[9px] not-italic leading-none ring-1 ring-slate-200 ${EMPTY_CELL}`}>None due</i> Nothing was scheduled
                     </span>
                     <span className="inline-flex items-center gap-x-1 gap-y-1"><Info className="h-3 w-3" /> Hover a cell for its working, SPOC and last entry. Click a cell to open it below and set its SPOC.</span>
+                    {(data.capexHidden?.length || 0) > 0 && (
+                        <span title={data.capexHidden?.join(', ')}>
+                            {data.capexHidden?.length} CAPEX-only {data.capexHidden?.length === 1 ? 'property is' : 'properties are'} not shown. Change this in Property Management.
+                        </span>
+                    )}
                 </div>
             </section>
 
