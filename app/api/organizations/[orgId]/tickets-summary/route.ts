@@ -83,50 +83,24 @@ export async function GET(
         ]));
         propertyCountRequests.forEach(request => request.catch(() => { /* handled when awaited below */ }));
 
+        // Organization totals for total / open / waitlist / in progress / pending / resolved / urgent are the SUM of the
+        // per-property counts above (every ticket belongs to exactly one property, same filters), so those 7 org-wide
+        // count queries are no longer sent (performance plan Phase 5.5; verified equal on live data). SLA has no
+        // per-property query, so it stays org-wide.
         const [
-            totalCountRes,
-            openCountRes,
-            waitlistCountRes,
-            inProgressCountRes,
-            pendingValCountRes,
-            resolvedCountRes,
             slaBreachCountRes,
-            urgentOpenCountRes,
             validationFeaturesRes,
             trendDataRes
         ] = await Promise.all([
-            // 1. Total (created in period)
-            supabase.from('tickets').select('id', { count: 'exact', head: true }).in('property_id', propertyIds).gte('created_at', periodFilter || '1970-01-01'),
-            // 2. Open (created in period AND still open/blocked)
-            supabase.from('tickets').select('id', { count: 'exact', head: true }).in('property_id', propertyIds).gte('created_at', periodFilter || '1970-01-01').in('status', ['open', 'blocked']),
-            // 3. Waitlist specifically
-            supabase.from('tickets').select('id', { count: 'exact', head: true }).in('property_id', propertyIds).gte('created_at', periodFilter || '1970-01-01').eq('status', 'waitlist'),
-            // 4. In Progress
-            supabase.from('tickets').select('id', { count: 'exact', head: true }).in('property_id', propertyIds).gte('created_at', periodFilter || '1970-01-01').in('status', inProgressStatuses),
-            // 5. Pending Validation
-            supabase.from('tickets').select('id', { count: 'exact', head: true }).in('property_id', propertyIds).gte('created_at', periodFilter || '1970-01-01').eq('status', 'pending_validation'),
-            // 6. Resolved/Closed (Every non-active outcome in the cohort)
-            supabase.from('tickets').select('id', { count: 'exact', head: true }).in('property_id', propertyIds).gte('created_at', periodFilter || '1970-01-01').in('status', resolvedStatuses),
-            // 7. SLA Breached (deadline passed and still active)
+            // SLA Breached (deadline passed and still active)
             supabase.from('tickets').select('id', { count: 'exact', head: true }).in('property_id', propertyIds).gte('created_at', periodFilter || '1970-01-01').or(`sla_deadline.lt.${new Date().toISOString()},sla_breached.eq.true`).not('status', 'in', '("resolved","closed")'),
-            // 8. Urgent Open
-            supabase.from('tickets').select('id', { count: 'exact', head: true }).in('property_id', propertyIds).gte('created_at', periodFilter || '1970-01-01').in('priority', urgentPriorities).not('status', 'in', `(${resolvedStatuses.map(s => `"${s}"`).join(',')},"pending_validation")`),
-            // 9. Validation Features
+            // Validation Features
             supabase.from('property_features').select('property_id, is_enabled').eq('feature_key', 'ticket_validation').in('property_id', propertyIds),
-            // 10. Trend Data (always last 30 days for charts)
+            // Trend Data (always last 30 days for charts)
             supabase.from('tickets').select('status, priority, created_at, resolved_at, property_id').in('property_id', propertyIds).gte('created_at', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()).limit(100000)
         ]);
 
-        const totalCount = totalCountRes.count || 0;
-        const openCount = (openCountRes.count || 0) + (waitlistCountRes.count || 0);
-        const inProgressCount = inProgressCountRes.count || 0;
-        const pendingCount = pendingValCountRes.count || 0;
-        const resolvedCount = resolvedCountRes.count || 0;
         const slaBreachCount = slaBreachCountRes.count || 0;
-        const urgentOpenCount = urgentOpenCountRes.count || 0;
-
-        // Waitlist specifically for display
-        const waitlistCountSpecific = waitlistCountRes.count || 0;
 
         const validationMap = new Map((validationFeaturesRes.data || []).map((f: any) => [f.property_id, f.is_enabled]));
         const validationEnabledIds = new Set(propertyIds.filter(id => validationMap.get(id) === true));
@@ -168,7 +142,7 @@ export async function GET(
             }
         });
 
-        // Per-property counts (started above, together with the organization-wide queries).
+        // Per-property counts (started above, together with the remaining organization-wide queries).
         const propertyBreakdownPromises = properties.map(async (p, index) => {
             const [
                  pTotal,
@@ -199,6 +173,16 @@ export async function GET(
         });
 
         const propertyBreakdown = await Promise.all(propertyBreakdownPromises);
+
+        // Organization totals = sum over properties (see above). Summed before the sort; order doesn't affect a sum of integers.
+        const sumOf = (pick: (p: typeof propertyBreakdown[number]) => number) => propertyBreakdown.reduce((acc, p) => acc + pick(p), 0);
+        const totalCount = sumOf(p => p.total);
+        const openCount = sumOf(p => p.open); // open + blocked + waitlist, as before
+        const waitlistCountSpecific = sumOf(p => p.waitlist);
+        const inProgressCount = sumOf(p => p.in_progress);
+        const resolvedCount = sumOf(p => p.resolved);
+        const pendingCount = sumOf(p => p.pending_validation);
+        const urgentOpenCount = sumOf(p => p.urgent_open);
 
         propertyBreakdown.sort((a, b) => b.total - a.total);
 

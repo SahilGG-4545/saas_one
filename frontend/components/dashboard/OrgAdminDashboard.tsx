@@ -19,11 +19,8 @@ import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { HapticCard } from '@/frontend/components/ui/HapticCard';
 import SignOutModal from '@/frontend/components/ui/SignOutModal';
 import TicketsView from './TicketsView';
-import InviteMemberModal from './InviteMemberModal';
 import NotificationBell from './NotificationBell';
 import Image from 'next/image';
-import TicketCreateModal from '@/frontend/components/tickets/TicketCreateModal';
-import StockMovementModal from '@/frontend/components/stock/StockMovementModal';
 import { assetCaps } from '@/frontend/lib/assets/roles';
 import type { QRScanResult } from '@/frontend/components/shared/UniversalQRScannerModal';
 
@@ -34,6 +31,11 @@ import dynamic from 'next/dynamic';
 import { usePreloadTabs } from '@/frontend/lib/dashboard/preloadTabs';
 import TabLoading from './TabLoading';
 
+// Pop-ups stay mounted exactly as before (they open via isOpen); only their code moves out of this file, so the
+// dashboard itself downloads sooner and they arrive right after it, before anyone clicks (performance plan Phase 8).
+const InviteMemberModal = dynamic(() => import('./InviteMemberModal'), { loading: () => null });
+const TicketCreateModal = dynamic(() => import('@/frontend/components/tickets/TicketCreateModal'), { loading: () => null });
+const StockMovementModal = dynamic(() => import('@/frontend/components/stock/StockMovementModal'), { loading: () => null });
 const HRTicketsContent = dynamic(() => import('@/frontend/components/hr/HRTicketsContent'), { loading: TabLoading });
 const UserDirectory = dynamic(() => import('./UserDirectory'), { loading: TabLoading });
 const AdminSPOCDashboard = dynamic(() => import('../tickets/AdminSPOCDashboard'), { loading: TabLoading });

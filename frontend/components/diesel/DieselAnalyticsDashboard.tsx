@@ -9,6 +9,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useParams } from 'next/navigation';
 import { createClient } from '@/frontend/utils/supabase/client';
 import { useDataCache } from '@/frontend/context/DataCacheContext';
+import { pickActiveTariffs } from '@/frontend/lib/diesel/activeTariffs';
 import { Line, LineChart, ResponsiveContainer, Tooltip, XAxis, Area, AreaChart, YAxis, CartesianGrid } from 'recharts';
 import DGTariffModal from './DGTariffModal';
 import DieselStaffDashboard from './DieselStaffDashboard';
@@ -143,11 +144,21 @@ const DieselAnalyticsDashboard: React.FC<DieselAnalyticsDashboardProps> = ({ pro
                     : null;
             let readingsRequest: Promise<DieselReading[][]> | null = null;
             if (readingsBaseUrl) {
+                // Today, this month and the last 30 days come from ONE request that starts at the earliest of their start
+                // dates (the same date strings as before), split below with those same dates. It returns exactly the rows
+                // of the larger of the old month / 30-day requests, so no new row-cap risk. Previous month stays separate
+                // (performance plan Phase 5.6).
+                const todayStr = new Date().toISOString().split('T')[0];
+                const monthStartStr = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
+                const trendStartStr = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+                const recentStartStr = [monthStartStr, trendStartStr, todayStr].sort()[0];
+                const asList = (v: unknown): DieselReading[] => (Array.isArray(v) ? v : []);
+                const recentTask = fetch(`${readingsBaseUrl}?startDate=${recentStartStr}`).then(r => r.json()).catch(() => []);
                 const fetchTasks: Promise<DieselReading[]>[] = [
-                    fetch(`${readingsBaseUrl}?period=today`).then(r => r.json()).catch(() => []),
-                    fetch(`${readingsBaseUrl}?startDate=${new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0]}`).then(r => r.json()).catch(() => []),
+                    recentTask.then(rows => asList(rows).filter(r => r.reading_date === todayStr)),
+                    recentTask.then(rows => asList(rows).filter(r => r.reading_date >= monthStartStr)),
                     fetch(`${readingsBaseUrl}?startDate=${new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1).toISOString().split('T')[0]}&endDate=${new Date(new Date().getFullYear(), new Date().getMonth(), 0).toISOString().split('T')[0]}`).then(r => r.json()).catch(() => []),
-                    fetch(`${readingsBaseUrl}?startDate=${new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]}`).then(r => r.json()).catch(() => [])
+                    recentTask.then(rows => asList(rows).filter(r => r.reading_date >= trendStartStr)),
                 ];
 
                 if (isCustomRange && dateFrom && dateTo) {
@@ -176,17 +187,18 @@ const DieselAnalyticsDashboard: React.FC<DieselAnalyticsDashboardProps> = ({ pro
             // 3. Current Tariff (Property required for specific tariff, or find first available)
             const today = new Date().toISOString().split('T')[0];
             if (isValidId(propertyId) && Array.isArray(gens) && gens.length > 0) {
+                // ONE request for the property instead of one per generator; the first generator (in list order) with an
+                // active price wins, as before (performance plan Phase 5.1). Same rule as get_active_dg_tariff.
                 let tariffFound = false;
+                const tariffRes = await fetch(`/api/properties/${propertyId}/dg-tariffs`);
+                const active = tariffRes.ok ? pickActiveTariffs(await tariffRes.json(), today) : {};
                 for (const gen of gens) {
-                    const tariffRes = await fetch(`/api/properties/${propertyId}/dg-tariffs?generatorId=${gen.id}&date=${today}`);
-                    if (tariffRes.ok) {
-                        const t = await tariffRes.json();
-                        if (t && t.cost_per_litre) {
-                            activeTariffValue = t.cost_per_litre;
-                            setActiveTariff(activeTariffValue);
-                            tariffFound = true;
-                            break;
-                        }
+                    const t = active[gen.id];
+                    if (t && t.cost_per_litre) {
+                        activeTariffValue = t.cost_per_litre;
+                        setActiveTariff(activeTariffValue);
+                        tariffFound = true;
+                        break;
                     }
                 }
                 if (!tariffFound) {

@@ -88,14 +88,30 @@ function resolveWindow(period: Period, from: string | null, to: string | null): 
 
 // Page through PostgREST until a short page arrives. `build` must return a fresh
 // query each call — Supabase query builders are single-use once awaited.
+// The first page is read alone (a small table costs one request, as before); if it is full, the following pages are
+// read in waves of PAGE_WAVE at once instead of one by one (performance plan Phase 5b). Pages are still taken strictly
+// in order, stopping at the first short page; an error on a page before that point throws exactly as before, and pages
+// past it (and their errors) are ignored, as they were never requested before. Same rows, same order, same totals.
+const PAGE_WAVE = 4;
 async function fetchAll<T>(build: () => any): Promise<T[]> {
     const out: T[] = [];
-    for (let from = 0; from < MAX_ROWS; from += PAGE) {
-        const { data, error } = await build().range(from, from + PAGE - 1);
-        if (error) throw new Error(error.message);
-        const rows = (data || []) as T[];
-        out.push(...rows);
-        if (rows.length < PAGE) break;
+    const readPage = (from: number) => build().range(from, from + PAGE - 1).then((r: any) => r);
+    let from = 0;
+    let wave = 1;
+    while (from < MAX_ROWS) {
+        const starts: number[] = [];
+        for (let i = 0; i < wave && from + i * PAGE < MAX_ROWS; i++) starts.push(from + i * PAGE);
+        const pages = starts.map(readPage);
+        pages.forEach((p: Promise<any>) => p.catch(() => { /* a page past the end may fail; handled in order below */ }));
+        for (const page of pages) {
+            const { data, error } = await page;
+            if (error) throw new Error(error.message);
+            const rows = (data || []) as T[];
+            out.push(...rows);
+            if (rows.length < PAGE) return out;
+        }
+        from += starts.length * PAGE;
+        wave = PAGE_WAVE;
     }
     return out;
 }

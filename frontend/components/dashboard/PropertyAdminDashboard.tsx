@@ -19,23 +19,26 @@ import SignOutModal from '@/frontend/components/ui/SignOutModal';
 import NotificationBell from './NotificationBell';
 import Image from 'next/image';
 import Skeleton from '@/frontend/components/ui/Skeleton';
-import VendorExportModal from '@/frontend/components/vendor/VendorExportModal';
 import { Toast } from '@/frontend/components/ui/Toast';
-import TicketCreateModal from '@/frontend/components/tickets/TicketCreateModal';
 import { useTheme } from '@/frontend/context/ThemeContext';
 import { Sun, Moon } from 'lucide-react';
-import AddMemberModal from './InviteMemberModal';
-import StockMovementModal from '@/frontend/components/stock/StockMovementModal';
 import { assetCaps } from '@/frontend/lib/assets/roles';
 import type { QRScanResult } from '@/frontend/components/shared/UniversalQRScannerModal';
-import ClientQRGeneratorModal from '@/frontend/components/vms/ClientQRGeneratorModal';
 
-import VendorManagementModal from '@/frontend/components/vendor/VendorManagementModal';
 import FeedbackModal from '@/frontend/components/ui/FeedbackModal';
 import dynamic from 'next/dynamic';
 import { usePreloadTabs } from '@/frontend/lib/dashboard/preloadTabs';
 import TabLoading from './TabLoading';
 
+// Pop-ups stay mounted exactly as before (they open via isOpen); only their code moves out of this file, so the
+// dashboard itself downloads sooner and they arrive right after it, before anyone clicks (performance plan Phase 8).
+// FeedbackModal stays a normal import: the always-loaded sidebar uses it too, so moving it would save nothing.
+const VendorExportModal = dynamic(() => import('@/frontend/components/vendor/VendorExportModal'), { loading: () => null });
+const TicketCreateModal = dynamic(() => import('@/frontend/components/tickets/TicketCreateModal'), { loading: () => null });
+const AddMemberModal = dynamic(() => import('./InviteMemberModal'), { loading: () => null });
+const StockMovementModal = dynamic(() => import('@/frontend/components/stock/StockMovementModal'), { loading: () => null });
+const ClientQRGeneratorModal = dynamic(() => import('@/frontend/components/vms/ClientQRGeneratorModal'), { loading: () => null });
+const VendorManagementModal = dynamic(() => import('@/frontend/components/vendor/VendorManagementModal'), { loading: () => null });
 const HRTicketsContent = dynamic(() => import('@/frontend/components/hr/HRTicketsContent'), { loading: TabLoading });
 const UserDirectory = dynamic(() => import('./UserDirectory'), { loading: TabLoading });
 const DieselAnalyticsDashboard = dynamic(() => import('@/frontend/components/diesel/DieselAnalyticsDashboard'), { loading: TabLoading });

@@ -12,6 +12,8 @@ import Link from 'next/link';
 import { TextShimmer } from '@/frontend/components/ui/text-shimmer';
 import BorderGlow from '@/frontend/components/ui/BorderGlow';
 import dynamic from 'next/dynamic';
+import { prefetchWidgetData } from '@/frontend/lib/dashboard/useWidgetData';
+import { commandCenterPrefetchUrls } from './command-center/prefetchUrls';
 
 // Each role's dashboard is downloaded only for that role, not all eleven for everyone (performance plan Phase 1).
 // While it downloads — once, right after login — the same screen as the session loader is shown. Sidebar tabs have their
@@ -179,6 +181,21 @@ const UnifiedDashboard = () => {
             }
         }
     }, [isLoading, role, dashboardOrgId, session?.org_id, router, dashboardContent]);
+
+    // Org admins open on the Command Center: start its card requests now, while "Loading your dashboard…" is still on
+    // screen and the dashboard's code downloads, so the cards find their data already on its way (performance plan
+    // Phase 5A). Nothing waits for these; the loading screen is not held back.
+    useEffect(() => {
+        if (dashboardContent !== undefined || isLoading) return;
+        if (role !== 'org_super_admin' && role !== 'org_admin') return;
+        const orgId = session?.org_id;
+        if (!orgId || !/^[0-9a-f-]{36}$/i.test(orgId)) return;
+        const tab = new URLSearchParams(window.location.search).get('tab');
+        if (tab && tab !== 'overview') return; // another tab opens first: the Command Center isn't shown
+        const pathOrg = window.location.pathname.split('/')[1] || '';
+        if (/^[0-9a-f-]{36}$/i.test(pathOrg) && pathOrg !== orgId) return; // viewing a different organisation
+        prefetchWidgetData(commandCenterPrefetchUrls(orgId));
+    }, [dashboardContent, isLoading, role, session?.org_id]);
 
     if (isLoading && dashboardContent === undefined) {
         return (

@@ -250,10 +250,11 @@ export class WorkspaceService {
             .map(e => ({ userId: e.id, name: e.name, isMe: e.id === actor.id }))
             .sort((a, b) => (a.isMe === b.isMe ? a.name.localeCompare(b.name) : a.isMe ? -1 : 1));
 
-        // Working with a superuser: when this team has it ON, tell the screen who they can work with (a superuser who is unlocked).
+        // Working with a superuser: when this team has it ON, tell the screen who they can work with — a superuser who is
+        // unlocked AND above them in the reporting chain (owner 2026-10-15: same rule as assertCanAssignTask).
         const collabOn = actor.role !== 'superuser' && await TaskAccessService.isSuperuserCollabEnabled(actor.department_id);
         const superusers = collabOn
-            ? (await TaskAccessService.partition(pool.filter(e => e.role === 'superuser' && e.id !== actor.id), snapshot)).allowed
+            ? (await TaskAccessService.partition(await PermissionService.superusersAbove(actor, pool), snapshot)).allowed
                 .map(e => ({ userId: e.id, name: e.name }))
             : [];
 

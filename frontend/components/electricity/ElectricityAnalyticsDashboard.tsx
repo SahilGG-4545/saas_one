@@ -256,11 +256,18 @@ const ElectricityAnalyticsDashboard: React.FC<ElectricityAnalyticsDashboardProps
                 };
 
                 const handleFetch = (url: string) => fetch(url).then(r => r.ok ? r.json() : []).catch(() => []);
+                // Today, this month and the trend come from ONE request starting at the earliest of their start dates
+                // (the same date strings as before), split below with those same dates. It returns exactly the rows of
+                // the larger of the old month / trend requests, so no new row-cap risk. Previous month stays separate
+                // (performance plan Phase 5.6).
+                const recentStart = [dates.today, dates.monthStart, dates.trendStart].sort()[0];
+                const asList = (v: unknown): ElectricityReading[] => (Array.isArray(v) ? v : []);
+                const recentTask = handleFetch(`${readingsBaseUrl}?startDate=${recentStart}`);
                 const fetchTasks: Promise<ElectricityReading[]>[] = [
-                    handleFetch(`${readingsBaseUrl}?startDate=${dates.today}&endDate=${dates.today}`),
-                    handleFetch(`${readingsBaseUrl}?startDate=${dates.monthStart}`),
+                    recentTask.then(rows => asList(rows).filter(r => r.reading_date === dates.today)),
+                    recentTask.then(rows => asList(rows).filter(r => r.reading_date >= dates.monthStart)),
                     handleFetch(`${readingsBaseUrl}?startDate=${dates.prevMonthStart}&endDate=${dates.prevMonthEnd}`),
-                    handleFetch(`${readingsBaseUrl}?startDate=${dates.trendStart}`)
+                    recentTask.then(rows => asList(rows).filter(r => r.reading_date >= dates.trendStart)),
                 ];
 
                 // If custom range is active, also fetch custom range data
