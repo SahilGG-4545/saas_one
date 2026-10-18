@@ -6,7 +6,7 @@ import { TaskErrorHandler } from './TaskErrorHandler';
 import { TaskAccessService } from './TaskAccessService';
 import { PermissionService } from './PermissionService';
 import { Employee, TaskAssignment } from './types';
-import { headedList } from './brain/text';
+import { sectionedList } from './brain/text';
 
 export interface CommandExecutionResult {
     success: boolean;
@@ -333,11 +333,11 @@ export class TaskCommandHandler {
             const completedCount = tasks.filter(t => t.status === 'completed').length;
             const percent = Math.round((completedCount / tasks.length) * 100);
 
-            // Carry-forward tasks and today's tasks under their own headings; the numbers stay the same.
-            const taskLines = headedList(tasks.map((t, idx) => {
+            // Three sections (owner 2026-10-16): carry forward → pending today → completed; the numbers stay the same.
+            const taskLines = sectionedList(tasks.map((t, idx) => {
                 const icon = t.status === 'completed' ? '✅' : '⏳';
                 const statusStr = t.status === 'completed' ? 'Completed' : 'Pending';
-                return { carried: !!t.isCarriedForward, line: `${idx + 1}. ${t.title} [${statusStr} ${icon}]` };
+                return { carried: !!t.isCarriedForward, done: t.status === 'completed', line: `${idx + 1}. ${t.title} [${statusStr} ${icon}]` };
             }));
 
             const reply = [

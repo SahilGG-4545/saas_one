@@ -123,18 +123,26 @@ export function completedPreview(p: [string, string, string, string, string]): s
     return `✅ Task Completed\n\nHello ${p[0]},\nA task you assigned has been completed:\n📋 Task: ${p[1]}\n👤 Completed By: ${p[2]} (${p[3]})\n⏰ Completed At: ${p[4]}`;
 }
 
-export interface DigestRow { label: string; done: number; total: number }
-/** One line for the template blank: "• Tech: 12/12 Done (100% ✅) | • Ops: 18/20 Done (2 Pending ⏳)". */
+/** done/total = tasks given TODAY (unchanged). carriedDone/carriedPending (owner 2026-10-16) = carried-forward tasks finished
+ *  today / still open, shown separately and never added to today's numbers. */
+export interface DigestRow { label: string; done: number; total: number; carriedDone?: number; carriedPending?: number }
+const carriedNote = (r: DigestRow) => {
+    const parts = [r.carriedDone ? `${r.carriedDone} done` : '', r.carriedPending ? `${r.carriedPending} pending` : ''].filter(Boolean);
+    return parts.length ? ` · Carried forward: ${parts.join(', ')}` : '';
+};
+const statusItem = (r: DigestRow) => {
+    const pending = Math.max(0, r.total - r.done);
+    const tail = r.total === 0 ? 'no tasks' : pending === 0 ? '100% ✅' : `${pending} Pending ⏳`;
+    return `• ${oneLine(r.label, 60)}: ${r.done}/${r.total} Done (${tail})`;
+};
+/** One line for the template blank: "Today: • Tech: 12/12 Done (100% ✅) · Carried forward: 2 done | • Ops: 18/20 Done (2 Pending ⏳)".
+ *  "Today:" says the counts are today's tasks (owner 2026-10-16); the template's own heading is fixed by Meta. */
 export function digestStatusList(rows: DigestRow[], max = 700): string {
     if (!rows.length) return 'No tasks today.';
-    const items = rows.map(r => {
-        const pending = Math.max(0, r.total - r.done);
-        const tail = r.total === 0 ? 'no tasks' : pending === 0 ? '100% ✅' : `${pending} Pending ⏳`;
-        return `• ${oneLine(r.label, 60)}: ${r.done}/${r.total} Done (${tail})`;
-    });
-    let out = '';
+    const items = rows.map(r => `${statusItem(r)}${carriedNote(r)}`);
+    let out = 'Today: ';
     for (let i = 0; i < items.length; i++) {
-        const next = out ? `${out} | ${items[i]}` : items[i];
+        const next = i === 0 ? `${out}${items[i]}` : `${out} | ${items[i]}`;
         if (next.length > max) return `${out} | …and ${items.length - i} more`;
         out = next;
     }
@@ -145,6 +153,45 @@ export function teamDigestParams(input: { recipientName: string; scope: string; 
 }
 export function teamDigestPreview(p: string[]): string {
     return `📊 Daily Team Progress Summary\n\nHello ${p[0]},\nHere is today's task completion summary for ${p[1]}:\n📅 Date: ${p[2]}\n👥 Total Members: ${p[3]}\n✅ Tasks Completed Today: ${p[4]}\n⏳ Tasks Remaining Pending: ${p[5]}\n📋 Team Status:\n${p[6]}`;
+}
+
+/**
+ * The normal-message version (owner 2026-10-16), sent to someone who messaged the bot in the last 24 hours: Completed and
+ * Pending, each split into today's and carried-forward tasks with who they belong to, then today's status per row.
+ * `rowsArePeople`: names in brackets use first names (a department summary); a superuser's rows are departments.
+ */
+export function teamDigestChat(input: Parameters<typeof teamDigestParams>[0] & { rowsArePeople: boolean }): string {
+    const who = (r: DigestRow) => (input.rowsArePeople ? firstName(r.label) : oneLine(r.label, 40));
+    const named = (pick: (r: DigestRow) => number) => {
+        const list = input.rows.filter(r => pick(r) > 0).map(r => `${who(r)} ${pick(r)}`);
+        if (!list.length) return '';
+        return ` (${list.slice(0, 8).join(', ')}${list.length > 8 ? `, +${list.length - 8} more` : ''})`;
+    };
+    const sum = (pick: (r: DigestRow) => number) => input.rows.reduce((a, r) => a + pick(r), 0);
+    const cDone = sum(r => r.carriedDone || 0), cPending = sum(r => r.carriedPending || 0);
+    const todayPending = (r: DigestRow) => Math.max(0, r.total - r.done);
+    const status: string[] = []; let size = 0;
+    for (let i = 0; i < input.rows.length; i++) {
+        const line = statusItem(input.rows[i]);
+        if (size + line.length > 2500) { status.push(`…and ${input.rows.length - i} more`); break; }
+        status.push(line); size += line.length + 1;
+    }
+    return [
+        '📊 Daily Team Progress Summary', '',
+        `Hello ${firstName(input.recipientName)},`, '',
+        `Here is today's task completion summary for ${oneLine(input.scope, 80)}:`, '',
+        `📅 Date: ${formatDate(input.date)}`,
+        `👥 Total Members: ${input.members}`, '',
+        '✅ Completed',
+        `• Today: ${input.completed}${named(r => r.done)}`,
+        ...(cDone ? [`• Carried forward: ${cDone}${named(r => r.carriedDone || 0)}`] : []), '',
+        '⏳ Pending',
+        `• Today: ${input.pending}${named(todayPending)}`,
+        ...(cPending ? [`• Carried forward: ${cPending}${named(r => r.carriedPending || 0)}`] : []), '',
+        "📋 Today's Team Status:",
+        ...(status.length ? status : ['No tasks today.']), '',
+        'Review your full team board on the portal.',
+    ].join('\n');
 }
 
 /** "{{2}} has handed over a task to you" — to the NEW holder. Never throws. */
@@ -178,10 +225,18 @@ export async function sendTaskCompleted(phone: string | null | undefined, input:
 }
 
 /** The end-of-day team summary for a manager (their department) or a superuser (all departments). Never throws. */
-export async function sendTeamDigest(phone: string | null | undefined, input: Parameters<typeof teamDigestParams>[0] & { departmentId?: string }): Promise<boolean> {
+export async function sendTeamDigest(phone: string | null | undefined, input: Parameters<typeof teamDigestParams>[0] & { departmentId?: string; asChat?: boolean; rowsArePeople?: boolean }): Promise<boolean> {
     if (!validPhone(phone)) return false;
     const params = teamDigestParams(input);
     try {
+        // Inside the 24-hour window (owner 2026-10-16): the normal message with headings first; the approved template if
+        // that send fails. Outside it: the template only, as before.
+        if (input.asChat) {
+            return await TaskMessagingService.sendMessage(phone, teamDigestChat({ ...input, rowsArePeople: input.rowsArePeople !== false }), {
+                messageType: 'team_digest', ruleType: 'team_digest', departmentId: input.departmentId,
+                campaignName: TEAM_DIGEST_CAMPAIGN, templateParams: params, templateOnly: false,
+            });
+        }
         return await TaskMessagingService.sendMessage(phone, teamDigestPreview(params), {
             messageType: 'team_digest', ruleType: 'team_digest', departmentId: input.departmentId,
             campaignName: TEAM_DIGEST_CAMPAIGN, templateParams: params, templateOnly: true,

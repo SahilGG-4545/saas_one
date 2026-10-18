@@ -41,14 +41,28 @@ let carryCache: { at: number; map: Record<string, CarryForwardSetting> } | null 
 export const resetCarryForwardCache = () => { carryCache = null; };
 
 /** Builds the numbered list from raw rows (pure, so it can be tested without the database). See NumberedAssignment. */
-export function buildNumberedList(today: TaskAssignment[], earlierOpen: TaskAssignment[]): NumberedAssignment[] {
+/** True when the task was completed during `date` (a day in India time). */
+export function isCompletedOn(t: { status?: string; completed_at?: string | null }, date: string): boolean {
+    if (t.status !== 'completed' || !t.completed_at) return false;
+    const at = new Date(t.completed_at).getTime();
+    const start = new Date(`${date}T00:00:00+05:30`).getTime();
+    return Number.isFinite(at) && at >= start && at < start + 24 * 60 * 60 * 1000;
+}
+
+/**
+ * `completedOn` (owner 2026-10-16): a carried-forward task finished on THAT day stays in the list (marked done) instead of
+ * dropping out, so it shows under "Completed" and every other task keeps its number for the rest of the day. Tasks
+ * finished on an earlier day still drop out. Without `completedOn`: exactly the previous behaviour.
+ */
+export function buildNumberedList(today: TaskAssignment[], earlierOpen: TaskAssignment[], completedOn?: string): NumberedAssignment[] {
     const key = (t: TaskAssignment) => t.title.trim().toLowerCase();
     const seen = new Set(today.map(key));
     // Newest copy first, so when the same title is open on several days only the latest copy is kept.
     const newestFirst = [...earlierOpen].sort((a, b) => b.assigned_date.localeCompare(a.assigned_date) || a.created_at.localeCompare(b.created_at));
     const carried: TaskAssignment[] = [];
     for (const t of newestFirst) {
-        if (t.status === 'completed' || seen.has(key(t))) continue;
+        const keepDone = !!completedOn && isCompletedOn(t, completedOn);
+        if ((t.status === 'completed' && !keepDone) || seen.has(key(t))) continue;
         seen.add(key(t));
         carried.push(t);
     }
@@ -457,14 +471,15 @@ export class TaskDatabaseService {
             carryDays > 0
                 ? supabaseAdmin.from('task_assignments').select('*, template:task_templates(*)')
                     .eq('employee_id', params.employeeId).gte('assigned_date', start.toISOString().slice(0, 10)).lt('assigned_date', targetDate)
-                    .neq('status', 'completed')
+                    // still open, or finished since the start of this day (India time) — those stay listed as done (2026-10-16)
+                    .or(`status.neq.completed,completed_at.gte.${new Date(`${targetDate}T00:00:00+05:30`).toISOString()}`)
                 : Promise.resolve({ data: [], error: null }),
         ]);
         if (today.error || earlier.error) {
             console.error('[TaskDatabaseService] Error fetching numbered task list:', today.error || earlier.error);
             throw today.error || earlier.error;
         }
-        return buildNumberedList((today.data || []) as TaskAssignment[], (earlier.data || []) as TaskAssignment[]);
+        return buildNumberedList((today.data || []) as TaskAssignment[], (earlier.data || []) as TaskAssignment[], targetDate);
     }
 
     /**
