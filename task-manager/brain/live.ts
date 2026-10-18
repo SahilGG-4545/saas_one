@@ -75,8 +75,18 @@ export function normalizeState(data: unknown): LiveState {
 }
 
 /** Keep the person's last change for "undo" when the state is rewritten (only while the front door is on). */
-const carry = (state: LiveState, change: LastChange | null | undefined): Partial<LiveState> =>
-    (change ?? state.lastChange) ? { lastChange: change ?? state.lastChange } : {};
+const carry = (state: LiveState, change: LastChange | null | undefined): Partial<LiveState> => {
+    if (!change && !state.lastChange) return {};
+    if (change && state.lastChange) {
+        return {
+            lastChange: {
+                at: change.at,
+                items: [...state.lastChange.items, ...change.items]
+            }
+        };
+    }
+    return { lastChange: change ?? state.lastChange };
+};
 
 const remember = (recent: string[], understood: string, said: string | null): string[] =>
     [...recent, `Person: ${clip(understood, 200)}`, ...(said ? [`Assistant: ${clip(said, 200)}`] : [])].slice(-4);
@@ -123,6 +133,18 @@ export interface LiveOptions {
     via?: string;
 }
 
+interface InFlightTurn {
+    phone: string;
+    pending: Array<{ text: string; messageId: string | null | undefined }>;
+    createdAt: number;
+    closing?: boolean;
+}
+const activeInFlight = new Map<string, InFlightTurn>();
+
+export function resetInFlightQueues(): void {
+    activeInFlight.clear();
+}
+
 /**
  * Called first for every text message. Not ours → { handled:false } and the old bot answers exactly as before.
  * Ours → the decision is already made; the caller runs `background` AFTER answering the webhook.
@@ -131,6 +153,18 @@ export async function claimSmartChat(body: unknown, io?: LiveIO, opts: LiveOptio
     let cand: ReturnType<typeof extractCandidate>;
     try { cand = extractCandidate(body); } catch { return NOT_HANDLED; }
     if (!cand || cand.mediaClass !== 'text' || !cand.text.trim()) return NOT_HANDLED;
+
+    // Zero-delay in-flight merging: if this user already has an active turn running,
+    // catch this follow-up message and append it to that turn instead of answering separately.
+    const inFlight = activeInFlight.get(cand.phone);
+    if (inFlight && !inFlight.closing && Date.now() - inFlight.createdAt < 30_000) {
+        inFlight.pending.push({ text: cand.text, messageId: cand.messageId });
+        const real = io ?? await defaultLiveIO();
+        if (cand.messageId) real.markSeen(cand.messageId);
+        return { handled: true };
+    } else if (inFlight && (inFlight.closing || Date.now() - inFlight.createdAt >= 30_000)) {
+        activeInFlight.delete(cand.phone);
+    }
 
     try {
         const real = io ?? await defaultLiveIO();
@@ -183,7 +217,18 @@ export async function claimSmartChat(body: unknown, io?: LiveIO, opts: LiveOptio
             const plan = cmd ? planExact(cmd, ctx) : null;
             if (plan) {
                 if (messageId0) real.markSeen(messageId0);
-                return { handled: true, background: () => respondExact({ io: real, employee, phone: phone0, messageId: messageId0, text: cand!.text, ctx, state, plan, started, opts }) };
+                return {
+                    handled: true,
+                    background: async () => {
+                        const q: InFlightTurn = { phone: phone0, pending: [], createdAt: Date.now() };
+                        activeInFlight.set(phone0, q);
+                        try {
+                            await respondExact({ io: real, employee, phone: phone0, messageId: messageId0, text: cand!.text, ctx, state, plan, started, opts });
+                        } finally {
+                            activeInFlight.delete(phone0);
+                        }
+                    }
+                };
             }
         }
 
@@ -204,7 +249,18 @@ export async function claimSmartChat(body: unknown, io?: LiveIO, opts: LiveOptio
 
         if (cand.messageId) real.markSeen(cand.messageId);
         const phone = cand.phone, text = cand.text, messageId = cand.messageId;
-        return { handled: true, background: () => respond({ io: brainIO, employee, phone, text, messageId, ctx, result, state, depth: 0, started, relay: ctx.pending?.kind === 'ping_reply', titles, opts, frontDoor, loadMs }) };
+        return {
+            handled: true,
+            background: async () => {
+                const q: InFlightTurn = { phone, pending: [], createdAt: Date.now() };
+                activeInFlight.set(phone, q);
+                try {
+                    await respond({ io: brainIO, employee, phone, text, messageId, ctx, result, state, depth: 0, started, relay: ctx.pending?.kind === 'ping_reply', titles, opts, frontDoor, loadMs });
+                } finally {
+                    activeInFlight.delete(phone);
+                }
+            }
+        };
     } catch (err) {
         console.warn('[TaskBrainLive] not handled, the old bot answers instead:', err instanceof Error ? err.message : err);
         return NOT_HANDLED;
@@ -225,6 +281,96 @@ interface Turn {
 
 const prefixedText = (opts: LiveOptions | undefined, text: string): string => (opts?.replyPrefix ? `${opts.replyPrefix}\n\n${text}` : text);
 const prefixed = (t: Turn, text: string): string => prefixedText(t.opts, text);
+
+/**
+ * Merges any rapid follow-up messages sent by the same user while this turn was in-flight,
+ * combining them into a single coherent response with zero extra latency on single messages.
+ */
+async function drainInFlight(
+    queue: InFlightTurn,
+    phone: string,
+    employee: Employee,
+    io: LiveIO,
+    currentCtx: BrainContext,
+    currentState: LiveState,
+    initialReply: string
+): Promise<{ reply: string; nextState: LiveState }> {
+    let combinedReply = initialReply;
+    let state = currentState;
+    let ctx = currentCtx;
+    let anyChange = !!currentState.lastChange;
+
+    const hadUndoHint = combinedReply.includes(UNDO_HINT);
+    if (hadUndoHint) {
+        combinedReply = combinedReply.split('\n\n' + UNDO_HINT).join('').trim();
+    }
+
+    while (queue.pending.length > 0) {
+        const nextMsg = queue.pending.shift()!;
+        try {
+            ctx = await io.buildContext(employee, phone, {
+                pending: state.pending,
+                recent: state.recent,
+            });
+        } catch { /* use existing ctx */ }
+
+        const cmd = parseExactCommand(nextMsg.text);
+        if (cmd) {
+            const plan = planExact(cmd, ctx);
+            if (plan?.kind === 'act') {
+                const exec = await executeAction(plan.action, ctx, io.exec);
+                const summary = exec?.summary || 'Marked task as done.';
+                const piece = [summary, exec?.values?.details].filter(Boolean).join('\n\n');
+                combinedReply = `${combinedReply}\n\n${piece}`;
+                const change = changeFromAction(plan.action, ctx);
+                state = { ...EMPTY, recent: remember(state.recent, `exact command: ${clip(nextMsg.text, 40)}`, summary), ...carry(state, change) };
+                if (change) anyChange = true;
+            } else if (plan?.kind === 'reply') {
+                combinedReply = `${combinedReply}\n\n${plan.text}`;
+                state = { ...state, recent: remember(state.recent, `exact command: ${clip(nextMsg.text, 40)}`, plan.text) };
+            } else if (cmd.kind === 'done') {
+                const note = `(Note: Task ${cmd.numbers.join(', ')} was not found on your open tasks list.)`;
+                combinedReply = `${combinedReply}\n\n${note}`;
+                state = { ...state, recent: remember(state.recent, `exact command: ${clip(nextMsg.text, 40)}`, note) };
+            } else if (cmd.kind === 'done_all') {
+                const note = `(Note: You have no open tasks left to complete.)`;
+                combinedReply = `${combinedReply}\n\n${note}`;
+                state = { ...state, recent: remember(state.recent, `exact command: ${clip(nextMsg.text, 40)}`, note) };
+            }
+        } else {
+            try {
+                const brainResult = await runBrain(nextMsg.text, ctx, { ...io.brain, policy: DEFAULT_CONFIRM_POLICY, skipReply: true });
+                if (brainResult.status === 'ok' && brainResult.decision && brainResult.interpretation) {
+                    let execResult: ExecutionResult | null = null;
+                    if (brainResult.decision.outcome === 'ACT' && needsExecution(brainResult.decision.action)) {
+                        execResult = await executeAction(brainResult.decision.action, ctx, io.exec);
+                        const change = changeFromAction(brainResult.decision.action, ctx);
+                        state = { ...state, ...carry(state, change) };
+                        if (change) anyChange = true;
+                    }
+                    const nextRep = await composeBrainReply({
+                        text: nextMsg.text,
+                        ctx,
+                        interpretation: brainResult.interpretation,
+                        decision: brainResult.decision,
+                        deps: io.brain,
+                        result: execResult ?? undefined,
+                    });
+                    if (nextRep?.text) {
+                        combinedReply = `${combinedReply}\n\n${nextRep.text}`;
+                        state = { ...state, recent: remember(state.recent, brainResult.interpretation.summary || 'a message', nextRep.text) };
+                    }
+                }
+            } catch { /* ignore fallback */ }
+        }
+    }
+
+    if ((anyChange || hadUndoHint) && !combinedReply.includes(UNDO_HINT)) {
+        combinedReply = `${combinedReply}\n\n${UNDO_HINT}`;
+    }
+
+    return { reply: combinedReply, nextState: state };
+}
 
 /**
  * Phase 3: carry out an exact command ("done 2", "done all", "tasks", "undo") — no AI call. Never throws: a problem becomes
@@ -254,6 +400,15 @@ async function respondExact(t: {
             next = { ...state };
             kind = 'view';
         }
+
+        const inFlight = activeInFlight.get(phone);
+        if (inFlight && inFlight.pending.length > 0) {
+            const drained = await drainInFlight(inFlight, phone, employee, io, ctx, next, reply);
+            reply = drained.reply;
+            next = drained.nextState;
+        }
+        if (inFlight) inFlight.closing = true;
+
         if (io.observeLearning) await io.observeLearning({ messageId: t.messageId, phone, text: t.text, context: ctx, exact: kind, outcome: plan.kind === 'undo' ? 'ACT' : null, reply }).catch(() => undefined);
         await io.setState(phone, { ...next, recent: remember(next.recent, `exact command: ${clip(t.text, 40)}`, reply) });
         await io.reply(phone, prefixedText(t.opts, reply));
@@ -287,18 +442,29 @@ async function handle(t: Turn): Promise<void> {
         const r0 = Date.now();
         const reply = await composeBrainReply({ text: t.text, ctx, interpretation: result.interpretation!, decision: result.decision!, deps: io.brain, result: exec ?? undefined });
         const s0 = Date.now();
+        let finalReplyText = reply?.text ?? null;
+        let finalNext: LiveState | 'clear' = next;
+        const inFlight = activeInFlight.get(phone);
+        if (inFlight && inFlight.pending.length > 0 && finalReplyText) {
+            const baseState = finalNext === 'clear' ? EMPTY : finalNext;
+            const drained = await drainInFlight(inFlight, phone, employee, io, ctx, baseState, finalReplyText);
+            finalReplyText = drained.reply;
+            finalNext = drained.nextState;
+        }
+        if (inFlight) inFlight.closing = true;
+
         // Group 2: the learning note and saving the conversation do not depend on each other → side by side. The state is
         // still saved BEFORE the reply is sent, so a quick "yes" always finds the question.
         await Promise.all([
             io.observeLearning ? io.observeLearning({ messageId: t.messageId, phone, text: t.text, context: ctx, intent: result.interpretation!.intent, outcome: result.decision!.outcome, previousOutcome: t.state.lastOutcome ?? null, interpretation: { intent: result.interpretation!.intent, outcome: result.decision!.outcome, summary: result.interpretation!.summary }, reply: reply?.text ?? null }).catch(() => undefined) : undefined,
-            next === 'clear' ? io.clearState(phone) : io.setState(phone, { ...next, lastOutcome: result.decision!.outcome, recent: remember(t.state.recent, result.interpretation!.summary || 'a message', reply?.text ?? null) }),
+            finalNext === 'clear' ? io.clearState(phone) : io.setState(phone, { ...finalNext, lastOutcome: result.decision!.outcome, recent: remember(t.state.recent, result.interpretation!.summary || 'a message', finalReplyText) }),
         ]);
         const w0 = Date.now();
-        if (reply) await io.reply(phone, prefixed(t, reply.text));
+        if (finalReplyText) await io.reply(phone, prefixed(t, finalReplyText));
         // Group 2: how long each step took (ms) — times only, never content. Read on the Bot health numbers.
         const steps = { load: t.loadMs ?? null, understand: result.trace.fastPath ? 0 : result.trace.interpretMs, act: extra.actMs ?? null, reply: s0 - r0, save: w0 - s0, send: Date.now() - w0 };
         const { actMs: _actMs, ...rest } = extra; void _actMs;
-        await io.audit({ ...shadowDetails({ phone, messageId: t.messageId, messageChars: t.text.length, result: { ...result, reply }, ms: Date.now() - t.started }), steps, live: true, executed: exec?.summary ?? null, ...(t.opts?.via ? { via: t.opts.via } : {}), ...rest }, employee);
+        await io.audit({ ...shadowDetails({ phone, messageId: t.messageId, messageChars: t.text.length, result: { ...result, reply: (reply && finalReplyText) ? { ...reply, text: finalReplyText } : reply }, ms: Date.now() - t.started }), steps, live: true, executed: exec?.summary ?? null, ...(t.opts?.via ? { via: t.opts.via } : {}), ...rest }, employee);
     };
 
     // ── an answer to a question the bot asked ───────────────────────────────

@@ -18,6 +18,8 @@ export function commandCenterPrefetchUrls(orgId: string): string[] {
         `/api/organizations/${orgId}/generators`,
         `/api/organizations/${orgId}/diesel-summary?period=month`,
         `/api/electricity/pace?org_id=${orgId}`,
+        `/api/command-center/ticket-alerts?org_id=${orgId}`,
+        `/api/command-center/kpis?org_id=${orgId}`,
         `/api/command-center/water?org_id=${orgId}`,
         `/api/organizations/${orgId}/ppm-summary`,
         `/api/electricity/tracker?org_id=${orgId}`,

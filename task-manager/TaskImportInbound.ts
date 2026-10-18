@@ -3,7 +3,7 @@ import type { AccessDecision } from './TaskAccessService';
 import type { Employee, TestingConfig } from './types';
 import type { ParseInput } from './TaskImportParser';
 import {
-    AWAITING_TTL_MIN, IMPORT_CONTEXT, ImportClaim, ImportDeps, IMPORT_TEXT, TaskImportService, captionMentionsTasks, looksLikeImportText,
+    AWAITING_TTL_MIN, IMPORT_CONTEXT, ImportClaim, ImportDeps, IMPORT_TEXT, TaskImportService, captionMentionsTasks, looksLikeImportText, looksLikeOneTask,
 } from './TaskImportService';
 import { parseConfirmAnswer } from './TaskGateway';
 
@@ -211,8 +211,11 @@ export async function claimTaskImport(body: unknown, io?: InboundIO): Promise<Im
     const deps = real.importDeps;
 
     try {
-        // Cheap checks first: ordinary chat never costs a database read.
-        if (cand.mediaClass === 'text' && !looksLikeImportText(cand.text, deps.today()) && !PHOTO_ANSWER.test(cand.text)) return NOT_HANDLED;
+        // Cheap checks first: ordinary chat never costs a database read. A single line that reads like a task costs ONE
+        // state read, and is only taken when the person just said "add tasks" (2026-10-17).
+        if (cand.mediaClass === 'text' && !looksLikeImportText(cand.text, deps.today()) && !PHOTO_ANSWER.test(cand.text)) {
+            if (!looksLikeOneTask(cand.text) || !await TaskImportService.isAwaiting(cand.phone, deps)) return NOT_HANDLED;
+        }
 
         // One small read first: while no department has Task Import ON (the default), nothing else is read.
         const importDepartments = await real.getImportDepartments();

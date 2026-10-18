@@ -32,7 +32,7 @@ export function parseExactCommand(text: string): ExactCommand | null {
     if (/^(undo|undo that|undo it|undo last|wapas karo|wapas|galti se|galti ho gayi)$/.test(t)) return { kind: 'undo' };
     if (/^(tasks?|my tasks|view tasks|status|today'?s? tasks)$/.test(t)) return { kind: 'view' };
     if (/^(done ?all|done-all|all done|complete all|completed all|finished all)$/.test(t)) return { kind: 'done_all' };
-    const m = /^(?:done|complete|completed|finish|finished) ((?:\d{1,2})(?:(?: ?, ?| and | & | )\d{1,2})*)$/.exec(t);
+    const m = /^(?:done|complete|completed|finish|finished)(?: (?:my )?tasks?)? ((?:\d{1,2})(?:(?: ?, ?| and | & | )\d{1,2})*)$/.exec(t);
     if (m) {
         const numbers = [...new Set(m[1].split(/ ?, ?| and | & | /).filter(Boolean).map(Number))];
         if (numbers.length && numbers.every(n => Number.isInteger(n) && n >= 1)) return { kind: 'done', numbers };

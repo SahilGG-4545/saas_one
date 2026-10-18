@@ -139,6 +139,20 @@ async function run() {
     await S.TaskImportService.handleText(PHONE, 'add tasks', w.deps);
     r = await S.TaskImportService.handleText(PHONE, 'hello there', w.deps);
     check('while waiting for a list, a single unrelated line is not swallowed', !r.handled);
+    check('small talk, menu numbers, questions and bot requests are not one task',
+        ['ok', '1', 'thanks', '😂', 'show my tasks', 'book a meeting room', 'done 1', 'what is pending?', 'Good morning team'].every(t => !S.looksLikeOneTask(t)));
+    w = world();
+    await S.TaskImportService.handleText(PHONE, 'add tasks', w.deps);
+    r = await S.TaskImportService.handleText(PHONE, 'Complete AOP RECONSILATION', w.deps);
+    await r.background?.();
+    check('"add tasks" then ONE line → that line, word for word, previewed for YES (no AI call)',
+        r.handled && w.ctx?.type === 'IMPORT_PREVIEW' && w.ctx.data.tasks.length === 1 && w.ctx.data.tasks[0].title === 'Complete AOP RECONSILATION' && w.ctx.data.structuredBy === 'rules' && /Reply YES/.test(w.replies[w.replies.length - 1]), w.replies);
+    w = world();
+    let cl0 = await I.claimTaskImport(text('Complete AOP RECONSILATION'), w.io);
+    check('the same line WITHOUT "add tasks" first → not claimed by Task Import, no settings/employee read', !cl0.handled && w.reads.config === 0 && w.reads.employee === 0);
+    await S.TaskImportService.handleText(PHONE, 'add tasks', w.deps);
+    cl0 = await I.claimTaskImport(text('Complete AOP RECONSILATION', 'wamid.one'), w.io);
+    check('webhook: after "add tasks", the one line IS claimed', cl0.handled && !!cl0.background);
 
     w = world(); w.llmStructure = [];
     await S.TaskImportService.handleText(PHONE, 'add tasks: please do the thing that is vague', w.deps).then(c => c.background!());
