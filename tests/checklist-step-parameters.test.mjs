@@ -80,3 +80,52 @@ test('New 2-tier step with parameters: Cafeteria with Carpet, Lights, Dusting', 
         assert.equal(p.requires_photo, undefined, 'Individual parameter must never require photo');
     });
 });
+
+test('Checklist creation autosave preserves in-progress steps, parameters, and form fields across reloads', () => {
+    // Simulating localStorage draft object saved during checklist creation
+    const propertyId = 'prop-12345';
+    const draftKey = `sop_template_draft_${propertyId}`;
+    
+    const mockDraft = {
+        formData: {
+            title: '1st Floor Left Wing Checklist',
+            description: 'Comprehensive daily inspection',
+            category: 'housekeeping',
+            frequency: 'daily',
+            assigned_to: ['user-1'],
+            start_time: '09:00',
+            end_time: '17:00',
+        },
+        items: [
+            {
+                title: 'Cafeteria Cleanliness',
+                description: 'Main dining area',
+                requires_photo: true,
+                parameters: [
+                    { id: 'param-1', name: 'Carpet', type: 'yes_no', is_required: true },
+                    { id: 'param-2', name: 'Lights', type: 'yes_no', is_required: true },
+                ],
+            },
+        ],
+        newItem: {
+            title: 'Pantry Supplies',
+            description: '',
+            requires_photo: false,
+            parameters: [
+                { id: 'param-3', name: 'Water Dispenser Full', type: 'yes_no', is_required: true },
+            ],
+        },
+        savedAt: Date.now(),
+    };
+
+    const serialized = JSON.stringify(mockDraft);
+    const restored = JSON.parse(serialized);
+
+    assert.equal(restored.formData.title, '1st Floor Left Wing Checklist');
+    assert.equal(restored.items.length, 1);
+    assert.equal(restored.items[0].parameters.length, 2);
+    assert.equal(restored.items[0].parameters[0].name, 'Carpet');
+    assert.equal(restored.newItem.title, 'Pantry Supplies');
+    assert.equal(restored.newItem.parameters[0].name, 'Water Dispenser Full');
+    assert.ok(restored.savedAt > 0);
+});

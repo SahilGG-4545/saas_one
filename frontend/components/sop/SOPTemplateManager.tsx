@@ -38,9 +38,60 @@ const SOPTemplateManager: React.FC<SOPTemplateManagerProps> = ({ propertyId, pro
     const [expandedTemplateId, setExpandedTemplateId] = useState<string | null>(null);
     const [expandedCompletions, setExpandedCompletions] = useState<Record<string, any[]>>({});
     const [expandedLoading, setExpandedLoading] = useState<string | null>(null);
+    const [hasDraft, setHasDraft] = useState(false);
+    const [draftInfo, setDraftInfo] = useState<{ title: string; stepCount: number; savedAt: number } | null>(null);
     const supabase = React.useMemo(() => createClient(), []);
     const { getCachedData, setCachedData, invalidateCache } = useDataCache();
     const [liveNow, setLiveNow] = useState(() => new Date());
+
+    const checkDraft = useCallback(() => {
+        if (!propertyId || typeof window === 'undefined') return;
+        try {
+            const raw = localStorage.getItem(`sop_template_draft_${propertyId}`);
+            if (raw) {
+                const parsed = JSON.parse(raw);
+                const title = parsed.formData?.title?.trim() || '';
+                const stepCount = (parsed.items?.length || 0) + (parsed.newItem?.title?.trim() ? 1 : 0);
+                if (title || stepCount > 0) {
+                    setHasDraft(true);
+                    setDraftInfo({
+                        title: title || 'Untitled Checklist',
+                        stepCount,
+                        savedAt: parsed.savedAt || Date.now(),
+                    });
+                    return;
+                }
+            }
+            setHasDraft(false);
+            setDraftInfo(null);
+        } catch {
+            setHasDraft(false);
+            setDraftInfo(null);
+        }
+    }, [propertyId]);
+
+    useEffect(() => {
+        checkDraft();
+        window.addEventListener('sop_draft_updated', checkDraft);
+        return () => window.removeEventListener('sop_draft_updated', checkDraft);
+    }, [checkDraft]);
+
+    // Restore modal if user refreshed while modal was open
+    useEffect(() => {
+        if (!propertyId || typeof window === 'undefined') return;
+        const wasOpen = localStorage.getItem(`sop_template_modal_open_${propertyId}`) === 'true';
+        const draftRaw = localStorage.getItem(`sop_template_draft_${propertyId}`);
+        if (wasOpen && draftRaw) {
+            try {
+                const parsed = JSON.parse(draftRaw);
+                if (parsed.formData?.title || (parsed.items && parsed.items.length > 0) || parsed.newItem?.title) {
+                    setEditingTemplate(null);
+                    setAiPrefill(null);
+                    setShowFormModal(true);
+                }
+            } catch {}
+        }
+    }, [propertyId]);
 
     useEffect(() => {
         const id = setInterval(() => setLiveNow(new Date()), 1000);
@@ -254,15 +305,76 @@ const SOPTemplateManager: React.FC<SOPTemplateManagerProps> = ({ propertyId, pro
                                 setEditingTemplate(null);
                                 setAiPrefill(null);
                                 setShowFormModal(true);
+                                if (propertyId && typeof window !== 'undefined') {
+                                    localStorage.setItem(`sop_template_modal_open_${propertyId}`, 'true');
+                                }
                             }}
                             className="flex items-center gap-1 px-2.5 md:px-3 py-1.5 bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition-all shadow-sm font-black uppercase tracking-widest text-[8px] md:text-[9px] flex-shrink-0"
                         >
                             <Plus size={11} />
-                            New
+                            {hasDraft ? 'Resume / New' : 'New'}
+                            {hasDraft && (
+                                <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse ml-0.5" />
+                            )}
                         </button>
                     </div>
                 )}
             </div>
+
+            {/* Unsaved Draft Recovery Banner */}
+            {canCreate && hasDraft && !showFormModal && (
+                <div className="flex items-center justify-between p-3 bg-amber-500/10 border border-amber-500/25 rounded-xl text-amber-900 shadow-sm">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                        <span className="relative flex h-2 w-2 flex-shrink-0">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                            <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+                        </span>
+                        <div className="min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-[10px] font-black uppercase tracking-wider text-amber-700">Unsaved Checklist Draft</span>
+                                {draftInfo?.savedAt && (
+                                    <span className="text-[10px] text-amber-600/80 font-medium">
+                                        Saved {new Date(draftInfo.savedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                    </span>
+                                )}
+                            </div>
+                            <p className="text-xs font-bold text-slate-900 truncate mt-0.5">
+                                {draftInfo?.title || 'Untitled Checklist'} · <span className="text-slate-500 font-normal">{draftInfo?.stepCount || 0} step{draftInfo?.stepCount === 1 ? '' : 's'}</span>
+                            </p>
+                        </div>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0 ml-3">
+                        <button
+                            onClick={() => {
+                                setEditingTemplate(null);
+                                setAiPrefill(null);
+                                setShowFormModal(true);
+                                if (propertyId && typeof window !== 'undefined') {
+                                    localStorage.setItem(`sop_template_modal_open_${propertyId}`, 'true');
+                                }
+                            }}
+                            className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold transition-all shadow-sm flex items-center gap-1"
+                        >
+                            Resume Draft
+                        </button>
+                        <button
+                            onClick={() => {
+                                if (confirm('Are you sure you want to discard this unsaved checklist draft?')) {
+                                    try {
+                                        localStorage.removeItem(`sop_template_draft_${propertyId}`);
+                                        localStorage.removeItem(`sop_template_modal_open_${propertyId}`);
+                                    } catch {}
+                                    checkDraft();
+                                }
+                            }}
+                            className="px-2 py-1.5 text-xs text-slate-400 hover:text-rose-600 font-bold transition-colors"
+                            title="Discard Draft"
+                        >
+                            Discard
+                        </button>
+                    </div>
+                </div>
+            )}
 
             {/* Templates List */}
             <AnimatePresence mode='wait'>
@@ -661,11 +773,14 @@ const SOPTemplateManager: React.FC<SOPTemplateManagerProps> = ({ propertyId, pro
                                         setEditingTemplate(null);
                                         setAiPrefill(null);
                                         setShowFormModal(true);
+                                        if (propertyId && typeof window !== 'undefined') {
+                                            localStorage.setItem(`sop_template_modal_open_${propertyId}`, 'true');
+                                        }
                                     }}
                                     className="flex items-center gap-2 px-5 md:px-6 py-3 md:py-4 bg-primary text-white rounded-xl md:rounded-2xl hover:opacity-90 transition-all shadow-xl shadow-primary/20 font-black uppercase tracking-widest text-[10px] md:text-xs"
                                 >
                                     <Plus size={14} />
-                                    Create Manually
+                                    {hasDraft ? 'Resume Draft' : 'Create Manually'}
                                 </button>
                             </div>
                         )}
@@ -680,11 +795,18 @@ const SOPTemplateManager: React.FC<SOPTemplateManagerProps> = ({ propertyId, pro
                     setShowFormModal(false);
                     setEditingTemplate(null);
                     setAiPrefill(null);
+                    if (propertyId && typeof window !== 'undefined') {
+                        localStorage.removeItem(`sop_template_modal_open_${propertyId}`);
+                    }
+                    checkDraft();
                 }}
                 propertyId={propertyId!}
                 template={editingTemplate}
                 initialData={aiPrefill ?? undefined}
-                onSuccess={handleFormSuccess}
+                onSuccess={() => {
+                    handleFormSuccess();
+                    checkDraft();
+                }}
             />
 
             {cadViewTemplate && (
