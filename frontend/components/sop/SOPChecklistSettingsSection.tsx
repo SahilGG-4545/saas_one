@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { Sparkles, CheckSquare, ShieldCheck, UserCheck, Bell, Save, Loader2, Info, MapPin, Camera } from 'lucide-react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { Sparkles, CheckSquare, ShieldCheck, UserCheck, Bell, Save, Loader2, Info, MapPin, Camera, Search, ChevronDown, Check, X, MessageSquare } from 'lucide-react';
 import { Toast } from '@/frontend/components/ui/Toast';
 
 interface SOPChecklistSettingsSectionProps {
@@ -33,6 +33,11 @@ export const SOPChecklistSettingsSection: React.FC<SOPChecklistSettingsSectionPr
     const [aiThreshold, setAiThreshold] = useState<number>(70);
     const [approverRequired, setApproverRequired] = useState(false);
     const [approverUserId, setApproverUserId] = useState<string | null>(null);
+
+    // Searchable Approver Selector State
+    const [approverSearch, setApproverSearch] = useState('');
+    const [isApproverDropdownOpen, setIsApproverDropdownOpen] = useState(false);
+    const dropdownRef = useRef<HTMLDivElement>(null);
     const [reminderEnabled, setReminderEnabled] = useState(true);
     const [reminderLeadTime, setReminderLeadTime] = useState<number>(15);
     const [reminderChannels, setReminderChannels] = useState<string[]>(['push']);
@@ -85,6 +90,31 @@ export const SOPChecklistSettingsSection: React.FC<SOPChecklistSettingsSectionPr
         loadSettings();
         loadMembers();
     }, [propertyId]);
+
+    // Handle outside click for searchable approver dropdown
+    useEffect(() => {
+        const handleClickOutside = (event: MouseEvent) => {
+            if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+                setIsApproverDropdownOpen(false);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
+
+    const filteredMembers = useMemo(() => {
+        if (!approverSearch.trim()) return members;
+        const q = approverSearch.toLowerCase();
+        return members.filter(m =>
+            (m.full_name || '').toLowerCase().includes(q) ||
+            (m.email || '').toLowerCase().includes(q) ||
+            (m.role || '').toLowerCase().includes(q)
+        );
+    }, [members, approverSearch]);
+
+    const selectedMember = useMemo(() => {
+        return members.find(m => m.id === approverUserId);
+    }, [members, approverUserId]);
 
     const handleModeChange = (mode: 'basic' | 'advanced') => {
         setChecklistMode(mode);
@@ -317,18 +347,137 @@ export const SOPChecklistSettingsSection: React.FC<SOPChecklistSettingsSectionPr
                             {loadingMembers ? (
                                 <p className="text-xs text-slate-400">Loading members…</p>
                             ) : (
-                                <select
-                                    value={approverUserId || ''}
-                                    onChange={(e) => setApproverUserId(e.target.value || null)}
-                                    className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:border-primary"
-                                >
-                                    <option value="">Select an approver (or any Property Admin / Ops Manager)</option>
-                                    {members.map((m) => (
-                                        <option key={m.id} value={m.id}>
-                                            {m.full_name} ({m.role || 'Member'}) — {m.email}
-                                        </option>
-                                    ))}
-                                </select>
+                                <div className="relative" ref={dropdownRef}>
+                                    {/* Trigger Button */}
+                                    <div
+                                        onClick={() => setIsApproverDropdownOpen((prev) => !prev)}
+                                        className="w-full px-4 py-2.5 bg-slate-50 hover:bg-slate-100/80 border border-slate-200 rounded-xl flex items-center justify-between cursor-pointer transition-all"
+                                    >
+                                        <div className="flex items-center gap-2 min-w-0">
+                                            {selectedMember ? (
+                                                <>
+                                                    <div className="w-6 h-6 rounded-full bg-primary/10 text-primary flex items-center justify-center text-[10px] font-black uppercase flex-shrink-0">
+                                                        {selectedMember.full_name?.charAt(0) || 'U'}
+                                                    </div>
+                                                    <span className="text-xs font-bold text-slate-800 truncate">
+                                                        {selectedMember.full_name}
+                                                    </span>
+                                                    <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded bg-slate-200 text-slate-700 flex-shrink-0">
+                                                        {selectedMember.role || 'Member'}
+                                                    </span>
+                                                    <span className="text-[10px] text-slate-400 truncate hidden sm:inline">
+                                                        ({selectedMember.email})
+                                                    </span>
+                                                </>
+                                            ) : (
+                                                <span className="text-xs text-slate-400">
+                                                    Select an approver (or any Property Admin / Ops Manager)
+                                                </span>
+                                            )}
+                                        </div>
+                                        <div className="flex items-center gap-1.5 flex-shrink-0 ml-2">
+                                            {selectedMember && (
+                                                <button
+                                                    type="button"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        setApproverUserId(null);
+                                                    }}
+                                                    className="p-1 hover:bg-slate-200 rounded-md text-slate-400 hover:text-slate-600 transition-colors"
+                                                    title="Clear selection"
+                                                >
+                                                    <X size={12} />
+                                                </button>
+                                            )}
+                                            <ChevronDown
+                                                size={14}
+                                                className={`text-slate-400 transition-transform ${isApproverDropdownOpen ? 'rotate-180' : ''}`}
+                                            />
+                                        </div>
+                                    </div>
+
+                                    {/* Popover Dropdown with Search */}
+                                    {isApproverDropdownOpen && (
+                                        <div className="absolute z-50 left-0 right-0 mt-1.5 bg-white rounded-xl border border-slate-200 shadow-xl overflow-hidden">
+                                            {/* Search Input */}
+                                            <div className="p-2 border-b border-slate-100 bg-slate-50/70 flex items-center gap-2">
+                                                <Search size={14} className="text-slate-400 flex-shrink-0 ml-1" />
+                                                <input
+                                                    type="text"
+                                                    value={approverSearch}
+                                                    onChange={(e) => setApproverSearch(e.target.value)}
+                                                    placeholder="Search approver by name, email, or role..."
+                                                    className="w-full bg-transparent text-xs text-slate-800 placeholder-slate-400 focus:outline-none"
+                                                    autoFocus
+                                                />
+                                                {approverSearch && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setApproverSearch('')}
+                                                        className="text-slate-400 hover:text-slate-600 p-0.5"
+                                                    >
+                                                        <X size={12} />
+                                                    </button>
+                                                )}
+                                            </div>
+
+                                            {/* Members List */}
+                                            <div className="max-h-56 overflow-y-auto divide-y divide-slate-50">
+                                                <div
+                                                    onClick={() => {
+                                                        setApproverUserId(null);
+                                                        setIsApproverDropdownOpen(false);
+                                                    }}
+                                                    className={`px-3 py-2 text-xs cursor-pointer hover:bg-slate-50 flex items-center justify-between transition-colors ${
+                                                        !approverUserId ? 'bg-primary/5 text-primary font-bold' : 'text-slate-500'
+                                                    }`}
+                                                >
+                                                    <span>Any Property Admin / Ops Manager (Default)</span>
+                                                    {!approverUserId && <Check size={14} className="text-primary" />}
+                                                </div>
+
+                                                {filteredMembers.length === 0 ? (
+                                                    <div className="px-4 py-3 text-center text-xs text-slate-400">
+                                                        No members match "{approverSearch}"
+                                                    </div>
+                                                ) : (
+                                                    filteredMembers.map((m) => {
+                                                        const isSelected = approverUserId === m.id;
+                                                        return (
+                                                            <div
+                                                                key={m.id}
+                                                                onClick={() => {
+                                                                    setApproverUserId(m.id);
+                                                                    setIsApproverDropdownOpen(false);
+                                                                    setApproverSearch('');
+                                                                }}
+                                                                className={`px-3 py-2.5 text-xs cursor-pointer hover:bg-slate-50 flex items-center justify-between transition-colors ${
+                                                                    isSelected ? 'bg-primary/5 text-primary font-bold' : 'text-slate-800'
+                                                                }`}
+                                                            >
+                                                                <div className="flex items-center gap-2 min-w-0">
+                                                                    <div className="w-6 h-6 rounded-full bg-slate-100 text-slate-600 flex items-center justify-center text-[10px] font-black uppercase flex-shrink-0">
+                                                                        {m.full_name?.charAt(0) || 'U'}
+                                                                    </div>
+                                                                    <div className="min-w-0">
+                                                                        <div className="flex items-center gap-1.5">
+                                                                            <span className="truncate">{m.full_name}</span>
+                                                                            <span className="text-[8px] font-black uppercase px-1.5 py-0.2 rounded bg-slate-100 text-slate-600 border border-slate-200/60 flex-shrink-0">
+                                                                                {m.role || 'Member'}
+                                                                            </span>
+                                                                        </div>
+                                                                        <p className="text-[10px] text-slate-400 truncate">{m.email}</p>
+                                                                    </div>
+                                                                </div>
+                                                                {isSelected && <Check size={14} className="text-primary flex-shrink-0 ml-2" />}
+                                                            </div>
+                                                        );
+                                                    })
+                                                )}
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
                             )}
                             <p className="text-[10px] text-slate-400 font-medium flex items-center gap-1">
                                 <Info size={11} />
@@ -418,6 +567,15 @@ export const SOPChecklistSettingsSection: React.FC<SOPChecklistSettingsSectionPr
                                         </button>
                                     ))}
                                 </div>
+
+                                {reminderChannels.includes('whatsapp') && (
+                                    <div className="mt-2.5 p-2.5 bg-amber-50/80 border border-amber-200 rounded-xl flex items-start gap-2">
+                                        <Info size={14} className="text-amber-600 flex-shrink-0 mt-0.5" />
+                                        <p className="text-[11px] text-amber-900 leading-snug">
+                                            <span className="font-bold">Omnichannel Event Outbox:</span> WhatsApp notifications are routed asynchronously via <code className="px-1 py-0.5 bg-amber-100/90 rounded text-[10px] font-mono">public.event_outbox</code> and AiSensy. Outbound WhatsApp messages require an approved Meta template (e.g. <code className="px-1 py-0.5 bg-amber-100/90 rounded text-[10px] font-mono">sop_shift_reminder</code>).
+                                        </p>
+                                    </div>
+                                )}
                             </div>
                         </div>
                     )}
