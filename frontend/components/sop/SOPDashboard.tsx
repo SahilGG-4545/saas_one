@@ -157,7 +157,7 @@ const SOPDashboard: React.FC<SOPDashboardProps> = ({ propertyId, propertyIds, pr
 
                     {/* Right side: headerRight (notification bell etc) */}
                     <div className="flex items-center gap-2">
-                        {isAdmin && (activeView === 'list' || activeView === 'history' || activeView === 'reports') && (
+                        {isAdmin && (activeView === 'list' || activeView === 'history' || activeView === 'reports' || activeView === 'settings') && (
                             <div className="hidden md:flex bg-slate-100 p-0.5 rounded-lg border border-slate-200">
                                 <button
                                     onClick={() => setActiveView('list')}
