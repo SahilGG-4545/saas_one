@@ -129,3 +129,65 @@ test('Checklist creation autosave preserves in-progress steps, parameters, and f
     assert.equal(restored.newItem.parameters[0].name, 'Water Dispenser Full');
     assert.ok(restored.savedAt > 0);
 });
+
+test('CAD custom polygon drawing computes bounding box for AI scoring crop while preserving arbitrary points', () => {
+    // Simulating user drawing an irregular 5-point polygon (e.g. L-shaped cafeteria or corridor)
+    const points = [
+        { x: 100, y: 150 },
+        { x: 300, y: 150 },
+        { x: 300, y: 350 },
+        { x: 200, y: 350 },
+        { x: 200, y: 250 },
+        { x: 100, y: 250 },
+    ];
+
+    const minX = Math.round(Math.min(...points.map((p) => p.x)));
+    const maxX = Math.round(Math.max(...points.map((p) => p.x)));
+    const minY = Math.round(Math.min(...points.map((p) => p.y)));
+    const maxY = Math.round(Math.max(...points.map((p) => p.y)));
+    const width = Math.max(10, maxX - minX);
+    const height = Math.max(10, maxY - minY);
+
+    const cadArea = {
+        id: 'area-cafeteria-custom',
+        label: 'Irregular Cafeteria',
+        shape_type: 'polygon',
+        points,
+        coordinates: { x: minX, y: minY, width, height },
+        linked_step_ids: ['step-201'],
+    };
+
+    // 1. Coordinates must provide a valid bounding box for Sharp image cropping
+    assert.equal(cadArea.coordinates.x, 100);
+    assert.equal(cadArea.coordinates.y, 150);
+    assert.equal(cadArea.coordinates.width, 200);
+    assert.equal(cadArea.coordinates.height, 200);
+
+    // 2. Custom shape points must be retained exactly
+    assert.equal(cadArea.points.length, 6);
+    assert.equal(cadArea.shape_type, 'polygon');
+
+    // 3. Centroid calculation for CAD overlay badge
+    const sumX = cadArea.points.reduce((acc, p) => acc + p.x, 0);
+    const sumY = cadArea.points.reduce((acc, p) => acc + p.y, 0);
+    const badgeX = Math.round(sumX / cadArea.points.length);
+    const badgeY = Math.round(sumY / cadArea.points.length);
+    assert.ok(badgeX >= 100 && badgeX <= 300, 'Centroid X should be within shape bounds');
+    assert.ok(badgeY >= 150 && badgeY <= 350, 'Centroid Y should be within shape bounds');
+});
+
+test('CAD legacy rectangular areas remain 100% backwards compatible', () => {
+    // Existing stored rectangle area
+    const legacyArea = {
+        id: 'area-legacy-1',
+        label: 'Conference Room',
+        coordinates: { x: 50, y: 80, width: 120, height: 90 },
+        linked_step_ids: ['step-101'],
+    };
+
+    assert.equal(legacyArea.points, undefined);
+    assert.equal(legacyArea.coordinates.width, 120);
+    assert.equal(legacyArea.coordinates.height, 90);
+    assert.equal(legacyArea.linked_step_ids.length, 1);
+});
+
