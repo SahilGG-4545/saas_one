@@ -199,7 +199,7 @@ async function run() {
     w = mk(m => (/everyone/i.test(m) ? grp({ whose: 'team', department: null, except: [] })() : YES));
     await turn(w, 'assign everyone the task of checking emails', 'g1');
     const ids = (w.state?.data?.action?.actions || []).map((a: any) => a.assigneeId);
-    check('"everyone" → one preview with each person you may give work to (never Neha / Saniel)', w.state?.data?.action?.type === 'batch' && JSON.stringify(ids) === '["u2","u3","u4","u5","u6"]' && /Add for Vidya Nair: Check emails/.test(w.sent[0]), { ids, sent: w.sent[0] });
+    check('"everyone" → one preview with each person you may give work to (never Neha / Saniel)', w.state?.data?.action?.type === 'batch' && JSON.stringify(ids) === '["u2","u3","u4","u5","u6"]' && /Check emails → Vidya Nair/.test(w.sent[0]), { ids, sent: w.sent[0] });   // owner 2026-10-19: one line per person
     await turn(w, 'yes', 'g2');
     check('…YES → a task for each of them', w.exec.filter((e: any) => e[0] === 'assign').length === 5, w.exec);
     w = mk(grp({ whose: 'team', department: null, except: ['Harsh'] }));

@@ -228,7 +228,7 @@ export class TaskCommandHandler {
             // themselves, everyone below them in the reporting chain, colleagues when team sharing is ON;
             // superusers may assign to anyone.
             const allEmployees = await TaskDatabaseService.getAllEmployees();
-            const deptEmployees = await PermissionService.visibleAndAssignable(employee, allEmployees);
+            const deptEmployees = await PermissionService.assignableTo(employee, allEmployees);
 
             // Match by self ('me' / 'myself'), or search available assignees
             const isSelf = targetNameQuery.toLowerCase() === 'me' || targetNameQuery.toLowerCase() === 'myself';

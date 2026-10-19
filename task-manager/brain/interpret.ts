@@ -32,7 +32,8 @@ export function validateInterpretation(raw: unknown, domains: DomainHandler[], c
 
     // Part B: wording may come from the message OR the person's OWN earlier messages ("yes add this task" agrees to a task they
     // named a minute ago). Never from the assistant's lines. Every change is still shown and confirmed before it happens.
-    const groundText = [message, ...(ctx.conversation ?? []).filter(l => l.startsWith('Person: ')).map(l => l.slice(8))].join('\n');
+    // Owner 2026-10-19: an unfinished request ("draft") is the person's own words too, so "both" can finish it.
+    const groundText = [message, ...(ctx.pending?.kind === 'draft' ? [ctx.pending.request] : []), ...(ctx.conversation ?? []).filter(l => l.startsWith('Person: ')).map(l => l.slice(8))].join('\n');
 
     // Part B: the other requests in the same message. A bad one never fails the whole reading: it is reported as unclear.
     const also: ExtraRequest[] = []; const unclear: string[] = [];
