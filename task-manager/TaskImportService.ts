@@ -83,6 +83,18 @@ export function captionMentionsTasks(text: string): boolean {
 
 const nonEmptyLines = (t: string) => String(t || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
 
+// After "add tasks", ONE typed line is the task: "Complete AOP reconciliation" (2026-10-17). Small talk, menu numbers,
+// questions and bot requests still go to the normal bot. Nothing is saved without the preview's YES.
+const SMALL_TALK = /^(?:\d{1,3}|ok(?:ay)?|k|y|yes|yeah|yep|sure|n|no|nope|thanks?|thank\s*you|thx|ty|hmm+|menu|help|done|hi+|hello|hey)$/i;
+const NOT_A_TASK_START = /^(?:hi|hello|hey|good\s+(?:morning|afternoon|evening|night)|show|view|book|raise|cancel|what|which|how|when|where|why|who|(?:done|complete|mark)\s+\d)\b/i;
+
+/** One line that reads like a task (letters, not small talk, not a question or a bot request). */
+export function looksLikeOneTask(text: string): boolean {
+    const t = String(text || '').trim().replace(/[.!\s]+$/g, '');
+    if (!t || t.length > 300 || nonEmptyLines(t).length !== 1 || !/\p{L}/u.test(t)) return false;
+    return !SMALL_TALK.test(t) && !NOT_A_TASK_START.test(t) && !t.endsWith('?');
+}
+
 export type PreviewCommand =
     | { kind: 'yes' }
     | { kind: 'no' }
@@ -207,6 +219,10 @@ export class TaskImportService {
             const body = trigger ? trigger.rest : text.trim();
             if (nonEmptyLines(body).length >= 1 && (trigger || nonEmptyLines(text).length >= 2)) {
                 return this.begin(phone, { label: 'list', load: async () => ({ kind: 'text', text: body }) }, deps);
+            }
+            if (looksLikeOneTask(text)) {
+                // Sent as a one-item list so the rules take the line word for word (no AI rewording).
+                return this.begin(phone, { label: 'task', load: async () => ({ kind: 'text', text: /^(\d{1,3}[.)]|[-*•])\s+/.test(body) ? body : `- ${body}` }) }, deps);
             }
             return NOT_HANDLED;
         }

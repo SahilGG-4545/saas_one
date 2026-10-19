@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useDashboardContent } from '@/frontend/components/layout/DashboardContentSlot';
 import AccountsWorkspace from '@/frontend/components/layout/AccountsWorkspace';
 import DashboardSidebar, { MobileHeader } from '@/frontend/components/layout/DashboardSidebar';
+import { ContextBar } from '@/frontend/components/layout/ContextBar';
 import Loader from '@/frontend/components/ui/Loader';
 import { useAppSession } from '@/frontend/hooks/useAppSession';
 import { AlertCircle, TrendingUp, ArrowRight, IndianRupee } from 'lucide-react';
@@ -299,12 +300,37 @@ const UnifiedDashboard = () => {
     );
 };
 
+/**
+ * Petty Cash for roles without a dashboard of their own (HR, BD, …). Same frame as every other tab of the shared
+ * dashboard layout (app/(dashboard)/layout.tsx): collapsible sidebar remembered under the same key, the ContextBar on
+ * desktop, and the same content padding. Previously its `lg:pl-72` was cancelled by the project's own `.p-4` rule
+ * (globals.css), so the page slid under the sidebar (owner 2026-10-16).
+ */
 function GenericPettyCashDashboard({ children }: { children: React.ReactNode }) {
     const [mobileOpen, setMobileOpen] = React.useState(false);
-    return <div className="min-h-screen flex bg-background">
+    const [sidebarOpen, setSidebarOpen] = React.useState(true);
+    React.useEffect(() => {
+        try {
+            const saved = localStorage.getItem('dashboard_sidebar_open');
+            if (saved !== null) setSidebarOpen(saved === 'true');
+        } catch { /* storage unavailable: keep it open */ }
+    }, []);
+    const toggleSidebar = (openState?: boolean) => {
+        setSidebarOpen(prev => {
+            const next = openState !== undefined ? openState : !prev;
+            try { localStorage.setItem('dashboard_sidebar_open', String(next)); } catch { /* ignore */ }
+            return next;
+        });
+    };
+    return <div className="flex min-h-screen bg-[#fafbfc]">
         <MobileHeader onMenuToggle={() => setMobileOpen(true)} />
-        <DashboardSidebar isOpen isMobileOpen={mobileOpen} onMobileClose={() => setMobileOpen(false)} />
-        <main className="flex-1 min-w-0 lg:pl-72 pt-16 lg:pt-0 p-4">{children}</main>
+        <DashboardSidebar isOpen={sidebarOpen} onClose={() => toggleSidebar(false)} isMobileOpen={mobileOpen} onMobileClose={() => setMobileOpen(false)} />
+        <div className={`flex-1 flex flex-col min-w-0 pt-[56px] lg:pt-0 ${sidebarOpen ? 'lg:pl-72' : 'lg:pl-0'} transition-[padding] duration-300 ease-in-out border-l border-slate-300 shadow-[-4px_0_12px_-4px_rgba(0,0,0,0.05)] relative z-10 bg-background`}>
+            <div className="hidden lg:block">
+                <ContextBar isSidebarOpen={sidebarOpen} onToggleSidebar={() => toggleSidebar(true)} />
+            </div>
+            <main className="flex-1 overflow-y-auto overflow-x-hidden max-w-full min-w-0 touch-scroll responsive-container py-4 lg:py-6">{children}</main>
+        </div>
     </div>;
 }
 

@@ -55,7 +55,7 @@ function evalSummary(rows: StoredEval[]) { const s = summarize(rows.map(r => r.s
  * decision 2026-10-12), each model in order, then falls back to the existing provider (glm-5.3-flash), so the loop never
  * stops because Gemini is unavailable (no key, quota, depleted credits). The model that wrote it is recorded.
  */
-export async function draftCandidate(current: PromptSections, labels: any[], state: EvalState, llm: BrainLlm, gemini: BrainLlm | null = geminiLlm()): Promise<{ sections: PromptSections; changeSummary: string; model: string }> {
+export async function draftCandidate(current: PromptSections, labels: any[], state: EvalState, llm: BrainLlm = engyBrainLlm({ thinking: 'off', timeoutMs: 90_000 }), gemini: BrainLlm | null = geminiLlm()): Promise<{ sections: PromptSections; changeSummary: string; model: string }> {
     const user = JSON.stringify({ current, labelled_cases: labels.map(x => ({ message: String(x.message_text).slice(0, 800), context: x.context_snapshot, correct: x.expectation })) });
     const system = [
         'You improve only the tunable task-understanding steps and examples.',
@@ -109,7 +109,7 @@ async function evaluateBatch(row: any, state: EvalState, current: PromptSections
     const before = evalSummary(state.before), after = evalSummary(state.after); return { done: true as const, before, after, verdict: candidatePasses(before, after) };
 }
 
-export async function runNightlyAutoTune(now = new Date(), rawLlm: BrainLlm = engyBrainLlm({ thinking: 'off' })) {
+export async function runNightlyAutoTune(now = new Date(), rawLlm: BrainLlm = engyBrainLlm({ thinking: 'off', timeoutMs: 90_000 })) {
     if (!(await botSwitchOn('nightlyAutoTune'))) return { status: 'off' as const, calls: 0 };
     const { data: evaluating } = await supabaseAdmin.from(tables.PROMPTS).select('*').eq('prompt_key', 'task_brain_understand').eq('status', 'evaluating').order('created_at', { ascending: false }).limit(1).maybeSingle();
     let row: any = evaluating;

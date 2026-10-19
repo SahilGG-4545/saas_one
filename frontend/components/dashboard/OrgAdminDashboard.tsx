@@ -139,6 +139,8 @@ interface Property {
     address: string;
     image_url?: string;
     created_at: string;
+    /** 'opex' = operational (default), 'capex' = CAPEX only. Missing until the migration is applied. */
+    operation_type?: 'opex' | 'capex';
 }
 
 interface OrgUser {
@@ -1887,6 +1889,7 @@ const OrgAdminDashboard = () => {
                 (showCreatePropModal || editingProperty) && (
                     <PropertyModal
                         property={editingProperty}
+                        supportsOperationType={properties.some(p => 'operation_type' in p)}
                         onClose={() => { setShowCreatePropModal(false); setEditingProperty(null); }}
                         onSave={(data: any) => editingProperty ? handleUpdateProperty(editingProperty.id, data) : handleCreateProperty(data)}
                     />
@@ -2147,7 +2150,12 @@ const PropertiesTab = ({ properties, onCreate, onEdit, onConfigure, onDelete }: 
                         </div>
 
                         {/* Validation badge */}
-                        <div className="mb-6">
+                        <div className="mb-6 flex flex-wrap gap-x-2 gap-y-2">
+                            {prop.operation_type === 'capex' && (
+                                <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest border bg-amber-50 text-amber-700 border-amber-200">
+                                    CAPEX only
+                                </span>
+                            )}
                             <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest border ${prop.validation_enabled !== false ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-slate-100 text-slate-500 border-slate-200'}`}>
                                 <span className={`w-1.5 h-1.5 rounded-full ${prop.validation_enabled !== false ? 'bg-emerald-500' : 'bg-slate-400'}`} />
                                 {prop.validation_enabled !== false ? 'Validation On' : 'Validation Off'}
@@ -2261,8 +2269,9 @@ const UsersTab = ({ users, orgId, allProperties, onEdit, onDelete }: any) => (
     </div>
 );
 
-const PropertyModal = ({ property, onClose, onSave }: any) => {
+const PropertyModal = ({ property, supportsOperationType, onClose, onSave }: any) => {
     const [name, setName] = useState(property?.name || '');
+    const [operationType, setOperationType] = useState<'opex' | 'capex'>(property?.operation_type === 'capex' ? 'capex' : 'opex');
     const [code, setCode] = useState(property?.code || '');
     const [address, setAddress] = useState(property?.address || '');
     const [imageUrl, setImageUrl] = useState(property?.image_url || '');
@@ -2391,6 +2400,31 @@ const PropertyModal = ({ property, onClose, onSave }: any) => {
                         </div>
                     </div>
 
+                    {/* OPEX / CAPEX only. Hidden until the operation_type column exists. */}
+                    {supportsOperationType && (
+                        <div>
+                            <label className="text-xs font-black text-slate-400 uppercase tracking-widest mb-1.5 block">Property Type</label>
+                            <div className="grid grid-cols-2 gap-2">
+                                {([
+                                    { id: 'opex', label: 'OPEX', hint: 'Operational, uses the app daily' },
+                                    { id: 'capex', label: 'CAPEX only', hint: 'Project or fit-out, no operations' },
+                                ] as const).map(o => (
+                                    <button
+                                        key={o.id}
+                                        type="button"
+                                        onClick={() => setOperationType(o.id)}
+                                        aria-pressed={operationType === o.id}
+                                        className={`text-left px-4 py-3 rounded-2xl border transition-colors ${operationType === o.id ? 'border-slate-900 bg-slate-900 text-white' : 'border-slate-100 bg-slate-50 text-slate-700 hover:bg-slate-100'}`}
+                                    >
+                                        <span className="block text-sm font-black">{o.label}</span>
+                                        <span className={`block text-[11px] mt-0.5 ${operationType === o.id ? 'text-slate-300' : 'text-slate-400'}`}>{o.hint}</span>
+                                    </button>
+                                ))}
+                            </div>
+                            <p className="text-[11px] text-slate-400 mt-1.5">CAPEX-only properties are left out of the App usage report.</p>
+                        </div>
+                    )}
+
                     {/* Validation Flow Toggle */}
                     <div className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl border border-slate-100">
                         <div>
@@ -2408,7 +2442,7 @@ const PropertyModal = ({ property, onClose, onSave }: any) => {
 
                     <div className="flex gap-3 mt-8">
                         <button onClick={onClose} className="flex-1 py-4 font-black text-slate-400 bg-slate-50 rounded-2xl hover:bg-slate-100 transition-colors uppercase text-xs tracking-widest">Cancel</button>
-                        <button onClick={() => onSave({ name, code, address, image_url: imageUrl, validation_enabled: validationEnabled })} className="flex-1 py-4 font-black text-white bg-slate-900 rounded-2xl hover:bg-slate-800 transition-colors shadow-lg shadow-slate-200 uppercase text-xs tracking-widest flex items-center justify-center gap-2">
+                        <button onClick={() => onSave({ name, code, address, image_url: imageUrl, validation_enabled: validationEnabled, ...(supportsOperationType ? { operation_type: operationType } : {}) })} className="flex-1 py-4 font-black text-white bg-slate-900 rounded-2xl hover:bg-slate-800 transition-colors shadow-lg shadow-slate-200 uppercase text-xs tracking-widest flex items-center justify-center gap-2">
                             <Check className="w-4 h-4" /> {property ? 'Update' : 'Create'}
                         </button>
                     </div>

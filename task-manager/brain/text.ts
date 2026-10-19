@@ -93,6 +93,51 @@ export function headedOneLine(input: Array<{ carried: boolean; line: string }>, 
 }
 
 /**
+ * Three sections (owner 2026-10-16): 🔄 Carry forward (older tasks still open) → ⏳ Pending today → ✅ Completed (today's and
+ * carried-forward tasks finished today). Used by the "tasks" reply and the midday check-in so they always look the same.
+ * Lines keep their real numbers ("done 3" still means the same task); each section keeps the list order; an empty section
+ * is left out. An in-progress task (🔄) still counts as pending.
+ */
+export const SECTION_CARRY = '🔄 *Carry forward*';
+export const SECTION_PENDING = '⏳ *Pending today*';
+export const SECTION_DONE = '✅ *Completed*';
+export type SectionItem = { carried: boolean; done: boolean; line: string };
+function splitSections(items: SectionItem[]) {
+    return {
+        carry: items.filter(i => i.carried && !i.done).map(i => i.line),
+        pending: items.filter(i => !i.carried && !i.done).map(i => i.line),
+        done: items.filter(i => i.done).map(i => i.line),
+    };
+}
+export function sectionedList(items: SectionItem[]): string {
+    const s = splitSections(items);
+    const blocks: string[] = [];
+    if (s.carry.length) blocks.push([`${SECTION_CARRY} (${s.carry.length})`, ...s.carry].join('\n'));
+    if (s.pending.length) blocks.push([`${SECTION_PENDING} (${s.pending.length})`, ...s.pending].join('\n'));
+    if (s.done.length) blocks.push([`${SECTION_DONE} (${s.done.length})`, ...s.done].join('\n'));
+    return blocks.join('\n\n');
+}
+
+/** The same three sections on ONE line, for approved templates (no line breaks allowed):
+ *  "Carry forward: 1. A ⏳ | 2. B 🔄 — Pending today: 4. C ⏳ — Completed: 3. D ✅". Cut at `max` with "…and N more". */
+export function sectionedOneLine(items: SectionItem[], max = 700): string {
+    const s = splitSections(items);
+    const ordered = [
+        ...s.carry.map((line, i) => ({ label: i === 0 ? 'Carry forward: ' : '', line })),
+        ...s.pending.map((line, i) => ({ label: i === 0 ? 'Pending today: ' : '', line })),
+        ...s.done.map((line, i) => ({ label: i === 0 ? 'Completed: ' : '', line })),
+    ];
+    let out = '';
+    for (let i = 0; i < ordered.length; i++) {
+        const sep = i === 0 ? '' : ordered[i].label ? ' — ' : ' | ';
+        const next = `${out}${sep}${ordered[i].label}${ordered[i].line}`;
+        if (next.length > max) return `${out} | …and ${ordered.length - i} more`;
+        out = next;
+    }
+    return out;
+}
+
+/**
  * A placeholder value that must sit on its own line(s) in a reply (owner 2026-10-14: every reply structured): a list, a
  * bullet, a numbered line, a status line, or a "Reply …" hint. Short values (a name, a date, a count) stay inside the sentence.
  */

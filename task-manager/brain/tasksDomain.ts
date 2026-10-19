@@ -4,7 +4,7 @@ import {
     Action, BrainContext, BrainPerson, BrainTask, CHANGE_CONFIDENCE_MIN, ClarifyReason, ConfirmPolicy, Decision, Intent,
     Interpretation, MAX_TASKS_PER_MESSAGE, MAX_TITLE_LENGTH, ProgressState, READ_CONFIDENCE_MIN, Slots, TASK_INTENTS, ViewScope, Which,
 } from './types';
-import { addDays, clip, contentWords, dayLabel, headedList, isGrounded, isIsoDate, norm, similarity } from './text';
+import { addDays, clip, contentWords, dayLabel, headedList, isGrounded, isIsoDate, norm, sectionedList, similarity } from './text';
 import { TaskQuery, findQuerySchema, periodRange, validateQuery, wordsGrounded } from './findTasks';
 import { UNDO_HINT } from './frontDoor';
 
@@ -757,7 +757,8 @@ function replyFacts(decision: Decision, ctx: BrainContext, result?: ExecutionRes
         const open = ctx.tasks.filter(t => t.status !== 'completed').length;
         const total = ctx.tasks.length;
         // An older open task is marked with the day it was given (same as the "tasks" list).
-        const list = headedList(ctx.tasks.map(t => ({ carried: !!t.from, line: `${taskLine(t)} (${t.from ? `from ${fromLabel(t.from)}, ` : ''}${STATUS_WORD[t.status]})` })));
+        // Three sections (owner 2026-10-16), the same as the "tasks" reply: carry forward → pending today → completed.
+        const list = sectionedList(ctx.tasks.map(t => ({ carried: !!t.from, done: t.status === 'completed', line: `${taskLine(t)} (${t.from ? `from ${fromLabel(t.from)}, ` : ''}${STATUS_WORD[t.status]})` })));
         if (!total) return { kind: 'view_none', describe: 'The person has no tasks for today. Say so in a friendly way.', values: {}, required: [], asksQuestion: false, claimsNothingDone: false, names: [sender.name], fallback: 'You don\'t have any tasks for today.' };
         return { kind: 'view_self', describe: `Introduce the person's task list for today (${total} task${total === 1 ? '' : 's'}, ${open} still open). The list itself is inserted by the system.`,
             values: { list, count: String(total), open: String(open), done: String(total - open) }, required: ['list'], asksQuestion: false, claimsNothingDone: false, names: [sender.name],
