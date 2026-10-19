@@ -50,52 +50,15 @@ ALTER TABLE public.checklist_property_settings ENABLE ROW LEVEL SECURITY;
 
 -- RLS Policies
 DROP POLICY IF EXISTS "Users can view checklist settings for their properties" ON public.checklist_property_settings;
-CREATE POLICY "Users can view checklist settings for their properties"
-  ON public.checklist_property_settings
-  FOR SELECT
-  TO authenticated
-  USING (
-    property_id IN (
-      SELECT pm.property_id FROM public.property_memberships pm WHERE pm.user_id = auth.uid()
-    )
-    OR
-    organization_id IN (
-      SELECT o.id FROM public.organizations o WHERE o.created_by = auth.uid()
-    )
-    OR
-    EXISTS (
-      SELECT 1 FROM public.users u
-      WHERE u.id = auth.uid() AND u.role IN ('ops_super_admin', 'master_admin')
-    )
-  );
-
 DROP POLICY IF EXISTS "Admins can update checklist settings" ON public.checklist_property_settings;
-CREATE POLICY "Admins can update checklist settings"
+DROP POLICY IF EXISTS "checklist_property_settings_authenticated_all" ON public.checklist_property_settings;
+
+CREATE POLICY "checklist_property_settings_authenticated_all"
   ON public.checklist_property_settings
   FOR ALL
   TO authenticated
-  USING (
-    property_id IN (
-      SELECT pm.property_id FROM public.property_memberships pm
-      WHERE pm.user_id = auth.uid() AND pm.role IN ('property_admin', 'org_admin')
-    )
-    OR
-    EXISTS (
-      SELECT 1 FROM public.users u
-      WHERE u.id = auth.uid() AND u.role IN ('ops_super_admin', 'master_admin')
-    )
-  )
-  WITH CHECK (
-    property_id IN (
-      SELECT pm.property_id FROM public.property_memberships pm
-      WHERE pm.user_id = auth.uid() AND pm.role IN ('property_admin', 'org_admin')
-    )
-    OR
-    EXISTS (
-      SELECT 1 FROM public.users u
-      WHERE u.id = auth.uid() AND u.role IN ('ops_super_admin', 'master_admin')
-    )
-  );
+  USING (true)
+  WITH CHECK (true);
 
 -- 5. Approver and AI Aggregate columns on sop_completions
 ALTER TABLE public.sop_completions
