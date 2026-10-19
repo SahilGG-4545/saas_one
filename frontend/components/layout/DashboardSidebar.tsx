@@ -89,6 +89,7 @@ export default function DashboardSidebar({
                 { label: 'Identity Reconciliation', href: `/${orgId}/hr-tickets?tab=reconciliation`, icon: UserCheck, domain: 'tickets' as const },
                 { label: 'Admin Config', href: `/${orgId}/hr-tickets?tab=config`, icon: Settings, domain: 'tickets' as const },
                 { label: 'Analytics', href: `/${orgId}/hr-tickets?tab=analytics`, icon: BarChart3, domain: 'tickets' as const },
+                { label: 'Task Manager', href: `/${orgId}/hr-tickets?tab=tasks`, icon: ClipboardList, domain: 'tickets' as const },
             ];
         }
 
