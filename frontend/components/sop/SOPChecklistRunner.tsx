@@ -465,6 +465,55 @@ const SOPChecklistRunner: React.FC<SOPChecklistRunnerProps> = ({ templateId, com
         }
     };
 
+    const handleParameterToggle = async (itemId: string, paramId: string, val: any) => {
+        if (isReadOnly) return;
+        const cItem = completion?.items?.find((i: any) => String(i.checklist_item_id).toLowerCase() === String(itemId).toLowerCase());
+        if (!cItem) return;
+
+        const currentParams = cItem.parameter_values || {};
+        const updatedParams = {
+            ...currentParams,
+            [paramId]: { value: val, checked: val === 'yes' || val === true }
+        };
+
+        const tItem = template?.items?.find((i: any) => String(i.id).toLowerCase() === String(itemId).toLowerCase());
+        const stepParams = Array.isArray(tItem?.parameters) ? tItem.parameters : [];
+        const allAnswered = stepParams.length > 0 && stepParams.every((p: any) => updatedParams[p.id]?.value !== undefined);
+
+        const optimisticItems = completion.items.map((i: any) => {
+            if (i.id === cItem.id) {
+                return {
+                    ...i,
+                    parameter_values: updatedParams,
+                    is_checked: allAnswered,
+                    checked_by: currentUser?.id,
+                    checked_by_user: currentUser ? { full_name: currentUser.user_metadata?.full_name || 'You' } : i.checked_by_user
+                };
+            }
+            return i;
+        });
+
+        setCompletion({ ...completion, items: optimisticItems });
+
+        try {
+            const validPropId = (!propertyId || propertyId === 'undefined' || propertyId === 'null' || propertyId === 'all') ? null : propertyId;
+            const resolvedPropId = validPropId || completion?.property_id || template?.property_id;
+            await fetch(`/api/properties/${resolvedPropId}/sop/completions/${completion.id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    item: {
+                        completionItemId: cItem.id,
+                        parameter_values: updatedParams,
+                        is_checked: allAnswered,
+                    }
+                })
+            });
+        } catch (err) {
+            console.error('Failed to save parameter toggle:', err);
+        }
+    };
+
     const stampTimestamp = (file: File): Promise<File> => new Promise((resolve) => {
         const originalLastModified = file.lastModified; // Capture before any async work
         const img = new Image();
@@ -902,6 +951,13 @@ const SOPChecklistRunner: React.FC<SOPChecklistRunnerProps> = ({ templateId, com
     };
 
     const checkedCount = completion.items.filter((cItem: any) => {
+        const tItem = (template.items || []).find((i: any) => i.id === cItem.checklist_item_id);
+        const params = Array.isArray(tItem?.parameters) ? tItem.parameters : [];
+        if (params.length > 0) {
+            const pValues = cItem.parameter_values || {};
+            const allAnswered = params.every((p: any) => pValues[p.id]?.value !== undefined);
+            return allAnswered || cItem.is_checked;
+        }
         const hasInteraction = cItem.is_checked || cItem.value;
         return hasInteraction;
     }).length;
@@ -1112,7 +1168,11 @@ const SOPChecklistRunner: React.FC<SOPChecklistRunnerProps> = ({ templateId, com
                                 >
                             {/* Item title row */}
                             <div className="flex items-start gap-3 px-4 pt-4 pb-1">
-                                {item.type === 'checkbox' ? (
+                                {Array.isArray(item.parameters) && item.parameters.length > 0 ? (
+                                    <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center flex-shrink-0 mt-0.5 ${isChecked ? 'bg-emerald-50 border-emerald-500 text-emerald-600' : 'bg-primary/5 border-primary/30 text-primary'}`}>
+                                        {isChecked ? <CheckCircle2 size={16} /> : <span className="text-[9px] font-black">{index + 1}</span>}
+                                    </div>
+                                ) : item.type === 'checkbox' ? (
                                     <button onClick={() => handleItemToggle(item.id)} disabled={itemDisabled} className="flex-shrink-0 mt-0.5 disabled:opacity-60 disabled:cursor-not-allowed">
                                         <AnimatePresence mode="wait">
                                             {isChecked ? (
@@ -1388,35 +1448,115 @@ const SOPChecklistRunner: React.FC<SOPChecklistRunnerProps> = ({ templateId, com
                                 </div>
                             )}
 
-                            {/* Dynamic input */}
-                            {item.type === 'text' && (
-                                <div className="px-4 mb-3">
-                                    <input type="text" value={String(value || '')} onChange={(e) => handleItemToggle(item.id, e.target.value)}
-                                        disabled={itemDisabled} placeholder="Enter observation..."
-                                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl text-sm font-medium focus:outline-none focus:border-primary transition-all disabled:opacity-60 disabled:cursor-not-allowed" />
+                            {/* Step Parameters Checklist (No photo needed for parameters) */}
+                            {Array.isArray(item.parameters) && item.parameters.length > 0 ? (
+                                <div className="mx-4 mb-3.5 bg-slate-50 border border-slate-200 rounded-2xl p-3.5 space-y-2.5">
+                                    <div className="flex items-center justify-between">
+                                        <p className="text-[10px] font-black uppercase tracking-widest text-slate-700 flex items-center gap-1.5">
+                                            <span className="w-1.5 h-1.5 rounded-full bg-primary" />
+                                            Step Checkpoints ({item.parameters.length})
+                                        </p>
+                                        <span className="text-[8px] font-black uppercase tracking-wider text-slate-400 bg-white px-2 py-0.5 rounded-full border border-slate-200">
+                                            No photo needed
+                                        </span>
+                                    </div>
+                                    <div className="space-y-2">
+                                        {item.parameters.map((param: any, pIdx: number) => {
+                                            const paramVal = completionItem?.parameter_values?.[param.id]?.value;
+                                            return (
+                                                <div key={param.id || pIdx} className="bg-white p-2.5 rounded-xl border border-slate-200 flex items-center justify-between gap-3 shadow-2xs">
+                                                    <div className="flex-1 min-w-0">
+                                                        <p className="text-xs font-black text-slate-900 truncate">{param.name}</p>
+                                                        {param.description && <p className="text-[9px] text-slate-400 truncate">{param.description}</p>}
+                                                    </div>
+                                                    {/* Parameter Controls: Yes / No toggle or Checkbox */}
+                                                    {param.type === 'yes_no' || !param.type ? (
+                                                        <div className="flex gap-1.5">
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => handleParameterToggle(item.id, param.id, 'yes')}
+                                                                disabled={itemDisabled}
+                                                                className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all disabled:opacity-50 ${paramVal === 'yes' ? 'bg-emerald-500 text-white shadow-xs' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+                                                            >
+                                                                Yes
+                                                            </button>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => handleParameterToggle(item.id, param.id, 'no')}
+                                                                disabled={itemDisabled}
+                                                                className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all disabled:opacity-50 ${paramVal === 'no' ? 'bg-rose-500 text-white shadow-xs' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+                                                            >
+                                                                No
+                                                            </button>
+                                                        </div>
+                                                    ) : param.type === 'checkbox' ? (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleParameterToggle(item.id, param.id, !paramVal)}
+                                                            disabled={itemDisabled}
+                                                            className={`w-8 h-8 rounded-lg border flex items-center justify-center transition-all disabled:opacity-50 ${paramVal ? 'bg-primary border-primary text-white' : 'border-slate-300 text-transparent hover:border-primary'}`}
+                                                        >
+                                                            <CheckCircle2 size={16} className={paramVal ? 'text-white' : 'text-slate-300'} />
+                                                        </button>
+                                                    ) : param.type === 'number' ? (
+                                                        <input
+                                                            type="number"
+                                                            value={String(paramVal || '')}
+                                                            onChange={(e) => handleParameterToggle(item.id, param.id, e.target.value)}
+                                                            disabled={itemDisabled}
+                                                            placeholder="Value"
+                                                            className="w-24 px-2 py-1 text-xs bg-slate-50 border border-slate-200 rounded-lg text-right font-mono"
+                                                        />
+                                                    ) : (
+                                                        <input
+                                                            type="text"
+                                                            value={String(paramVal || '')}
+                                                            onChange={(e) => handleParameterToggle(item.id, param.id, e.target.value)}
+                                                            disabled={itemDisabled}
+                                                            placeholder="Note"
+                                                            className="w-32 px-2 py-1 text-xs bg-slate-50 border border-slate-200 rounded-lg"
+                                                        />
+                                                    )}
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
                                 </div>
-                            )}
-                            {item.type === 'number' && (
-                                <div className="px-4 mb-3">
-                                    <input type="number" value={String(value || '')} onChange={(e) => handleItemToggle(item.id, e.target.value)}
-                                        disabled={itemDisabled} placeholder="Enter value..."
-                                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl text-sm font-medium focus:outline-none focus:border-primary transition-all disabled:opacity-60 disabled:cursor-not-allowed" />
-                                </div>
-                            )}
-                            {item.type === 'yes_no' && (
-                                <div className="px-4 mb-3 flex gap-3">
-                                    <button onClick={() => handleItemToggle(item.id, 'yes')} disabled={itemDisabled}
-                                        className={`flex-1 py-2.5 rounded-xl font-black text-xs uppercase tracking-widest transition-all disabled:opacity-60 disabled:cursor-not-allowed ${value === 'yes' ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-500'}`}>Yes</button>
-                                    <button onClick={() => handleItemToggle(item.id, 'no')} disabled={itemDisabled}
-                                        className={`flex-1 py-2.5 rounded-xl font-black text-xs uppercase tracking-widest transition-all disabled:opacity-60 disabled:cursor-not-allowed ${value === 'no' ? 'bg-rose-500 text-white' : 'bg-slate-100 text-slate-500'}`}>No</button>
-                                </div>
+                            ) : (
+                                <>
+                                    {/* Legacy Dynamic input for steps without parameters */}
+                                    {item.type === 'text' && (
+                                        <div className="px-4 mb-3">
+                                            <input type="text" value={String(value || '')} onChange={(e) => handleItemToggle(item.id, e.target.value)}
+                                                disabled={itemDisabled} placeholder="Enter observation..."
+                                                className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl text-sm font-medium focus:outline-none focus:border-primary transition-all disabled:opacity-60 disabled:cursor-not-allowed" />
+                                        </div>
+                                    )}
+                                    {item.type === 'number' && (
+                                        <div className="px-4 mb-3">
+                                            <input type="number" value={String(value || '')} onChange={(e) => handleItemToggle(item.id, e.target.value)}
+                                                disabled={itemDisabled} placeholder="Enter value..."
+                                                className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl text-sm font-medium focus:outline-none focus:border-primary transition-all disabled:opacity-60 disabled:cursor-not-allowed" />
+                                        </div>
+                                    )}
+                                    {item.type === 'yes_no' && (
+                                        <div className="px-4 mb-3 flex gap-3">
+                                            <button onClick={() => handleItemToggle(item.id, 'yes')} disabled={itemDisabled}
+                                                className={`flex-1 py-2.5 rounded-xl font-black text-xs uppercase tracking-widest transition-all disabled:opacity-60 disabled:cursor-not-allowed ${value === 'yes' ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-500'}`}>Yes</button>
+                                            <button onClick={() => handleItemToggle(item.id, 'no')} disabled={itemDisabled}
+                                                className={`flex-1 py-2.5 rounded-xl font-black text-xs uppercase tracking-widest transition-all disabled:opacity-60 disabled:cursor-not-allowed ${value === 'no' ? 'bg-rose-500 text-white' : 'bg-slate-100 text-slate-500'}`}>No</button>
+                                        </div>
+                                    )}
+                                </>
                             )}
 
                             {/* Media documentation */}
                             <div className="px-4 pb-4">
-                                <p className="text-[11px] font-black text-slate-800 uppercase tracking-widest mb-0.5">Media Documentation</p>
+                                <p className="text-[11px] font-black text-slate-800 uppercase tracking-widest mb-0.5">
+                                    {Array.isArray(item.parameters) && item.parameters.length > 0 ? `Visual Proof (${item.title})` : 'Media Documentation'}
+                                </p>
                                 <p className="text-[11px] text-slate-400 font-medium mb-3">
-                                    {item.description || 'Upload or capture required proof of completion'}
+                                    {Array.isArray(item.parameters) && item.parameters.length > 0 ? `Upload cleanliness photo for ${item.title}. No photo needed for parameters.` : (item.description || 'Upload or capture required proof of completion')}
                                 </p>
                                 <div className="flex gap-2">
                                     {/* CAPTURE */}
@@ -1508,7 +1648,6 @@ const SOPChecklistRunner: React.FC<SOPChecklistRunnerProps> = ({ templateId, com
                 title="Video Proof"
             />
 
-            {/* CAD Score Overlay */}
             {template?.cad_converted_image_url && (
                 <SOPCADOverlayView
                     isOpen={showCADOverlay}
@@ -1516,6 +1655,7 @@ const SOPChecklistRunner: React.FC<SOPChecklistRunnerProps> = ({ templateId, com
                     cadImageUrl={template.cad_converted_image_url}
                     areas={template.cad_areas || []}
                     templateTitle={template.title}
+                    isAdmin={isSuperAdmin}
                     items={(completion?.items || []).map((ci: any) => {
                         const templateItem = (template.items || []).find((ti: any) => ti.id === ci.checklist_item_id);
                         return {
@@ -1526,7 +1666,8 @@ const SOPChecklistRunner: React.FC<SOPChecklistRunnerProps> = ({ templateId, com
                             ai_cleanliness_score: ci.ai_cleanliness_score ?? null,
                             ai_cleanliness_reason: ci.ai_cleanliness_reason ?? null,
                             photo_url: ci.photo_url || null,
-                            reference_photo_url: templateItem?.reference_photo_url || null,
+                            // Only pass reference URL to super admins — staff must not see the benchmark
+                            reference_photo_url: isSuperAdmin ? (templateItem?.reference_photo_url || null) : null,
                         };
                     })}
                     onScorePhoto={async (completionItemId: string) => {
@@ -1565,6 +1706,8 @@ const SOPChecklistRunner: React.FC<SOPChecklistRunnerProps> = ({ templateId, com
                     aiScoring={aiScoring}
                 />
             )}
+
+
 
             {/* Toast */}
             {toast && (

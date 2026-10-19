@@ -215,7 +215,7 @@ export async function PUT(
         }
 
         if (item) {
-            const { completionItemId, is_checked, comment, photo_url, video_url, value } = item;
+            const { completionItemId, is_checked, comment, photo_url, video_url, value, parameter_values } = item;
 
             if (!completionItemId) {
                 return NextResponse.json({ error: 'completionItemId is required in item payload' }, { status: 400 });
@@ -227,6 +227,7 @@ export async function PUT(
             if (photo_url !== undefined) itemUpdates.photo_url = photo_url;
             if (video_url !== undefined) itemUpdates.video_url = video_url;
             if (value !== undefined) itemUpdates.value = value;
+            if (parameter_values !== undefined) itemUpdates.parameter_values = parameter_values;
             if (is_checked) {
                 itemUpdates.checked_at = new Date().toISOString();
                 itemUpdates.checked_by = user.id;

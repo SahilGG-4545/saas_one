@@ -8,6 +8,13 @@ import { createClient } from '@/frontend/utils/supabase/client';
 import { Toast } from '@/frontend/components/ui/Toast';
 import SOPCADConfigModal from '@/frontend/components/sop/SOPCADConfigModal';
 
+export interface ChecklistStepParameter {
+    id: string;
+    name: string;
+    type: 'yes_no' | 'checkbox' | 'text' | 'number';
+    is_required?: boolean;
+}
+
 interface SOPTemplateFormModalProps {
     isOpen: boolean;
     onClose: () => void;
@@ -35,8 +42,6 @@ const SOPTemplateFormModal: React.FC<SOPTemplateFormModalProps> = ({ isOpen, onC
         end_time: '17:00',
     });
 
-
-
     const [items, setItems] = useState<any[]>([]);
     const [newItem, setNewItem] = useState({
         title: '',
@@ -47,8 +52,12 @@ const SOPTemplateFormModal: React.FC<SOPTemplateFormModalProps> = ({ isOpen, onC
         is_optional: false,
         start_time: '',
         end_time: '',
+        parameters: [] as ChecklistStepParameter[],
     });
     const [showStepTimeSlot, setShowStepTimeSlot] = useState(false);
+    const [showParametersSection, setShowParametersSection] = useState(false);
+    const [paramDraftName, setParamDraftName] = useState('');
+    const [paramDraftType, setParamDraftType] = useState<'yes_no' | 'checkbox' | 'text' | 'number'>('yes_no');
     const [editingIndex, setEditingIndex] = useState<number | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [isLoadingMembers, setIsLoadingMembers] = useState(false);
@@ -167,29 +176,30 @@ const SOPTemplateFormModal: React.FC<SOPTemplateFormModalProps> = ({ isOpen, onC
 
     const handleAddItem = () => {
         if (!newItem.title) {
-            setToast({ message: 'Item title is required', type: 'error' });
+            setToast({ message: 'Step title is required', type: 'error' });
             return;
         }
 
+        const itemToSave = {
+            ...newItem,
+            parameters: Array.isArray(newItem.parameters) ? newItem.parameters : [],
+            is_optional: false,
+        };
+
         if (editingIndex !== null) {
-            // Update existing item
             const updatedItems = [...items];
             updatedItems[editingIndex] = {
-                ...newItem,
+                ...itemToSave,
                 order_index: editingIndex,
-                is_optional: false    // Force mandatory
             };
             setItems(updatedItems);
             setEditingIndex(null);
         } else {
-            // Add new item
             setItems([...items, {
-                ...newItem,
+                ...itemToSave,
                 order_index: items.length,
-                is_optional: false    // Force mandatory
             }]);
         }
-
 
         setNewItem({
             title: '',
@@ -200,8 +210,36 @@ const SOPTemplateFormModal: React.FC<SOPTemplateFormModalProps> = ({ isOpen, onC
             is_optional: false,
             start_time: '',
             end_time: '',
+            parameters: [],
         });
         setShowStepTimeSlot(false);
+        setShowParametersSection(false);
+        setParamDraftName('');
+    };
+
+    const handleAddParam = () => {
+        if (!paramDraftName.trim()) {
+            setToast({ message: 'Parameter name is required', type: 'error' });
+            return;
+        }
+        const newParam: ChecklistStepParameter = {
+            id: `param_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+            name: paramDraftName.trim(),
+            type: paramDraftType,
+            is_required: true,
+        };
+        setNewItem(prev => ({
+            ...prev,
+            parameters: [...(prev.parameters || []), newParam],
+        }));
+        setParamDraftName('');
+    };
+
+    const handleRemoveParam = (paramId: string) => {
+        setNewItem(prev => ({
+            ...prev,
+            parameters: (prev.parameters || []).filter(p => p.id !== paramId),
+        }));
     };
 
     const handleRemoveItem = (index: number) => {
@@ -302,6 +340,10 @@ const SOPTemplateFormModal: React.FC<SOPTemplateFormModalProps> = ({ isOpen, onC
                     order_index: idx,
                     start_time: it.start_time || null,
                     end_time: it.end_time || null,
+                    parameters: Array.isArray(it.parameters) ? it.parameters : [],
+                    reference_photo_url: it.reference_photo_url || null,
+                    reference_photo_source: it.reference_photo_source || null,
+                    cad_area_id: it.cad_area_id || null,
                 })),
             };
 
@@ -353,6 +395,10 @@ const SOPTemplateFormModal: React.FC<SOPTemplateFormModalProps> = ({ isOpen, onC
                     order_index: idx,
                     start_time: it.start_time || null,
                     end_time: it.end_time || null,
+                    parameters: Array.isArray(it.parameters) ? it.parameters : [],
+                    reference_photo_url: it.reference_photo_url || null,
+                    reference_photo_source: it.reference_photo_source || null,
+                    cad_area_id: it.cad_area_id || null,
                 })),
             };
 
@@ -807,6 +853,12 @@ const SOPTemplateFormModal: React.FC<SOPTemplateFormModalProps> = ({ isOpen, onC
                                                                     CAD Area
                                                                 </span>
                                                             )}
+                                                            {/* Parameters badge */}
+                                                            {Array.isArray(item.parameters) && item.parameters.length > 0 && (
+                                                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-purple-50 text-purple-700 border border-purple-200 rounded text-[9px] font-black uppercase tracking-wider">
+                                                                    {item.parameters.length} Parameter{item.parameters.length > 1 ? 's' : ''}
+                                                                </span>
+                                                            )}
                                                         </div>
                                                         {item.description && <p className="text-[10px] text-slate-400 font-medium truncate mt-0.5">{item.description}</p>}
                                                         {(item.start_time || item.end_time) && (
@@ -852,7 +904,22 @@ const SOPTemplateFormModal: React.FC<SOPTemplateFormModalProps> = ({ isOpen, onC
                                                                 </button>
                                                             )}
                                                         </>
-                                                        <button type="button" onClick={() => { setNewItem(item); setEditingIndex(idx); setShowStepTimeSlot(!!(item.start_time || item.end_time)); }} className="p-2 text-slate-400 hover:text-primary hover:bg-primary/5 rounded-xl transition-all" title="Edit Step"><Edit3 size={14} /></button>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => {
+                                                                setNewItem({
+                                                                    ...item,
+                                                                    parameters: Array.isArray(item.parameters) ? [...item.parameters] : [],
+                                                                });
+                                                                setEditingIndex(idx);
+                                                                setShowStepTimeSlot(!!(item.start_time || item.end_time));
+                                                                setShowParametersSection(Array.isArray(item.parameters) && item.parameters.length > 0);
+                                                            }}
+                                                            className="p-2 text-slate-400 hover:text-primary hover:bg-primary/5 rounded-xl transition-all"
+                                                            title="Edit Step"
+                                                        >
+                                                            <Edit3 size={14} />
+                                                        </button>
                                                         <button type="button" onClick={() => handleRemoveItem(idx)} className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-xl transition-all" title="Delete Step"><Trash2 size={14} /></button>
                                                     </div>
                                                 </div>
@@ -887,7 +954,93 @@ const SOPTemplateFormModal: React.FC<SOPTemplateFormModalProps> = ({ isOpen, onC
                                         </select>
                                     </div>
 
-                                    {/* Verification Requirements Removed - Optional for all steps per user request */}
+                                    {/* Checklist Parameters (Optional Sub-checks under this Step) */}
+                                    <div className="bg-white border border-slate-200 rounded-2xl p-3.5 space-y-3">
+                                        <div className="flex items-center justify-between">
+                                            <div>
+                                                <p className="text-[10px] font-black text-slate-800 uppercase tracking-widest">
+                                                    Parameters / Checkpoints <span className="normal-case text-[9px] text-slate-400 font-medium">(Optional)</span>
+                                                </p>
+                                                <p className="text-[9px] text-slate-400 font-medium mt-0.5">
+                                                    Sub-checks like Carpet, Lights, Dusting. No photo required for parameters.
+                                                </p>
+                                            </div>
+                                            {(!newItem.parameters || newItem.parameters.length === 0) && !showParametersSection ? (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setShowParametersSection(true)}
+                                                    className="text-[9px] font-black text-primary uppercase tracking-widest hover:underline px-1"
+                                                >
+                                                    + Add Parameters
+                                                </button>
+                                            ) : null}
+                                        </div>
+
+                                        {(showParametersSection || (newItem.parameters && newItem.parameters.length > 0)) && (
+                                            <div className="space-y-2 pt-1 border-t border-slate-100">
+                                                {/* List of drafted parameters */}
+                                                {newItem.parameters && newItem.parameters.length > 0 && (
+                                                    <div className="space-y-1.5 mb-2">
+                                                        {newItem.parameters.map((param, pIdx) => (
+                                                            <div key={param.id || pIdx} className="flex items-center justify-between px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl">
+                                                                <div className="flex items-center gap-2">
+                                                                    <span className="w-4 h-4 rounded-full bg-slate-200 text-slate-600 text-[8px] font-black flex items-center justify-center">
+                                                                        {pIdx + 1}
+                                                                    </span>
+                                                                    <span className="text-xs font-bold text-slate-800">{param.name}</span>
+                                                                    <span className="px-1.5 py-0.5 bg-white text-[8px] font-black text-slate-500 uppercase rounded border border-slate-100">
+                                                                        {param.type === 'yes_no' ? 'Yes / No' : param.type}
+                                                                    </span>
+                                                                </div>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => handleRemoveParam(param.id)}
+                                                                    className="text-slate-400 hover:text-rose-500 p-1 rounded-lg"
+                                                                    title="Remove parameter"
+                                                                >
+                                                                    <Trash2 size={12} />
+                                                                </button>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                )}
+
+                                                {/* Input row for adding a parameter */}
+                                                <div className="flex gap-2 items-center">
+                                                    <input
+                                                        type="text"
+                                                        placeholder="e.g. Carpet, Lights, Dusting"
+                                                        value={paramDraftName}
+                                                        onChange={(e) => setParamDraftName(e.target.value)}
+                                                        onKeyDown={(e) => {
+                                                            if (e.key === 'Enter') {
+                                                                e.preventDefault();
+                                                                handleAddParam();
+                                                            }
+                                                        }}
+                                                        className="flex-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:outline-none focus:border-primary"
+                                                    />
+                                                    <select
+                                                        value={paramDraftType}
+                                                        onChange={(e) => setParamDraftType(e.target.value as any)}
+                                                        className="w-28 px-2 py-2 bg-slate-50 border border-slate-200 rounded-xl text-[10px] font-black appearance-none focus:outline-none focus:border-primary"
+                                                    >
+                                                        <option value="yes_no">Yes / No</option>
+                                                        <option value="checkbox">Checkbox</option>
+                                                        <option value="text">Text</option>
+                                                        <option value="number">Number</option>
+                                                    </select>
+                                                    <button
+                                                        type="button"
+                                                        onClick={handleAddParam}
+                                                        className="px-3 py-2 bg-slate-900 text-white rounded-xl text-[10px] font-black uppercase tracking-wider hover:bg-slate-800 transition-all flex items-center gap-1 flex-shrink-0"
+                                                    >
+                                                        <Plus size={11} /> Add
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
 
                                     {/* Step-level time slot */}
                                     {!showStepTimeSlot ? (
@@ -924,7 +1077,7 @@ const SOPTemplateFormModal: React.FC<SOPTemplateFormModalProps> = ({ isOpen, onC
                                         {editingIndex !== null ? <><Check size={14} /> Update Step</> : <><Plus size={14} /> Add Step</>}
                                     </button>
                                     {editingIndex !== null && (
-                                        <button type="button" onClick={() => { setEditingIndex(null); setShowStepTimeSlot(false); setNewItem({ title: '', description: '', requires_photo: true, requires_comment: false, type: 'checkbox', is_optional: false, start_time: '', end_time: '' }); }}
+                                        <button type="button" onClick={() => { setEditingIndex(null); setShowStepTimeSlot(false); setShowParametersSection(false); setParamDraftName(''); setNewItem({ title: '', description: '', requires_photo: false, requires_comment: false, type: 'checkbox', is_optional: false, start_time: '', end_time: '', parameters: [] }); }}
                                             className="w-full text-[10px] font-black text-slate-400 py-1.5 hover:text-slate-600 uppercase tracking-widest transition-all">
                                             Cancel Editing
                                         </button>

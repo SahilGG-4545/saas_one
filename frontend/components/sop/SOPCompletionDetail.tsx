@@ -473,8 +473,43 @@ const SOPCompletionDetail: React.FC<SOPCompletionDetailProps> = ({ completionId,
                                         </div>
                                     )}
 
-                                    {/* Observation Value */}
-                                    {isCompleted && templateItem?.type !== 'checkbox' && (
+                                    {/* Parameter Checkpoints Breakdown */}
+                                    {Array.isArray(templateItem?.parameters) && templateItem.parameters.length > 0 && (
+                                        <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3 mb-3">
+                                            <p className="text-[8px] font-black text-slate-500 uppercase tracking-widest mb-2 flex items-center justify-between">
+                                                <span>Checkpoints ({templateItem.parameters.length})</span>
+                                                <span className="text-slate-400 lowercase font-medium">no photo needed</span>
+                                            </p>
+                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                                {templateItem.parameters.map((param: any, pIdx: number) => {
+                                                    const pVal = item.parameter_values?.[param.id]?.value;
+                                                    const isYes = pVal === 'yes' || pVal === true;
+                                                    const isNo = pVal === 'no' || pVal === false;
+                                                    return (
+                                                        <div key={param.id || pIdx} className="bg-white px-2.5 py-1.5 rounded-lg border border-slate-200/60 flex items-center justify-between text-xs">
+                                                            <span className="font-bold text-slate-800 text-[11px] truncate">{param.name}</span>
+                                                            {isYes ? (
+                                                                <span className="px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 text-[9px] font-black uppercase tracking-wider border border-emerald-200">
+                                                                    Yes
+                                                                </span>
+                                                            ) : isNo ? (
+                                                                <span className="px-2 py-0.5 rounded bg-rose-50 text-rose-700 text-[9px] font-black uppercase tracking-wider border border-rose-200">
+                                                                    No
+                                                                </span>
+                                                            ) : (
+                                                                <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-600 text-[9px] font-bold">
+                                                                    {pVal !== undefined && pVal !== null ? String(pVal) : '—'}
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* Observation Value (for items without sub-parameters) */}
+                                    {isCompleted && (!templateItem?.parameters || templateItem.parameters.length === 0) && templateItem?.type !== 'checkbox' && (
                                         <div className="bg-slate-50/50 p-2 md:p-3 rounded-lg border border-slate-100 mb-2 md:mb-3 inline-block min-w-[120px]">
                                             <p className="text-[7px] md:text-[8px] font-black text-slate-400 uppercase tracking-widest mb-0.5">Observation</p>
                                             <p className="text-[11px] md:text-xs font-black text-slate-900">{item.value}</p>
@@ -487,8 +522,8 @@ const SOPCompletionDetail: React.FC<SOPCompletionDetailProps> = ({ completionId,
                                             <Camera size={9} />
                                             Visual Proof
                                         </p>
-                                        {/* Side-by-Side Comparison of Clean Reference Photo vs Uploaded Execution Photo */}
-                                        {(item.photo_url || templateItem?.reference_photo_url) && (
+                                        {/* Side-by-Side Comparison — admins see clean ref + uploaded; staff see only their uploaded photo */}
+                                        {isAdmin && (item.photo_url || templateItem?.reference_photo_url) && (
                                             <div className="mb-3 p-3 bg-slate-50 border border-slate-200 rounded-xl">
                                                 <p className="text-[8px] font-black text-slate-500 uppercase tracking-widest mb-2 flex items-center gap-1.5">
                                                     <Camera size={10} className="text-primary" />
@@ -496,7 +531,7 @@ const SOPCompletionDetail: React.FC<SOPCompletionDetailProps> = ({ completionId,
                                                 </p>
 
                                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                                    {/* Clean Standard Reference Photo */}
+                                                    {/* Clean Standard Reference Photo — admin only */}
                                                     <div className="flex flex-col">
                                                         <span className="text-[9px] font-black text-emerald-700 uppercase tracking-wider mb-1 flex items-center gap-1">
                                                             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
@@ -567,6 +602,28 @@ const SOPCompletionDetail: React.FC<SOPCompletionDetailProps> = ({ completionId,
                                                             </div>
                                                         )}
                                                     </div>
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {/* Staff (non-admin) photo view: just show uploaded photo, no benchmark */}
+                                        {!isAdmin && item.photo_url && (
+                                            <div className="mb-3">
+                                                <div className="relative aspect-video max-w-xs rounded-xl overflow-hidden shadow-sm border border-slate-200 group bg-slate-900">
+                                                    <div
+                                                        className="w-full h-full cursor-pointer"
+                                                        onClick={() => setPreviewImageUrl(item.photo_url)}
+                                                    >
+                                                        <img src={item.photo_url} alt="Uploaded Photo" className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
+                                                        <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                                            <Eye size={20} className="text-white" />
+                                                        </div>
+                                                    </div>
+                                                    {item.checked_at && (
+                                                        <div className="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 bg-black/70 rounded text-[7px] text-white font-mono font-bold">
+                                                            {new Date(item.checked_at).toLocaleString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).replace(',', '')}
+                                                        </div>
+                                                    )}
                                                 </div>
                                             </div>
                                         )}
@@ -780,6 +837,7 @@ const SOPCompletionDetail: React.FC<SOPCompletionDetailProps> = ({ completionId,
                     cadImageUrl={completion.template.cad_converted_image_url}
                     areas={completion.template.cad_areas || []}
                     templateTitle={completion.template?.title}
+                    isAdmin={isAdmin}
                     items={effectiveItems.map((item: any) => ({
                         id: item.id,
                         checklist_item_id: item.checklist_item_id,
@@ -787,7 +845,8 @@ const SOPCompletionDetail: React.FC<SOPCompletionDetailProps> = ({ completionId,
                         ai_cleanliness_score: item.ai_cleanliness_score ?? null,
                         ai_cleanliness_reason: item.ai_cleanliness_reason ?? null,
                         photo_url: item.photo_url || null,
-                        reference_photo_url: item.checklist_item?.reference_photo_url || null,
+                        // Only pass reference photo URL to admins — staff must not see the benchmark
+                        reference_photo_url: isAdmin ? (item.checklist_item?.reference_photo_url || null) : null,
                     }))}
                     onScorePhoto={triggerAIScoring}
                     aiScoring={aiScoring}

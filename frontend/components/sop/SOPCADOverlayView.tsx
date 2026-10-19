@@ -35,6 +35,8 @@ interface SOPCADOverlayViewProps {
     onScorePhoto?: (completionItemId: string) => void;
     /** Map of completionItemId -> loading boolean */
     aiScoring?: Record<string, boolean>;
+    /** Only admins may view the clean reference photo (benchmark). Staff must not see it. */
+    isAdmin?: boolean;
 }
 
 function scoreColors(score: number | null) {
@@ -58,6 +60,7 @@ const SOPCADOverlayView: React.FC<SOPCADOverlayViewProps> = ({
     items,
     templateTitle,
     onScorePhoto,
+    isAdmin = false,
     aiScoring = {},
 }) => {
     const [mounted, setMounted] = useState(false);
@@ -316,8 +319,9 @@ const SOPCADOverlayView: React.FC<SOPCADOverlayViewProps> = ({
                                                     )}
 
                                                     {/* Side-by-Side Large Photo Comparison Boxes */}
-                                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                                                        {/* Clean Standard Reference Photo */}
+                                                    <div className={`grid grid-cols-1 gap-3 pt-1 ${isAdmin ? 'sm:grid-cols-2' : ''}`}>
+                                                        {/* Clean Standard Reference Photo — visible to admins only */}
+                                                        {isAdmin && (
                                                         <div className="flex flex-col gap-1.5">
                                                             <span className="text-[9px] font-black text-emerald-700 uppercase tracking-wider flex items-center gap-1">
                                                                 <span className="w-2 h-2 rounded-full bg-emerald-500" />
@@ -343,6 +347,7 @@ const SOPCADOverlayView: React.FC<SOPCADOverlayViewProps> = ({
                                                                 </div>
                                                             )}
                                                         </div>
+                                                        )}
 
                                                         {/* Uploaded Execution Photo */}
                                                         <div className="flex flex-col gap-1.5">

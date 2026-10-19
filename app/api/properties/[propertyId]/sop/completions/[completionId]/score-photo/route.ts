@@ -46,6 +46,21 @@ export async function POST(
             return NextResponse.json({ error: 'Completion not found for this property' }, { status: 404 });
         }
 
+        // Check if property is in basic mode or has AI scoring disabled
+        const { data: propSettings } = await supabaseAdmin
+            .from('checklist_property_settings')
+            .select('checklist_mode, ai_scoring_enabled')
+            .eq('property_id', propertyId)
+            .maybeSingle();
+
+        if (propSettings && (propSettings.checklist_mode === 'basic' || propSettings.ai_scoring_enabled === false)) {
+            return NextResponse.json({
+                success: true,
+                skipped: true,
+                reason: 'AI scoring is disabled for this property in basic mode',
+            });
+        }
+
         // Load the completion item (field photo)
         const { data: completionItem, error: itemError } = await supabaseAdmin
             .from('sop_completion_items')
