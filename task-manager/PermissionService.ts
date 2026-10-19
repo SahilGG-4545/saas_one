@@ -46,6 +46,20 @@ export class PermissionService {
     }
 
     /**
+     * Owner 2026-10-19 — who this person may GIVE a task to. Everyone they can see (visibleAndAssignable), plus — only when
+     * "assign to anyone in team" is ON for their department — every colleague in that department, including their own
+     * manager (to ask for support). Seeing tasks does NOT widen: visibleAndAssignable is unchanged.
+     */
+    static async assignableTo(actor: Employee, candidates: Employee[]): Promise<Employee[]> {
+        if (actor.role === 'superuser') return candidates;
+        const visible = await this.visibleAndAssignable(actor, candidates);
+        const teamAssign = !!actor.department_id && await TaskAccessService.isTeamAssignEnabled(actor.department_id);
+        if (!teamAssign) return visible;
+        const ok = new Set(visible.map(e => e.id));
+        return candidates.filter(e => ok.has(e.id) || e.department_id === actor.department_id);
+    }
+
+    /**
      * "Work with a superuser": of these candidates, the superusers this person may give tasks to and remind — only those
      * ABOVE them in the reporting chain (direct or indirect manager, employee_profiles.reporting_manager_id). A superuser
      * who is not their manager is never offered or allowed (owner 2026-10-15). Same chain as visibleAndAssignable.
@@ -142,7 +156,8 @@ export class PermissionService {
         }
 
         // Step 2C + Step 5: yourself, anyone below you in the chain, or a colleague when team sharing is ON.
-        if ((await this.visibleAndAssignable(actor, [target])).length === 1) {
+        // Owner 2026-10-19: or anyone in your department when "assign to anyone in team" is ON.
+        if ((await this.assignableTo(actor, [target])).length === 1) {
             return { actor, target };
         }
 

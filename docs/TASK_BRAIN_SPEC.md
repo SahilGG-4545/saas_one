@@ -87,6 +87,44 @@ Prompt versions OFF, the Phase 4 prompt remains byte-identical. Invalid or unava
 built-in prompt. Admin-labelled real mistakes become permanent evaluation cases; a nightly workflow can draft a
 candidate, but code gates and an admin activation are required before it becomes live.
 
+### Changes 2026-10-19 (HR roll-out): several people per request, unfinished requests, "add or assign?"
+
+**1. Workflow or agent?** `[BAA p.115]` Still a **workflow** (understand → validate → decide → reply). No new tools, no
+new model, no new loop. The model still only proposes; code resolves every name and checks every permission.
+
+**2. Context** `[BAA p.112]` New pending kind `draft`: the person's own words for an unfinished request plus the exact
+question the bot asked, kept for 30 minutes (`DRAFT_TTL_MIN`). Given to the model as a separate, labelled block (fixed
+rule D) and counted as the person's own words for grounding. It is never the assistant's text.
+
+**3. Cost of a false positive** `[BAA p.112]` **high** (it assigns work) → unchanged: every new task, for any number of
+people, is shown in ONE preview and saved only after a yes. A person the sender may not give work to is left out and
+named in the preview, never silently dropped or added.
+
+**4. Tools** `[BAA pp.93–94, 107]` N/A — no tool added. `create_tasks` slots gain `assignees` (whole message) and a
+per-task `assignees`; both are bounded (10 names, 60 chars) and every name is resolved by `resolvePerson` and
+`mayGiveWorkTo` before anything is proposed. `"assignee":"?"` → `CLARIFY add_or_assign` (no action).
+
+**5. Prompt** `[BAA pp.105, 114]` Locked fixed rules added outside the tunable steps: **D** (unfinished request: answer
+/ side question / new request / drop, by meaning) and **E** (yes / no / change answers in English, Hindi, Hinglish).
+The tunable steps and examples are unchanged, so stored prompt versions still apply.
+
+**6. Memory** `[BAA pp.100–103]` The draft is conversation state, not agentic memory: no write tool, scoped to one
+phone, expires after 30 minutes or when the request is confirmed, refused or dropped.
+
+**7. Multi-agent?** `[BAA p.116]` Single workflow. Several people / a person per line become the existing `batch`
+action (one preview, one yes), so no new execution path.
+
+**8. Evaluation** `[BAA pp.118–119]` Offline: `task-manager/tests/test_brain_hr_requests.ts` (27 checks: several
+people, a per-line list, "remove 2" on a list, the "both" regression, "add or assign?", a side question keeping the
+draft, "rehne do", a person not allowed, 30 vs 31 tasks, draft expiry); the existing brain tests pass (two checks
+updated for the new limit and preview wording). Live model: **not yet measured**.
+
+**9. Trace** `[BAA pp.119–120]` Unchanged audit row per turn; the draft is visible in the saved state (`pending.kind`).
+
+**10. Laws knowingly violated, and why:** **L2** — the new rules are tested offline with a scripted model only; they
+must be checked on the live model (`run_eval.ts` with new HR cases, owner approval for provider cost) and on real HR
+messages before wider roll-out. Limit raised 15 → 30 per message on owner request.
+
 ## Agent Spec — Task Brain Prompt Auto-Tuner
 
 **1. Workflow or agent?** **workflow** — load new labelled cases → draft tunable sections once → validate in code →

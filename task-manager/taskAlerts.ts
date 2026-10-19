@@ -12,6 +12,8 @@ import { TaskMessagingService } from './TaskMessagingService';
  *   task_completed_notice_v1     Hello {{1}} · Task: {{2}} · Completed by: {{3}} ({{4}}) · At: {{5}}
  *   task_manager_team_digest_v1  Hello {{1}} · scope {{2}} · Date {{3}} · Members {{4}} · Done {{5}} · Pending {{6}} · Status {{7}}
  *   task_overdue_alert_v1        (rule "Overdue alert", built in TaskNotificationService) Hello {{1}} · {{2}} overdue · {{3}}
+ *   task_dependency_v1           Hello {{1}} · {{2}} says this is pending on you · Task: {{3}}   (owner 2026-10-19; must be
+ *                                approved in AiSensy / Meta before it is delivered. Until then the in-app notice still works.)
  */
 
 export const ASSIGNED_CAMPAIGN = process.env.AISENSY_TASK_ASSIGNED_CAMPAIGN || 'task_assigned_v1';
@@ -19,6 +21,7 @@ export const UPDATE_CAMPAIGN = process.env.AISENSY_TASK_UPDATE_CAMPAIGN || 'task
 export const HANDOVER_CAMPAIGN = process.env.AISENSY_TASK_HANDOVER_CAMPAIGN || 'task_handover_v1';
 export const COMPLETED_CAMPAIGN = process.env.AISENSY_TASK_COMPLETED_CAMPAIGN || 'task_completed_notice_v1';
 export const TEAM_DIGEST_CAMPAIGN = process.env.AISENSY_TASK_TEAM_DIGEST_CAMPAIGN || 'task_manager_team_digest_v1';
+export const DEPENDENCY_CAMPAIGN = process.env.AISENSY_TASK_DEPENDENCY_CAMPAIGN || 'task_dependency_v1';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -205,6 +208,28 @@ export async function sendTaskHandover(phone: string | null | undefined, input: 
         });
     } catch (err) {
         console.error('[taskAlerts] Failed to send hand-over alert:', err instanceof Error ? err.message : err);
+        return false;
+    }
+}
+
+export function dependencyParams(recipientName: string, fromLabel: string, titles: string[]): [string, string, string] {
+    return [firstName(recipientName), oneLine(fromLabel, 100) || 'A teammate', taskList(titles)];
+}
+export function dependencyPreview(p: [string, string, string]): string {
+    return `⏳ Task Pending On You\n\nHello ${p[0]},\n${p[1]} says this task is waiting on you:\n📋 Task: ${p[2]}\nPlease check with them.`;
+}
+
+/** "This task of mine is pending on you" (owner 2026-10-19). Never throws. Gated like every other alert. */
+export async function sendTaskDependency(phone: string | null | undefined, input: { recipientName: string; fromLabel: string; titles: string[]; departmentId?: string }): Promise<boolean> {
+    if (!validPhone(phone) || input.titles.length === 0) return false;
+    const params = dependencyParams(input.recipientName, input.fromLabel, input.titles);
+    try {
+        return await TaskMessagingService.sendMessage(phone, dependencyPreview(params), {
+            messageType: 'task_dependency', departmentId: input.departmentId,
+            campaignName: DEPENDENCY_CAMPAIGN, templateParams: params, templateOnly: true,
+        });
+    } catch (err) {
+        console.error('[taskAlerts] Failed to send pending-on-you alert:', err instanceof Error ? err.message : err);
         return false;
     }
 }

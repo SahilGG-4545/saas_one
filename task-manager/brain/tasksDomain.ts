@@ -27,7 +27,7 @@ const INTENT_SPECS: IntentSpec[] = [
     { name: 'progress_update', description: 'reports PROGRESS short of finishing, or a status on tasks they were sent: "working on it", "half done", "stuck waiting for the vendor", or "done"/"done all" in reply to someone\'s request.',
         slots: '{"state":"working"|"partly_done"|"blocked"|"done_all"|"done_some"|"other","which":{"all":boolean,"numbers":[int],"hints":[string]},"note":string|null}' },
     { name: 'create_tasks', description: 'wants to ADD one or more tasks, for themself ("remind me to…") or for someone else ("assign Lohit a task about…"). Split distinct jobs into separate tasks.',
-        slots: '{"assignee":"me"|<person name>,"tasks":[{"title":string,"details":string|null}],"date":"YYYY-MM-DD"|null,"group":{"whose":"team"|"department"|"everyone","department":string|null,"except":[<person name>]}|null}  — titles are short (max 12 words) and use the person\'s own words; never invent work; date only if the message gives one. When the work is for a GROUP ("everyone", "my team", "all of Tech", "sabko", "everyone except Harsh"), fill "group" and set "assignee" to "group"; NEVER list the names yourself.' },
+        slots: '{"assignee":"me"|<person name>|"?","assignees":[<person name>],"tasks":[{"title":string,"details":string|null,"assignees":[<person name>]}],"date":"YYYY-MM-DD"|null,"group":{"whose":"team"|"department"|"everyone","department":string|null,"except":[<person name>]}|null}  — titles are short (max 12 words) and use the person\'s own words; never invent work; date only if the message gives one. When the work is for a GROUP ("everyone", "my team", "all of Tech", "sabko", "everyone except Harsh"), fill "group" and set "assignee" to "group"; NEVER list the names yourself. SEVERAL NAMED PEOPLE for the same work ("assign Parab and Neeti to conduct induction", "Sanil aur Neeti dono ko"): put every name in "assignees" (each gets the task); this is clear, never an ambiguity. A LIST where each line names its own person ("1. meeting with vendors - neeti" then "2. review quotation - sanil"): one task per line, with that line\'s person in the task\'s own "assignees". A message that only NAMES a piece of work, does not say who it is for, and is not a question ("event feedback for navratri event"): intent create_tasks with "assignee":"?" (the system then asks whether to add it to their own list or assign it).' },
     { name: 'hand_over_task', description: 'wants to GIVE one of their own existing tasks to a teammate ("give task 2 to Vidya", "pass the carpet one to Harsh").',
         slots: '{"which":{"all":false,"numbers":[int],"hints":[string]},"to":<person name>|null}' },
     { name: 'answer_pending', description: 'is ANSWERING a question the bot just asked (only possible when a question is pending): "yes", "no", "the second one", "make it tomorrow instead".',
@@ -55,6 +55,14 @@ const str = (v: unknown, max: number): string | null => {
     if (typeof v !== 'string') return null;
     const s = clip(v, max);
     return s || null;
+};
+
+/** Owner 2026-10-19: a list of people's names ("Parab", "Neeti"), or one name given as a string. At most 10, no repeats. */
+const nameList = (v: unknown): string[] => {
+    const raw = Array.isArray(v) ? v : typeof v === 'string' ? [v] : [];
+    const out: string[] = [];
+    for (const x of raw) { const n = str(x, 60); if (n && !out.some(o => norm(o) === norm(n))) out.push(n); }
+    return out.slice(0, 10);
 };
 
 function parseWhich(raw: unknown): Which {
@@ -95,18 +103,25 @@ function validateSlots(intent: Intent, raw: Record<string, unknown>, ctx: BrainC
         }
         case 'create_tasks': {
             const tasks = (Array.isArray(raw.tasks) ? raw.tasks : [])
-                .map(t => (t && typeof t === 'object' ? { title: str((t as any).title, MAX_TITLE_LENGTH), details: str((t as any).details, 400) } : null))
-                .filter((t): t is { title: string; details: string | null } => !!t && !!t.title)
+                .map(t => {
+                    if (!t || typeof t !== 'object') return null;
+                    const names = nameList((t as Record<string, unknown>).assignees);
+                    const o = t as Record<string, unknown>;
+                    return { title: str(o.title, MAX_TITLE_LENGTH), details: str(o.details, 400), ...(names.length ? { assignees: names } : {}) };
+                })
+                .filter((t): t is { title: string; details: string | null; assignees?: string[] } => !!t && !!t.title)
                 .slice(0, MAX_TASKS_PER_MESSAGE + 1);
+            // Owner 2026-10-19: several people for the whole message, as "assignees" or as a list in "assignee".
+            const many = nameList(Array.isArray(raw.assignee) ? raw.assignee : raw.assignees);
             const date = isIsoDate(raw.date) && raw.date >= addDays(ctx.today, -366) && raw.date <= addDays(ctx.today, 366) ? raw.date : null;
             // The sender's own name is "me" (so "remind me to…" never fails the "named in the message" check).
-            const a = str(raw.assignee, 60) || 'me';
+            const a = (Array.isArray(raw.assignee) ? (many.length === 1 ? many[0] : '') : str(raw.assignee, 60)) || (many.length ? '' : 'me');
             const self = norm(a) === norm(ctx.sender.name) || norm(a) === norm(ctx.sender.name).split(' ')[0];
             const g = raw.group && typeof raw.group === 'object' && !Array.isArray(raw.group) ? raw.group as Record<string, unknown> : null;
             const group = g && ['team', 'department', 'everyone'].includes(String(g.whose))
                 ? { whose: g.whose as 'team' | 'department' | 'everyone', department: str(g.department, 60), except: (Array.isArray(g.except) ? g.except : []).map(x => str(x, 60)).filter((x): x is string => !!x).slice(0, 10) }
                 : null;
-            return { intent, assignee: self ? 'me' : a, tasks, date, ...(group ? { group } : {}) };
+            return { intent, assignee: self ? 'me' : a, tasks, date, ...(many.length > 1 ? { assignees: many } : {}), ...(group ? { group } : {}) };
         }
         case 'hand_over_task':
             return { intent, which: parseWhich(raw.which), to: str(raw.to, 60) };
@@ -141,8 +156,9 @@ function checkGrounding(slots: Slots, message: string): boolean {
     if (slots.intent === 'create_tasks') {
         // The person who gets the work must be NAMED by the sender (here or in their own recent messages): the AI may not
         // turn "everyone" / "the team" into a list of names itself (2026-10-13, found by the real-AI test).
-        const who = norm(slots.assignee);
-        const named = !!slots.group || SELF_WORDS.has(who) || EVERYONE_WORDS.has(who) || who === 'group' || isGrounded(who.split(' ')[0], message);
+        const nameOk = (n: string) => { const w = norm(n); return SELF_WORDS.has(w) || EVERYONE_WORDS.has(w) || w === 'group' || w === '?' || w === '' || isGrounded(w.split(' ')[0], message); };
+        // Owner 2026-10-19: several people / a person per line — each one must be named in the message too.
+        const named = !!slots.group || (nameOk(slots.assignee) && (slots.assignees ?? []).every(nameOk) && slots.tasks.every(t => (t.assignees ?? []).every(nameOk)));
         return named && slots.tasks.every(t => isGrounded(t.title, message) && (!t.details || isGrounded(t.details, message)));
     }
     if (slots.intent === 'find_tasks') return wordsGrounded(slots.query, message);
@@ -396,17 +412,7 @@ function decideOne(interp: Interpretation, ctx: BrainContext, policy: ConfirmPol
                 const actions: Action[] = g.people.map(p => ({ type: 'create_tasks', assigneeId: p.id, tasks: slots.tasks, date }));
                 return actions.length === 1 ? { outcome: 'CONFIRM', action: actions[0] } : { outcome: 'CONFIRM', action: { type: 'batch', actions, unclear: [] } };
             }
-            const target = norm(slots.assignee);
-            let assignee: BrainPerson;
-            if (SELF_WORDS.has(target)) {
-                assignee = ctx.sender;
-            } else {
-                const r = resolveRecipient(slots.assignee, ctx);
-                if (!r.ok) return r.decision;
-                assignee = r.person;
-            }
-            if (!mayGiveWorkTo(ctx, assignee)) return { outcome: 'REFUSE', reason: 'not_allowed_to_assign', detail: assignee.name };
-            return { outcome: 'CONFIRM', action: { type: 'create_tasks', assigneeId: assignee.id, tasks: slots.tasks, date: slots.date || ctx.today } };
+            return decideCreate(slots, ctx);
         }
 
         case 'hand_over_task': {
@@ -439,6 +445,8 @@ function decideOne(interp: Interpretation, ctx: BrainContext, policy: ConfirmPol
         case 'answer_pending': {
             const p = ctx.pending;
             if (!p || p.kind === 'ping_reply') return clarify(p ? 'unsure_answer' : 'nothing_pending');
+            // Owner 2026-10-19: an unfinished request can only be dropped this way ("leave it"); anything else keeps it open.
+            if (p.kind === 'draft') return slots.answer === 'no' ? { outcome: 'ACT', action: { type: 'answer_pending', answer: 'no', pick: null, instruction: null } } : clarify('unsure_answer', [], p.question);
             if (slots.answer === 'unsure') return clarify('unsure_answer', [], p.kind === 'confirm' ? p.summary : null);
             if (slots.answer === 'pick') {
                 if (p.kind !== 'pick' || !slots.pick || slots.pick > p.options.length) return clarify('bad_pick', p.kind === 'pick' ? p.options.map((o, i) => `${i + 1}. ${o}`) : []);
@@ -452,6 +460,48 @@ function decideOne(interp: Interpretation, ctx: BrainContext, policy: ConfirmPol
         default:
             return clarify('unknown_intent');
     }
+}
+
+/**
+ * Owner 2026-10-19: adding tasks, for one person, several people ("Parab and Neeti"), or a different person per line.
+ * Every name is checked like any name; a person the sender may not give work to is left out and said so in the preview
+ * (never silently). Same person + same day → one "add these tasks" (one list, one alert).
+ */
+function decideCreate(slots: Extract<Slots, { intent: 'create_tasks' }>, ctx: BrainContext): Decision {
+    const date = slots.date || ctx.today;
+    const top = slots.assignees?.length ? slots.assignees : [slots.assignee];
+    // Nobody named for some task, and no one for the whole message → ask: their own list, or someone else?
+    const unknownWho = (names: string[]) => !names.length || names.every(n => { const w = norm(n); return w === '?' || w === '' || w === 'unknown'; });
+    if (slots.tasks.some(t => !(t.assignees?.length) && unknownWho(top))) return clarify('add_or_assign', [], slots.tasks.map(t => t.title).join(', '));
+
+    const people = new Map<string, BrainPerson>();      // resolved once per name
+    const refused: string[] = [];
+    const actions: Array<Extract<Action, { type: 'create_tasks' }>> = [];
+    for (const task of slots.tasks) {
+        const names = task.assignees?.length ? task.assignees : top;
+        for (const name of names) {
+            const key = norm(name);
+            let person = people.get(key);
+            if (!person) {
+                if (SELF_WORDS.has(key)) person = ctx.sender;
+                else {
+                    const r = resolveRecipient(name, ctx);
+                    if (!r.ok) return r.decision;                    // not found / two people fit → ask, keep nothing
+                    person = r.person;
+                }
+                people.set(key, person);
+            }
+            if (!mayGiveWorkTo(ctx, person)) { if (!refused.includes(person.name)) refused.push(person.name); continue; }
+            const same = actions.find(x => x.assigneeId === person!.id);
+            const item = { title: task.title, details: task.details };
+            if (same) { if (!same.tasks.some(t => norm(t.title) === norm(item.title))) same.tasks.push(item); }
+            else actions.push({ type: 'create_tasks', assigneeId: person.id, tasks: [item], date });
+        }
+    }
+    if (!actions.length) return { outcome: 'REFUSE', reason: 'not_allowed_to_assign', detail: refused.join(', ') };
+    const unclear = refused.map(n => `you can't assign tasks to ${n}`);
+    if (actions.length === 1 && !unclear.length) return { outcome: 'CONFIRM', action: actions[0] };
+    return { outcome: 'CONFIRM', action: { type: 'batch', actions, unclear } };
 }
 
 /** Most people one group message may give work to (more → ask to narrow it down). */
@@ -622,6 +672,8 @@ function clarifyFacts(d: Extract<Decision, { outcome: 'CLARIFY' }>, ctx: BrainCo
         case 'no_task_content': return d.detail === 'new name' || d.detail === 'same name'
             ? { ...base, describe: d.detail === 'same name' ? 'The task already has that name. Say so and ask what the new name should be.' : 'The person wants to rename a task but did not give the new name. Ask what it should be.', values: {}, required: [], fallback: d.detail === 'same name' ? 'That task already has that name. What should the new name be?' : 'What should the new name be?' }
             : { ...base, describe: 'The person wants to add a task but did not say what it is. Ask what the task should be.', values: {}, required: [], fallback: 'What should the task be?' };
+        case 'add_or_assign': return { ...base, describe: `The person named a piece of work ([[work]]) but did not say who it is for. Ask ONE short question: should it go on their own list, or be assigned to someone (and who)?`,
+            values: { work: d.detail || 'this' }, required: [], fallback: `Should I add "${d.detail || 'this'}" to your own list, or assign it to someone? If someone, who?` };
         case 'too_many_tasks': return { ...base, describe: `Too many tasks in one message (the limit is ${d.detail}). Ask them to send fewer at a time.`, values: {}, required: [], fallback: `That is a lot of tasks at once. Could you send them in smaller groups (up to ${d.detail})?` };
         case 'nothing_pending': return withOpenTasks('Nothing is waiting for a yes or no from the person right now. Say so lightly and ask what they would like to do.', 'Nothing is waiting for a yes right now. What would you like to do?');
         case 'unsure_answer': return { ...base, describe: 'The person\'s answer was not clear. Ask them to confirm what they want, in a simple yes-or-no way.', values: { pending: d.detail || '' }, required: [], fallback: 'Sorry, I wasn\'t sure what you meant. Could you say yes or no, or tell me what to change?' };
@@ -679,7 +731,13 @@ function replyFacts(decision: Decision, ctx: BrainContext, result?: ExecutionRes
     const confirming = decision.outcome === 'CONFIRM';
 
     if (confirming && a.type === 'batch') {
-        const items = bullets(a.actions.map(x => batchLine(x, ctx)));
+        // Owner 2026-10-19: a list given to several people reads best one line per task: "1. Review quotation → Sanil".
+        const onlyCreates = a.actions.every(x => x.type === 'create_tasks');
+        const who = (id: string) => (id === sender.id ? 'You' : ctx.people.find(p => p.id === id)?.name ?? 'them');
+        const items = onlyCreates
+            ? a.actions.flatMap(x => x.type === 'create_tasks' ? x.tasks.map(t => `${t.title} → ${who(x.assigneeId)}${x.date !== ctx.today ? ` (${dayLabel(x.date)})` : ''}`) : [])
+                .map((line, i) => `${i + 1}. ${line}`).join('\n')
+            : bullets(a.actions.map(x => batchLine(x, ctx)));
         const unclear = a.unclear.length ? a.unclear.join('; ') : '';
         return { kind: 'confirm_batch', describe: `Ask the person to confirm doing ALL of these together (one yes for everything). Nothing has happened yet.${unclear ? ' Also say, in a short separate sentence, that you could not work out one part ([[unclear]]) and they can send it again on its own.' : ''}`,
             values: { items, ...(unclear ? { unclear } : {}) }, required: ['items', ...(unclear ? ['unclear'] : [])], asksQuestion: true, claimsNothingDone: true, names: [sender.name],

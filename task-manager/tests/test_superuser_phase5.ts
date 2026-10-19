@@ -76,6 +76,7 @@ async function run() {
     const realCollab = acc.isSuperuserCollabEnabled.bind(TaskAccessService);
     let collabOn = new Set<string>(['d1']);
     acc.isSuperuserCollabEnabled = async (d: string) => collabOn.has(d);
+    acc.isTeamAssignEnabled = async () => false; // owner 2026-10-19 "assign to anyone in team" is not what this test is about
     const canAssign = async (actor: string, target: string) => { try { await PermissionService.assertCanAssignTask(actor, target); return true; } catch (e) { return e instanceof PermissionDeniedError ? false : Promise.reject(e); } };
     check('Procurement → Saniel (a superuser) is allowed when the switch is ON', await canAssign('u1', 'u9'));
     collabOn = new Set();

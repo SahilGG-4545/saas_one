@@ -140,6 +140,31 @@ export function useWorkspace(date: string, departmentName: string, to: string = 
         }
     }, [load, post, toast]);
 
+    /** "Pending on…" (owner 2026-10-19): tells a colleague one of my tasks is waiting on them. Nothing on the board changes. */
+    const flagDependency = useCallback(async (taskId: string, targetUserId: string, toName: string) => {
+        try {
+            await post({ action: 'flag_dependency', taskId, targetUserId });
+            toast('success', `${toName} has been told`);
+            return true;
+        } catch (err) {
+            toast('error', messageOf(err, 'Could not send that'));
+            return false;
+        }
+    }, [post, toast]);
+
+    /** Edits a task I gave (name and details). Used by "Assigned by me". */
+    const editTask = useCallback(async (taskId: string, title: string, description: string) => {
+        try {
+            await post({ action: 'edit_task', taskId, title, description });
+            toast('success', 'Task saved');
+            load();
+            return true;
+        } catch (err) {
+            toast('error', messageOf(err, 'Could not save the task'));
+            return false;
+        }
+    }, [load, post, toast]);
+
     const ok: WorkspaceOk | null = ws && ws.state === 'ok' ? ws : null;
-    return { ws, ok, loading, refreshing, error, toasts, dismissToast, reload: load, moveTask, addTask, giveTask, deleteTask, setLocked };
+    return { ws, ok, loading, refreshing, error, toasts, dismissToast, toast, reload: load, moveTask, addTask, giveTask, deleteTask, setLocked, flagDependency, editTask };
 }

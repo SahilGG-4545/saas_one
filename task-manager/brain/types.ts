@@ -42,7 +42,11 @@ export type Slots =
     | { intent: 'view_tasks'; scope: ViewScope; person: string | null; department: string | null; /** only tasks carried over from earlier days (own list) */ carriedOnly?: boolean }
     | { intent: 'complete_tasks'; which: Which }
     | { intent: 'progress_update'; state: ProgressState; which: Which; note: string | null }
-    | { intent: 'create_tasks'; assignee: string; tasks: Array<{ title: string; details: string | null }>; date: string | null;
+    | { intent: 'create_tasks'; assignee: string; tasks: Array<{ title: string; details: string | null;
+            /** Owner 2026-10-19: who THIS task is for, when it differs per line ("1. meeting with vendors - neeti"). */
+            assignees?: string[] }>; date: string | null;
+        /** Owner 2026-10-19: several people for the whole message ("assign Parab and Neeti to conduct induction"). */
+        assignees?: string[];
         /** A GROUP the AI read from the message ("everyone", "my team", "all of Tech except Harsh"). Code turns it into people. */
         group?: { whose: 'team' | 'department' | 'everyone'; department: string | null; except: string[] } | null }
     | { intent: 'hand_over_task'; which: Which; to: string | null }
@@ -79,7 +83,10 @@ export type PendingState =
     | { kind: 'confirm'; summary: string }
     | { kind: 'pick'; options: string[] }
     | { kind: 'preview'; count: number }
-    | { kind: 'ping_reply'; assigner: string; taskIds: string[]; taskTitles: string[]; /** Names of everyone who gave these tasks, when more than one person is waiting on the reply. */ assigners?: string[] };
+    | { kind: 'ping_reply'; assigner: string; taskIds: string[]; taskTitles: string[]; /** Names of everyone who gave these tasks, when more than one person is waiting on the reply. */ assigners?: string[] }
+    /** Owner 2026-10-19: an UNFINISHED request. The bot asked a question about it; the next message fills the gap ("both",
+     *  "only Neeti", "assign it to Srushti") instead of starting over. `request` = the person's own words so far. */
+    | { kind: 'draft'; request: string; question: string | null; at: string };
 
 export type Role = 'employee' | 'reporting_manager' | 'superuser';
 
@@ -126,7 +133,9 @@ export type ClarifyReason =
     | 'low_confidence' | 'ai_flagged_ambiguity' | 'unknown_intent'
     | 'no_task_referenced' | 'task_number_out_of_range' | 'several_tasks_match'
     | 'person_not_found' | 'several_people_match' | 'no_recipient' | 'no_task_content'
-    | 'nothing_pending' | 'unsure_answer' | 'bad_pick' | 'too_many_tasks' | 'not_grounded' | 'department_not_found';
+    | 'nothing_pending' | 'unsure_answer' | 'bad_pick' | 'too_many_tasks' | 'not_grounded' | 'department_not_found'
+    /** Owner 2026-10-19: they named a piece of work but not who it is for: add to their own list, or assign it? */
+    | 'add_or_assign';
 
 export type RefuseReason = 'not_allowed_to_assign' | 'task_already_done' | 'not_allowed_to_view' | 'cannot_hand_over_to_self' | 'nothing_to_do' | 'nothing_in_group';
 
@@ -156,7 +165,10 @@ export const DEFAULT_CONFIRM_POLICY: ConfirmPolicy = { confirmProgressUpdates: f
 /** Confidence below which a CHANGE is never proposed; the bot asks instead. Reads use the lower bar. */
 export const CHANGE_CONFIDENCE_MIN = 0.8;
 export const READ_CONFIDENCE_MIN = 0.55;
-export const MAX_TASKS_PER_MESSAGE = 15;
+/** Owner 2026-10-19: 15 → 30 (HR send longer lists). */
+export const MAX_TASKS_PER_MESSAGE = 30;
+/** Owner 2026-10-19: how long an unfinished request (a "draft") waits for the answer to the bot's question. */
+export const DRAFT_TTL_MIN = 30;
 /** Extra requests read from one message on top of the first ("done 1 and add …"): at most this many. */
 export const MAX_EXTRA_REQUESTS = 4;
 export const MAX_TITLE_LENGTH = 200;

@@ -22,7 +22,10 @@ export async function buildBrainContext(emp: Employee, phone: string, opts: { pe
         TaskDatabaseService.getNumberedList({ employeeId: emp.id, date: today, departmentId: emp.department_id ?? null }),
         TaskDatabaseService.getDepartments(),
     ]);
-    const permitted = await PermissionService.visibleAndAssignable(emp, pool);
+    // Owner 2026-10-19: the people this person may GIVE work to (wider than who they may see when "assign to anyone in
+    // team" is ON). Reading anyone's tasks is re-checked separately (readPerson / readTeam / findTasks), so this never
+    // widens what they can see.
+    const permitted = await PermissionService.assignableTo(emp, pool);
     const isSuper = emp.role === 'superuser';
 
     const people = new Map<string, BrainPerson>();

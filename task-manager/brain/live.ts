@@ -7,7 +7,7 @@ import { BrainDeps, BrainResult, composeBrainReply, runBrain } from './index';
 import { shadowDetails } from './shadow';
 import { addDays, clip } from './text';
 import { FIND_MAX_ROWS, type FoundTask } from './findTasks';
-import { DEFAULT_CONFIRM_POLICY, type Action, type BrainContext, type PendingState } from './types';
+import { DEFAULT_CONFIRM_POLICY, DRAFT_TTL_MIN, type Action, type BrainContext, type ClarifyReason, type PendingState } from './types';
 import { AI_DOWN_HELP, ExactPlan, LastChange, UNDO_HINT, UndoIO, changeFromAction, normalizeChange, parseExactCommand, planExact, runUndo } from './frontDoor';
 import { isExplicitTaskCommand } from '@/backend/lib/whatsapp/interpreter/coordinator.mjs';
 import { tasksDomainWithTeam } from './tasksDomain';
@@ -56,6 +56,34 @@ export interface LiveState {
 
 const EMPTY: LiveState = { recent: [], pending: null, action: null, originalSummary: null, pickOptions: [], relay: false, titles: {} };
 
+/** Owner 2026-10-19: an unfinished request is kept for DRAFT_TTL_MIN minutes, then forgotten. */
+function liveDraft(p: Record<string, unknown>): boolean {
+    if (p.kind !== 'draft' || typeof p.request !== 'string' || !p.request.trim()) return false;
+    const at = Date.parse(String(p.at || ''));
+    return Number.isFinite(at) && Date.now() - at < DRAFT_TTL_MIN * 60 * 1000;
+}
+
+/**
+ * Owner 2026-10-19: the questions after which the bot KEEPS the unfinished request, so the next reply ("both", "only Neeti",
+ * "assign it to Srushti") finishes it instead of starting over. (A pick list and a yes/no already keep their own state.)
+ */
+const DRAFT_REASONS: ReadonlySet<ClarifyReason> = new Set<ClarifyReason>([
+    'ai_flagged_ambiguity', 'low_confidence', 'add_or_assign', 'no_recipient', 'person_not_found', 'no_task_content', 'unknown_intent',
+]);
+const MAX_DRAFT_CHARS = 1500;
+
+/** The person's words so far: the earlier unfinished request (if any) plus this message. */
+export function draftRequest(previous: PendingState | null, text: string): string {
+    const before = previous?.kind === 'draft' ? `${previous.request}\n` : '';
+    return clip(`${before}${text}`, MAX_DRAFT_CHARS);
+}
+
+/** The question the bot asked: its reply up to the first "?" (without any list that follows), else its start. */
+export function questionOf(reply: string): string {
+    const q = reply.indexOf('?');
+    return clip(q >= 0 && q < 400 ? reply.slice(0, q + 1) : reply, 300);
+}
+
 export function normalizeState(data: unknown): LiveState {
     if (!data || typeof data !== 'object') return { ...EMPTY };
     const value = data as Record<string, unknown>;
@@ -63,7 +91,7 @@ export function normalizeState(data: unknown): LiveState {
     const action = value.action as Record<string, unknown> | null;
     return {
         recent: Array.isArray(value.recent) ? value.recent.filter((s: unknown) => typeof s === 'string').slice(-4) : [],
-        pending: pending && ['confirm', 'pick', 'preview', 'ping_reply'].includes(String(pending.kind)) ? pending as unknown as PendingState : null,
+        pending: pending && (['confirm', 'pick', 'preview', 'ping_reply'].includes(String(pending.kind)) || liveDraft(pending)) ? pending as unknown as PendingState : null,
         action: action && typeof action.type === 'string' ? action as unknown as Action : null,
         originalSummary: typeof value.originalSummary === 'string' ? value.originalSummary : null,
         pickOptions: Array.isArray(value.pickOptions) ? value.pickOptions.filter((s: unknown) => typeof s === 'string') : [],
@@ -453,6 +481,10 @@ async function handle(t: Turn): Promise<void> {
         }
         if (inFlight) inFlight.closing = true;
 
+        // Owner 2026-10-19: remember the exact question asked, so the next reply is read as its answer.
+        if (finalNext !== 'clear' && finalNext.pending?.kind === 'draft' && !finalNext.pending.question && finalReplyText) {
+            finalNext = { ...finalNext, pending: { ...finalNext.pending, question: questionOf(finalReplyText) } };
+        }
         // Group 2: the learning note and saving the conversation do not depend on each other → side by side. The state is
         // still saved BEFORE the reply is sent, so a quick "yes" always finds the question.
         await Promise.all([
@@ -510,15 +542,25 @@ async function handle(t: Turn): Promise<void> {
     if (decision.outcome === 'CONFIRM') {
         next.pending = { kind: 'confirm', summary: interp.summary || 'a change to your tasks' };
         next.action = decision.action;
-        next.originalSummary = interp.summary || null;
+        // Owner 2026-10-19: for new tasks keep the person's OWN words (the whole list), so "remove 3" or "make it tomorrow"
+        // re-reads every line, not just a one-line summary of them.
+        next.originalSummary = (decision.action.type === 'create_tasks' || decision.action.type === 'batch') && t.depth === 0
+            ? draftRequest(t.state.pending, t.text) : (interp.summary || null);
         next.relay = t.relay; next.titles = t.relay ? t.titles : {};
     } else if (decision.outcome === 'CLARIFY' && decision.options.length && (decision.reason === 'several_people_match' || decision.reason === 'several_tasks_match')) {
         next.pending = { kind: 'pick', options: decision.options };
         next.pickOptions = decision.options;
         next.originalSummary = interp.summary || null;
         next.relay = t.relay; next.titles = t.relay ? t.titles : {};
+    } else if (decision.outcome === 'CLARIFY' && DRAFT_REASONS.has(decision.reason) && t.depth === 0
+        && (decision.reason !== 'unknown_intent' || t.state.pending?.kind === 'draft' || t.text.trim().split(/\s+/).length >= 3)) {
+        // Owner 2026-10-19: the bot asked a question about this request → keep the request, so the answer can finish it.
+        next.pending = { kind: 'draft', request: draftRequest(t.state.pending, t.text), question: null, at: new Date().toISOString() };
+        next.relay = false; next.titles = {};
     } else if (t.state.pending && ((decision.outcome === 'CLARIFY' && (decision.reason === 'unsure_answer' || decision.reason === 'bad_pick'))
-        || (decision.outcome === 'ACT' && decision.action.type === 'chat'))) {
+        || (decision.outcome === 'ACT' && decision.action.type === 'chat')
+        // Owner 2026-10-19: a side question ("what are my tasks?") does not drop an unfinished request either.
+        || (t.state.pending.kind === 'draft' && decision.outcome === 'ACT' && (decision.action.type === 'view_tasks' || decision.action.type === 'find_tasks')))) {
         // A side remark ("thanks", "what do you mean?") does not cancel a question that is still waiting.
         // Part B: an unclear answer to a question that still stands keeps that question (and its change) open, so the next
         // clear "yes" / "2" still works. Before, the question was dropped and the yes found nothing waiting.
