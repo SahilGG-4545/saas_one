@@ -482,25 +482,54 @@ const SOPCompletionDetail: React.FC<SOPCompletionDetailProps> = ({ completionId,
                                             </p>
                                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                                                 {templateItem.parameters.map((param: any, pIdx: number) => {
-                                                    const pVal = item.parameter_values?.[param.id]?.value;
-                                                    const isYes = pVal === 'yes' || pVal === true;
-                                                    const isNo = pVal === 'no' || pVal === false;
+                                                    const paramEntry = item.parameter_values?.[param.id];
+                                                    const pVal = paramEntry?.value !== undefined ? paramEntry.value : paramEntry;
+                                                    const pType = param.type || 'yes_no';
+
                                                     return (
-                                                        <div key={param.id || pIdx} className="bg-white px-2.5 py-1.5 rounded-lg border border-slate-200/60 flex items-center justify-between text-xs">
-                                                            <span className="font-bold text-slate-800 text-[11px] truncate">{param.name}</span>
-                                                            {isYes ? (
-                                                                <span className="px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 text-[9px] font-black uppercase tracking-wider border border-emerald-200">
-                                                                    Yes
+                                                        <div key={param.id || pIdx} className="bg-white px-3 py-2 rounded-xl border border-slate-200/70 flex items-center justify-between text-xs gap-2 shadow-2xs">
+                                                            <div className="flex items-center gap-1.5 min-w-0">
+                                                                <span className="font-bold text-slate-800 text-[11px] truncate">{param.name}</span>
+                                                                <span className="text-[8px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 border border-slate-200/60 flex-shrink-0">
+                                                                    {pType === 'yes_no' ? 'Yes/No' : pType === 'checkbox' ? 'Checkbox' : pType}
                                                                 </span>
-                                                            ) : isNo ? (
-                                                                <span className="px-2 py-0.5 rounded bg-rose-50 text-rose-700 text-[9px] font-black uppercase tracking-wider border border-rose-200">
-                                                                    No
-                                                                </span>
-                                                            ) : (
-                                                                <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-600 text-[9px] font-bold">
-                                                                    {pVal !== undefined && pVal !== null ? String(pVal) : '—'}
-                                                                </span>
-                                                            )}
+                                                            </div>
+
+                                                            <div className="flex-shrink-0">
+                                                                {pType === 'checkbox' ? (
+                                                                    pVal === true || pVal === 'true' || paramEntry?.checked ? (
+                                                                        <span className="px-2 py-0.5 rounded-lg bg-emerald-50 text-emerald-700 text-[9px] font-black uppercase tracking-wider border border-emerald-200 flex items-center gap-1">
+                                                                            <CheckCircle2 size={12} className="text-emerald-600" />
+                                                                            Checked
+                                                                        </span>
+                                                                    ) : (
+                                                                        <span className="px-2 py-0.5 rounded-lg bg-slate-50 text-slate-400 text-[9px] font-bold uppercase tracking-wider border border-slate-200 flex items-center gap-1">
+                                                                            <Circle size={12} className="text-slate-300" />
+                                                                            Unchecked
+                                                                        </span>
+                                                                    )
+                                                                ) : pType === 'yes_no' ? (
+                                                                    pVal === 'yes' ? (
+                                                                        <span className="px-2.5 py-0.5 rounded-lg bg-emerald-50 text-emerald-700 text-[9px] font-black uppercase tracking-wider border border-emerald-200">
+                                                                            Yes
+                                                                        </span>
+                                                                    ) : pVal === 'no' ? (
+                                                                        <span className="px-2.5 py-0.5 rounded-lg bg-rose-50 text-rose-700 text-[9px] font-black uppercase tracking-wider border border-rose-200">
+                                                                            No
+                                                                        </span>
+                                                                    ) : (
+                                                                        <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-400 text-[9px] font-medium">—</span>
+                                                                    )
+                                                                ) : pType === 'number' ? (
+                                                                    <span className="px-2 py-0.5 rounded-lg bg-blue-50 text-blue-800 font-mono text-[10px] font-black border border-blue-200">
+                                                                        {pVal !== undefined && pVal !== null && pVal !== '' ? String(pVal) : '—'}
+                                                                    </span>
+                                                                ) : (
+                                                                    <span className="px-2 py-0.5 rounded-lg bg-slate-100 text-slate-800 text-[10px] font-bold border border-slate-200 max-w-[120px] truncate block" title={String(pVal || '')}>
+                                                                        {pVal !== undefined && pVal !== null && pVal !== '' ? String(pVal) : '—'}
+                                                                    </span>
+                                                                )}
+                                                            </div>
                                                         </div>
                                                     );
                                                 })}
