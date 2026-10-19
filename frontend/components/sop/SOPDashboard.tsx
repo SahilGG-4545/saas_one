@@ -24,8 +24,28 @@ interface SOPDashboardProps {
 const SOPDashboard: React.FC<SOPDashboardProps> = ({ propertyId, propertyIds, propertySelector, headerRight }) => {
     const isMultiProperty = !!propertyIds && propertyIds.length > 0;
     const { membership } = useAuth();
-    const [activeView, setActiveView] = useState<'list' | 'runner' | 'history' | 'detail' | 'reports' | 'settings'>('list');
+    const [activeView, setActiveView] = useState<'list' | 'runner' | 'history' | 'detail' | 'reports' | 'settings'>(() => {
+        if (typeof window !== 'undefined') {
+            const urlParams = new URLSearchParams(window.location.search);
+            const viewParam = urlParams.get('tab') || urlParams.get('view');
+            if (viewParam && ['list', 'history', 'reports', 'settings'].includes(viewParam)) {
+                return viewParam as any;
+            }
+            const saved = sessionStorage.getItem(`sop_active_view_${propertyId || 'global'}`);
+            if (saved && ['list', 'history', 'reports', 'settings'].includes(saved)) {
+                return saved as any;
+            }
+        }
+        return 'list';
+    });
     const [returnView, setReturnView] = useState<'list' | 'history' | null>(null);
+
+    // Sync active view to sessionStorage so refreshing keeps user on current tab
+    useEffect(() => {
+        if (typeof window !== 'undefined' && ['list', 'history', 'reports', 'settings'].includes(activeView)) {
+            sessionStorage.setItem(`sop_active_view_${propertyId || 'global'}`, activeView);
+        }
+    }, [activeView, propertyId]);
     const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
     const [selectedCompletionId, setSelectedCompletionId] = useState<string | null>(null);
     const [selectedCompletionDate, setSelectedCompletionDate] = useState<string | null>(null);

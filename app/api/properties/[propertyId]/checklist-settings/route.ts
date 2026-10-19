@@ -19,7 +19,7 @@ export async function GET(
             .from('checklist_property_settings')
             .select(`
                 *,
-                approver:users!approver_user_id(id, full_name, email, role)
+                approver:users!approver_user_id(id, full_name, email)
             `)
             .eq('property_id', propertyId)
             .maybeSingle();
