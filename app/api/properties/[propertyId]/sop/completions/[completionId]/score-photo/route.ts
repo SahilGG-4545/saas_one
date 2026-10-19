@@ -53,11 +53,26 @@ export async function POST(
             .eq('property_id', propertyId)
             .maybeSingle();
 
-        if (propSettings && (propSettings.checklist_mode === 'basic' || propSettings.ai_scoring_enabled === false)) {
+        let isBasicMode = false;
+        let aiScoringDisabled = false;
+
+        if (propSettings) {
+            isBasicMode = propSettings.checklist_mode === 'basic';
+            aiScoringDisabled = propSettings.ai_scoring_enabled === false;
+        } else {
+            const { data: prop } = await supabaseAdmin
+                .from('properties')
+                .select('checklist_mode')
+                .eq('id', propertyId)
+                .maybeSingle();
+            isBasicMode = !prop || prop.checklist_mode === 'basic';
+        }
+
+        if (isBasicMode || aiScoringDisabled) {
             return NextResponse.json({
                 success: true,
                 skipped: true,
-                reason: 'AI scoring is disabled for this property in basic mode',
+                reason: isBasicMode ? 'AI scoring is disabled for this property in basic mode' : 'AI scoring is disabled',
             });
         }
 
@@ -143,10 +158,11 @@ export async function POST(
         }
 
         if (!referenceBuffer || !referenceUsed) {
-            return NextResponse.json(
-                { error: 'No reference image available for this step. Link a CAD area or upload a clean reference photo.' },
-                { status: 400 }
-            );
+            return NextResponse.json({
+                success: true,
+                skipped: true,
+                reason: 'No clean reference photo or CAD area configured for this step',
+            });
         }
 
         // Fetch the field photo

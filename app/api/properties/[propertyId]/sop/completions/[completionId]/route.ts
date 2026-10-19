@@ -21,7 +21,8 @@ export async function GET(
             .select(`
                 *,
                 template:sop_templates(*, items:sop_checklist_items(*)),
-                user:users(full_name),
+                user:users!completed_by(full_name),
+                approver:users!approver_id(full_name),
                 items:sop_completion_items(
                     *,
                     checklist_item:sop_checklist_items(*),
@@ -37,7 +38,8 @@ export async function GET(
         const { data: completion, error } = await getQuery.single();
 
         if (error || !completion) {
-            return NextResponse.json({ error: 'Completion not found' }, { status: 404 });
+            console.error('[GET completion error]:', error?.message || error, 'propertyId:', propertyId, 'completionId:', completionId);
+            return NextResponse.json({ error: error?.message || 'Completion not found' }, { status: 404 });
         }
 
         // ── Self-heal: insert any missing sop_completion_items rows ──────────
@@ -61,7 +63,8 @@ export async function GET(
                 .select(`
                     *,
                     template:sop_templates(*, items:sop_checklist_items(*)),
-                    user:users(full_name),
+                    user:users!completed_by(full_name),
+                    approver:users!approver_id(full_name),
                     items:sop_completion_items(
                         *,
                         checklist_item:sop_checklist_items(*),
@@ -74,9 +77,12 @@ export async function GET(
                 healedQuery = healedQuery.eq('property_id', propertyId);
             }
 
-            const { data: healed } = await healedQuery.single();
+            const { data: healed, error: healedError } = await healedQuery.single();
+            if (healedError) {
+                console.error('[GET healed completion error]:', healedError);
+            }
 
-            return NextResponse.json({ success: true, completion: healed });
+            return NextResponse.json({ success: true, completion: healed || completion });
         }
 
         return NextResponse.json({ success: true, completion });
