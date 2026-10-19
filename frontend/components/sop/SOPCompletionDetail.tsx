@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { createClient } from '@/frontend/utils/supabase/client';
 import Skeleton from '@/frontend/components/ui/Skeleton';
 import { motion } from 'framer-motion';
-import { ChevronLeft, User, Calendar, CheckCircle2, Circle, Camera, Clock, Eye, Video, Play, ThumbsDown, Minus, ThumbsUp, Paperclip, Loader2, X, MapPin } from 'lucide-react';
+import { ChevronLeft, User, Calendar, CheckCircle2, Circle, Camera, Clock, Eye, Video, Play, ThumbsDown, Minus, ThumbsUp, Paperclip, Loader2, X, MapPin, ShieldCheck, Check, XCircle, MessageSquare } from 'lucide-react';
 import ImagePreviewModal from '@/frontend/components/shared/ImagePreviewModal';
 import VideoPreviewModal from '@/frontend/components/shared/VideoPreviewModal';
 import CameraCaptureModal from '@/frontend/components/shared/CameraCaptureModal';
@@ -45,6 +45,8 @@ const SOPCompletionDetail: React.FC<SOPCompletionDetailProps> = ({ completionId,
     const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
     const [showCADOverlay, setShowCADOverlay] = useState(false);
     const [aiScoring, setAiScoring] = useState<Record<string, boolean>>({});
+    const [stepNotes, setStepNotes] = useState<Record<string, string>>({});
+    const [approvingItemId, setApprovingItemId] = useState<string | null>(null);
     const supabase = React.useMemo(() => createClient(), []);
 
     // Fire-and-forget AI cleanliness scoring after a photo is (re-)uploaded
@@ -62,7 +64,14 @@ const SOPCompletionDetail: React.FC<SOPCompletionDetailProps> = ({ completionId,
                         ...prev,
                         items: prev.items.map((it: any) =>
                             it.id === completionItemId
-                                ? { ...it, ai_cleanliness_score: data.score, ai_cleanliness_reason: data.reason, ai_reference_used: data.referenceUsed, ai_analyzed_at: new Date().toISOString() }
+                                ? { 
+                                    ...it, 
+                                    ai_cleanliness_score: data.score, 
+                                    ai_cleanliness_reason: data.reason, 
+                                    ai_parameter_scores: data.parameterScores || it.ai_parameter_scores, 
+                                    ai_reference_used: data.referenceUsed, 
+                                    ai_analyzed_at: new Date().toISOString() 
+                                }
                                 : it
                         ),
                     }) : prev);
@@ -73,6 +82,37 @@ const SOPCompletionDetail: React.FC<SOPCompletionDetailProps> = ({ completionId,
             .catch((err) => console.warn('[AI Score] Request failed:', err))
             .finally(() => setAiScoring(prev => ({ ...prev, [completionItemId]: false })));
     }, [completionId, propertyId]);
+
+    const handleStepApproval = useCallback(async (itemId: string, status: 'approved' | 'rejected') => {
+        setApprovingItemId(itemId);
+        try {
+            const notes = stepNotes[itemId] || '';
+            const res = await fetch(`/api/properties/${propertyId}/sop/completions/${completionId}/approve-step`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ completionItemId: itemId, status, notes }),
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || 'Failed to update step approval');
+
+            setCompletion((prev: any) => prev ? ({
+                ...prev,
+                approval_status: data.completion_approval_status || prev.approval_status,
+                items: prev.items.map((it: any) => it.id === itemId ? {
+                    ...it,
+                    step_approval_status: data.step_approval_status,
+                    step_approval_notes: data.step_approval_notes,
+                    step_approved_at: data.step_approved_at,
+                    step_approved_by: data.step_approved_by,
+                } : it),
+            }) : prev);
+            setToast({ message: `Step ${status === 'approved' ? 'Approved' : 'Rejected'} successfully`, type: 'success' });
+        } catch (err: any) {
+            setToast({ message: err.message || 'Error updating approval', type: 'error' });
+        } finally {
+            setApprovingItemId(null);
+        }
+    }, [completionId, propertyId, stepNotes]);
 
 
     useEffect(() => {
@@ -403,6 +443,62 @@ const SOPCompletionDetail: React.FC<SOPCompletionDetailProps> = ({ completionId,
                     />
                 </div>
             </div>
+
+            {/* Overall Approver / Checker Review Banner */}
+            {completion && (
+                <div className={`p-3 md:p-4 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                    completion.approval_status === 'approved'
+                        ? 'bg-emerald-50/70 border-emerald-200 text-emerald-900'
+                        : completion.approval_status === 'rejected'
+                        ? 'bg-rose-50/70 border-rose-200 text-rose-900'
+                        : 'bg-amber-50/60 border-amber-200 text-amber-900'
+                }`}>
+                    <div className="flex items-center gap-3">
+                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${
+                            completion.approval_status === 'approved'
+                                ? 'bg-emerald-600 text-white'
+                                : completion.approval_status === 'rejected'
+                                ? 'bg-rose-600 text-white'
+                                : 'bg-amber-500 text-white'
+                        }`}>
+                            {completion.approval_status === 'approved' ? (
+                                <ShieldCheck size={20} />
+                            ) : completion.approval_status === 'rejected' ? (
+                                <XCircle size={20} />
+                            ) : (
+                                <Clock size={20} />
+                            )}
+                        </div>
+                        <div>
+                            <div className="flex items-center gap-2">
+                                <span className="text-[10px] md:text-[11px] font-black uppercase tracking-widest">
+                                    {completion.approval_status === 'approved'
+                                        ? 'Checklist Approved'
+                                        : completion.approval_status === 'rejected'
+                                        ? 'Checklist Needs Rework'
+                                        : 'Checker Review Pending'}
+                                </span>
+                                <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${
+                                    completion.approval_status === 'approved'
+                                        ? 'bg-emerald-100 text-emerald-800'
+                                        : completion.approval_status === 'rejected'
+                                        ? 'bg-rose-100 text-rose-800'
+                                        : 'bg-amber-100 text-amber-800'
+                                }`}>
+                                    {effectiveItems.filter((i: any) => i.step_approval_status === 'approved').length} of {effectiveItems.length} Steps Approved
+                                </span>
+                            </div>
+                            <p className="text-[11px] opacity-80 mt-0.5 font-medium">
+                                {completion.approval_status === 'approved'
+                                    ? `Signed off on ${completion.approved_at ? new Date(completion.approved_at).toLocaleDateString() : 'all standards met'}.`
+                                    : completion.approval_status === 'rejected'
+                                    ? 'One or more checklist steps were rejected by the checker. Please review notes below.'
+                                    : 'Awaiting checker sign-off. Approvers can review each step individually below.'}
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Detailed Points List */}
             <div className="space-y-2 md:space-y-3">
@@ -771,6 +867,53 @@ const SOPCompletionDetail: React.FC<SOPCompletionDetailProps> = ({ completionId,
                                         </div>
                                     )}
 
+                                    {/* Parameter by Parameter Cleanliness Breakdown */}
+                                    {Array.isArray(item.ai_parameter_scores) && item.ai_parameter_scores.length > 0 && (
+                                        <div className="mt-2.5 bg-white/90 rounded-xl border border-slate-200/90 p-3 shadow-2xs">
+                                            <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-2 flex items-center justify-between">
+                                                <span>Parameter Inspection Breakdown ({item.ai_parameter_scores.length})</span>
+                                                <span className="text-slate-400 font-semibold lowercase">qwen-vision verified</span>
+                                            </p>
+                                            <div className="space-y-1.5">
+                                                {item.ai_parameter_scores.map((param: any, pIdx: number) => {
+                                                    const isPass = param.status === 'pass';
+                                                    const isFail = param.status === 'fail';
+                                                    const isNA = !param.is_assessable || param.status === 'unassessable';
+
+                                                    return (
+                                                        <div key={pIdx} className="p-2 rounded-lg bg-slate-50 border border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
+                                                            <div className="flex items-center gap-2 min-w-0">
+                                                                <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                                                                    isPass ? 'bg-emerald-500' : isFail ? 'bg-rose-500' : 'bg-slate-300'
+                                                                }`} />
+                                                                <span className="text-xs font-bold text-slate-800">{param.name}</span>
+                                                                <span className={`text-[8px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded ${
+                                                                    isPass
+                                                                        ? 'bg-emerald-100 text-emerald-800'
+                                                                        : isFail
+                                                                        ? 'bg-rose-100 text-rose-800'
+                                                                        : 'bg-slate-200 text-slate-600'
+                                                                }`}>
+                                                                    {isPass ? 'Pass' : isFail ? 'Needs Attention' : 'N/A · Not in frame'}
+                                                                </span>
+                                                                {!isNA && param.score !== null && param.score !== undefined && (
+                                                                    <span className="text-[10px] font-black text-slate-600">
+                                                                        {param.score}/100
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                            {param.reason && (
+                                                                <p className="text-[10px] text-slate-500 font-medium sm:text-right sm:max-w-[50%] leading-tight">
+                                                                    {param.reason}
+                                                                </p>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                    )}
+
                                     {/* ── Satisfaction Rating ── */}
                                     {isCompleted && (
                                         <div className="mt-3 pt-3 border-t border-slate-100">
@@ -803,6 +946,74 @@ const SOPCompletionDetail: React.FC<SOPCompletionDetailProps> = ({ completionId,
                                                     </span>
                                                 )}
                                             </div>
+                                        </div>
+                                    )}
+
+                                    {/* ── Checker / Approver Step Sign-Off ── */}
+                                    {isCompleted && (
+                                        <div className="mt-3 pt-3 border-t border-slate-100">
+                                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2">
+                                                <div className="flex items-center gap-1.5">
+                                                    <ShieldCheck size={12} className="text-primary" />
+                                                    <span className="text-[8px] md:text-[9px] font-black text-slate-600 uppercase tracking-widest">
+                                                        Checker Sign-Off
+                                                    </span>
+                                                    <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded-full ${
+                                                        item.step_approval_status === 'approved'
+                                                            ? 'bg-emerald-100 text-emerald-700'
+                                                            : item.step_approval_status === 'rejected'
+                                                            ? 'bg-rose-100 text-rose-700'
+                                                            : 'bg-amber-100 text-amber-700'
+                                                    }`}>
+                                                        {item.step_approval_status === 'approved' ? 'Approved' : item.step_approval_status === 'rejected' ? 'Rejected' : 'Pending Review'}
+                                                    </span>
+                                                </div>
+                                                {item.step_approved_at && (
+                                                    <span className="text-[8px] text-slate-400 font-medium">
+                                                        Reviewed {new Date(item.step_approved_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                                                    </span>
+                                                )}
+                                            </div>
+
+                                            {item.step_approval_notes && (
+                                                <div className="mb-2 p-2 bg-slate-50 rounded-lg border border-slate-200/80 text-[11px] text-slate-700">
+                                                    <span className="font-bold text-slate-900 block text-[9px] uppercase tracking-wider mb-0.5">Checker Note:</span>
+                                                    {item.step_approval_notes}
+                                                </div>
+                                            )}
+
+                                            {/* Admin/Approver Action Controls */}
+                                            {isAdmin && (
+                                                <div className="space-y-2 mt-2">
+                                                    <div className="flex items-center gap-1.5">
+                                                        <input
+                                                            type="text"
+                                                            value={stepNotes[item.id] !== undefined ? stepNotes[item.id] : (item.step_approval_notes || '')}
+                                                            onChange={(e) => setStepNotes(prev => ({ ...prev, [item.id]: e.target.value }))}
+                                                            placeholder="Add checker feedback or rejection reason..."
+                                                            className="flex-1 bg-white border border-slate-200 rounded-lg px-2.5 py-1 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-primary"
+                                                        />
+                                                    </div>
+                                                    <div className="flex items-center gap-2">
+                                                        <button
+                                                            disabled={approvingItemId === item.id || item.step_approval_status === 'approved'}
+                                                            onClick={() => handleStepApproval(item.id, 'approved')}
+                                                            className="flex-1 sm:flex-none flex items-center justify-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[9px] font-black uppercase tracking-wider transition-all disabled:opacity-40 cursor-pointer"
+                                                        >
+                                                            {approvingItemId === item.id ? <Loader2 size={10} className="animate-spin" /> : <Check size={10} />}
+                                                            Approve Step
+                                                        </button>
+                                                        <button
+                                                            disabled={approvingItemId === item.id || item.step_approval_status === 'rejected'}
+                                                            onClick={() => handleStepApproval(item.id, 'rejected')}
+                                                            className="flex-1 sm:flex-none flex items-center justify-center gap-1 px-3 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-[9px] font-black uppercase tracking-wider transition-all disabled:opacity-40 cursor-pointer"
+                                                        >
+                                                            {approvingItemId === item.id ? <Loader2 size={10} className="animate-spin" /> : <XCircle size={10} />}
+                                                            Reject Step
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            )}
                                         </div>
                                     )}
                                 </div>

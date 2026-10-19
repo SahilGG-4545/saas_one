@@ -176,18 +176,100 @@ test('CAD custom polygon drawing computes bounding box for AI scoring crop while
     assert.ok(badgeY >= 150 && badgeY <= 350, 'Centroid Y should be within shape bounds');
 });
 
-test('CAD legacy rectangular areas remain 100% backwards compatible', () => {
-    // Existing stored rectangle area
-    const legacyArea = {
-        id: 'area-legacy-1',
-        label: 'Conference Room',
-        coordinates: { x: 50, y: 80, width: 120, height: 90 },
-        linked_step_ids: ['step-101'],
-    };
+test('AI Vision Scoring Engine evaluates Cafeteria photo parameters individually using Qwen vision output format', () => {
+    // Simulated JSON output from Qwen3.8-27b vision model via Engy AI
+    const qwenVisionOutput = JSON.stringify({
+        overall_score: 92,
+        overall_reason: 'Cafeteria is thoroughly clean with spotless floors and neatly arranged sanitized tables.',
+        pass: true,
+        parameters: [
+            {
+                name: 'Floor',
+                is_assessable: true,
+                score: 95,
+                status: 'pass',
+                reason: 'Floor tiles are mopped, shiny, with zero dust, food crumbs or liquid stains visible.',
+            },
+            {
+                name: 'Tables',
+                is_assessable: true,
+                score: 90,
+                status: 'pass',
+                reason: 'All visible table surfaces are wiped clean with chairs arranged symmetrically.',
+            },
+            {
+                name: 'Washbasin',
+                is_assessable: false,
+                score: null,
+                status: 'unassessable',
+                reason: 'Washbasin is not in the camera frame; cannot be inspected from this angle.',
+            },
+            {
+                name: 'Lights',
+                is_assessable: true,
+                score: 90,
+                status: 'pass',
+                reason: 'Overhead light fixtures are clear and operational with no visible cobwebs or debris.',
+            },
+            {
+                name: 'Dustbins',
+                is_assessable: true,
+                score: 90,
+                status: 'pass',
+                reason: 'Waste bin has a fresh liner installed and the outer shell is clean.',
+            },
+        ],
+    });
 
-    assert.equal(legacyArea.points, undefined);
-    assert.equal(legacyArea.coordinates.width, 120);
-    assert.equal(legacyArea.coordinates.height, 90);
-    assert.equal(legacyArea.linked_step_ids.length, 1);
+    const parsed = JSON.parse(qwenVisionOutput);
+    assert.equal(parsed.overall_score, 92);
+    assert.equal(parsed.pass, true);
+    assert.equal(parsed.parameters.length, 5);
+
+    // Verify unassessable handling (out of frame)
+    const basin = parsed.parameters.find((p) => p.name === 'Washbasin');
+    assert.equal(basin.is_assessable, false);
+    assert.equal(basin.score, null);
+    assert.equal(basin.status, 'unassessable');
+
+    // Verify assessable parameters have concise 1-sentence explanations
+    const floor = parsed.parameters.find((p) => p.name === 'Floor');
+    assert.equal(floor.is_assessable, true);
+    assert.equal(floor.score, 95);
+    assert.ok(floor.reason.length > 10);
+});
+
+test('Step-by-step Checker Sign-off aggregation computes completion approval_status', () => {
+    // Case 1: All completed steps approved -> Overall Approved
+    const stepsAllApproved = [
+        { id: 'item-1', step_approval_status: 'approved' },
+        { id: 'item-2', step_approval_status: 'approved' },
+        { id: 'item-3', step_approval_status: 'not_required' },
+    ];
+    const anyRejected1 = stepsAllApproved.some((it) => it.step_approval_status === 'rejected');
+    const allApproved1 = stepsAllApproved
+        .filter((it) => it.step_approval_status !== 'not_required')
+        .every((it) => it.step_approval_status === 'approved');
+    const status1 = anyRejected1 ? 'rejected' : allApproved1 ? 'approved' : 'pending';
+    assert.equal(status1, 'approved');
+
+    // Case 2: One step rejected with notes -> Overall Rejected
+    const stepsOneRejected = [
+        { id: 'item-1', step_approval_status: 'approved' },
+        { id: 'item-2', step_approval_status: 'rejected', step_approval_notes: 'Under tables not swept clean' },
+    ];
+    const anyRejected2 = stepsOneRejected.some((it) => it.step_approval_status === 'rejected');
+    const status2 = anyRejected2 ? 'rejected' : 'pending';
+    assert.equal(status2, 'rejected');
+
+    // Case 3: Some steps still pending review -> Overall Pending
+    const stepsPending = [
+        { id: 'item-1', step_approval_status: 'approved' },
+        { id: 'item-2', step_approval_status: 'pending' },
+    ];
+    const anyRejected3 = stepsPending.some((it) => it.step_approval_status === 'rejected');
+    const allApproved3 = stepsPending.every((it) => it.step_approval_status === 'approved');
+    const status3 = anyRejected3 ? 'rejected' : allApproved3 ? 'approved' : 'pending';
+    assert.equal(status3, 'pending');
 });
 

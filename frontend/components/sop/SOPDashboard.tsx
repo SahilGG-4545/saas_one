@@ -4,13 +4,14 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '@/frontend/context/AuthContext';
 import Skeleton from '@/frontend/components/ui/Skeleton';
 import { Toast } from '@/frontend/components/ui/Toast';
-import { ClipboardCheck, LayoutGrid, History, FileBarChart } from 'lucide-react';
+import { ClipboardCheck, LayoutGrid, History, FileBarChart, Settings } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import SOPTemplateManager from './SOPTemplateManager';
 import SOPCompletionHistory from './SOPCompletionHistory';
 import SOPChecklistRunner from './SOPChecklistRunner';
 import SOPCompletionDetail from './SOPCompletionDetail';
 import SOPReportSection from './SOPReportSection';
+import { SOPChecklistSettingsSection } from './SOPChecklistSettingsSection';
 import { useDataCache } from '@/frontend/context/DataCacheContext';
 
 interface SOPDashboardProps {
@@ -23,7 +24,7 @@ interface SOPDashboardProps {
 const SOPDashboard: React.FC<SOPDashboardProps> = ({ propertyId, propertyIds, propertySelector, headerRight }) => {
     const isMultiProperty = !!propertyIds && propertyIds.length > 0;
     const { membership } = useAuth();
-    const [activeView, setActiveView] = useState<'list' | 'runner' | 'history' | 'detail' | 'reports'>('list');
+    const [activeView, setActiveView] = useState<'list' | 'runner' | 'history' | 'detail' | 'reports' | 'settings'>('list');
     const [returnView, setReturnView] = useState<'list' | 'history' | null>(null);
     const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
     const [selectedCompletionId, setSelectedCompletionId] = useState<string | null>(null);
@@ -179,6 +180,13 @@ const SOPDashboard: React.FC<SOPDashboardProps> = ({ propertyId, propertyIds, pr
                                     <FileBarChart size={12} />
                                     Reports
                                 </button>
+                                <button
+                                    onClick={() => setActiveView('settings')}
+                                    className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-[10px] font-black uppercase tracking-widest transition-all ${activeView === 'settings' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
+                                >
+                                    <Settings size={12} />
+                                    Settings
+                                </button>
                             </div>
                         )}
                         {headerRight && <div className="flex-shrink-0">{headerRight}</div>}
@@ -186,7 +194,7 @@ const SOPDashboard: React.FC<SOPDashboardProps> = ({ propertyId, propertyIds, pr
                 </div>
 
                 {/* Mobile View Toggle - Separate Row for accessibility */}
-                {isAdmin && (activeView === 'list' || activeView === 'history' || activeView === 'reports') && (
+                {isAdmin && (activeView === 'list' || activeView === 'history' || activeView === 'reports' || activeView === 'settings') && (
                     <div className="md:hidden px-3 pb-1">
                         <div className="flex bg-slate-100 p-0.5 rounded-xl border border-slate-200 w-full">
                             <button
@@ -209,6 +217,13 @@ const SOPDashboard: React.FC<SOPDashboardProps> = ({ propertyId, propertyIds, pr
                             >
                                 <FileBarChart size={12} />
                                 Reports
+                            </button>
+                            <button
+                                onClick={() => setActiveView('settings')}
+                                className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${activeView === 'settings' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'}`}
+                            >
+                                <Settings size={12} />
+                                Settings
                             </button>
                         </div>
                     </div>
@@ -257,6 +272,13 @@ const SOPDashboard: React.FC<SOPDashboardProps> = ({ propertyId, propertyIds, pr
                                 {activeView === 'reports' && isAdmin && (
                                     <SOPReportSection 
                                         propertyId={propertyId!}
+                                        isAdmin={isAdmin}
+                                    />
+                                )}
+
+                                {activeView === 'settings' && isAdmin && propertyId && (
+                                    <SOPChecklistSettingsSection 
+                                        propertyId={propertyId}
                                         isAdmin={isAdmin}
                                     />
                                 )}

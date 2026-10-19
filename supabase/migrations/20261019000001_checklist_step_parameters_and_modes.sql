@@ -12,9 +12,15 @@
 ALTER TABLE public.sop_checklist_items
   ADD COLUMN IF NOT EXISTS parameters JSONB DEFAULT '[]'::jsonb;
 
--- 2. Parameter Values on sop_completion_items
+-- 2. Parameter Values, AI Parameter Breakdown, and Step Approvals on sop_completion_items
 ALTER TABLE public.sop_completion_items
-  ADD COLUMN IF NOT EXISTS parameter_values JSONB DEFAULT '{}'::jsonb;
+  ADD COLUMN IF NOT EXISTS parameter_values JSONB DEFAULT '{}'::jsonb,
+  ADD COLUMN IF NOT EXISTS ai_parameter_scores JSONB DEFAULT '[]'::jsonb,
+  ADD COLUMN IF NOT EXISTS step_approval_status TEXT DEFAULT 'pending'
+    CHECK (step_approval_status IN ('pending', 'approved', 'rejected', 'not_required')),
+  ADD COLUMN IF NOT EXISTS step_approval_notes TEXT,
+  ADD COLUMN IF NOT EXISTS step_approved_by UUID REFERENCES public.users(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS step_approved_at TIMESTAMPTZ;
 
 -- 3. Property Checklist Mode
 ALTER TABLE public.properties

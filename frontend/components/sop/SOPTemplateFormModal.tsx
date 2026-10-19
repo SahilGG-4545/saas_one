@@ -72,9 +72,28 @@ const SOPTemplateFormModal: React.FC<SOPTemplateFormModalProps> = ({ isOpen, onC
     const [templateCADStatus, setTemplateCADStatus] = useState<{ hasCAD: boolean; imageUrl?: string } | null>(null);
     const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
     const [isDraftLoaded, setIsDraftLoaded] = useState(false);
-
+    const [propertyChecklistMode, setPropertyChecklistMode] = useState<'basic' | 'advanced'>('basic');
+    const isAIEnabled = propertyChecklistMode === 'advanced';
 
     const supabase = React.useMemo(() => createClient(), []);
+
+    useEffect(() => {
+        if (!isOpen || !propertyId) return;
+
+        const fetchSettings = async () => {
+            try {
+                const res = await fetch(`/api/properties/${propertyId}/checklist-settings`);
+                const data = await res.json();
+                if (res.ok && data.settings?.checklist_mode) {
+                    setPropertyChecklistMode(data.settings.checklist_mode);
+                }
+            } catch (err) {
+                console.error('Error fetching checklist settings for template:', err);
+            }
+        };
+
+        fetchSettings();
+    }, [isOpen, propertyId]);
 
     useEffect(() => {
         const fetchMembers = async () => {
@@ -787,29 +806,31 @@ const SOPTemplateFormModal: React.FC<SOPTemplateFormModalProps> = ({ isOpen, onC
                                         />
                                     </div>
 
-                                    {/* CAD Configuration */}
-                                    <div className="flex items-center justify-between px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl">
-                                        <div className="flex items-center gap-2.5">
-                                            <div className="w-8 h-8 rounded-xl bg-primary/10 flex items-center justify-center">
-                                                <MapPin size={14} className="text-primary" />
+                                    {/* CAD Configuration (Only in AI-Enabled mode) */}
+                                    {isAIEnabled && (
+                                        <div className="flex items-center justify-between px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl">
+                                            <div className="flex items-center gap-2.5">
+                                                <div className="w-8 h-8 rounded-xl bg-primary/10 flex items-center justify-center">
+                                                    <MapPin size={14} className="text-primary" />
+                                                </div>
+                                                <div>
+                                                    <p className="text-xs font-black text-slate-900">CAD Floor Plan</p>
+                                                    <p className="text-[9px] text-slate-400 font-medium">
+                                                        {templateCADStatus?.hasCAD ? 'Configured — click to edit areas' : 'Upload floor plan & map areas to steps'}
+                                                    </p>
+                                                </div>
                                             </div>
-                                            <div>
-                                                <p className="text-xs font-black text-slate-900">CAD Floor Plan</p>
-                                                <p className="text-[9px] text-slate-400 font-medium">
-                                                    {templateCADStatus?.hasCAD ? 'Configured — click to edit areas' : 'Upload floor plan & map areas to steps'}
-                                                </p>
-                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={handleOpenCAD}
+                                                disabled={isLoading}
+                                                className="px-3 py-1.5 bg-primary text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-primary/90 transition-all flex items-center gap-1"
+                                            >
+                                                {isLoading ? <Loader2 size={10} className="animate-spin" /> : null}
+                                                {templateCADStatus?.hasCAD ? 'Edit CAD' : 'Upload CAD'}
+                                            </button>
                                         </div>
-                                        <button
-                                            type="button"
-                                            onClick={handleOpenCAD}
-                                            disabled={isLoading}
-                                            className="px-3 py-1.5 bg-primary text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-primary/90 transition-all flex items-center gap-1"
-                                        >
-                                            {isLoading ? <Loader2 size={10} className="animate-spin" /> : null}
-                                            {templateCADStatus?.hasCAD ? 'Edit CAD' : 'Upload CAD'}
-                                        </button>
-                                    </div>
+                                    )}
 
                                     <div>
                                         <label className={labelCls}>Description</label>
@@ -1054,40 +1075,42 @@ const SOPTemplateFormModal: React.FC<SOPTemplateFormModalProps> = ({ isOpen, onC
                                                         )}
                                                     </div>
                                                     <div className="flex items-center gap-1 flex-shrink-0">
-                                                        {/* Reference photo upload & view button */}
-                                                        <>
-                                                            <input
-                                                                type="file"
-                                                                accept="image/*"
-                                                                className="hidden"
-                                                                id={`ref-photo-${idx}`}
-                                                                onChange={(e) => {
-                                                                    const file = e.target.files?.[0];
-                                                                    if (file) handleReferencePhotoUpload(idx, file);
-                                                                }}
-                                                            />
-                                                            <label
-                                                                htmlFor={`ref-photo-${idx}`}
-                                                                className={`p-2 rounded-xl transition-all cursor-pointer ${referencePhotoUploads[idx]?.uploading ? 'text-primary bg-primary/10' : item.reference_photo_url ? 'text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 bg-emerald-50/50' : 'text-slate-400 hover:text-primary hover:bg-primary/5 bg-white border border-slate-200'}`}
-                                                                title={item.reference_photo_url ? 'Change clean reference photo' : 'Upload clean reference photo'}
-                                                            >
-                                                                {referencePhotoUploads[idx]?.uploading ? (
-                                                                    <Loader2 size={14} className="animate-spin" />
-                                                                ) : (
-                                                                    <Camera size={14} />
-                                                                )}
-                                                            </label>
-                                                            {item.reference_photo_url && (
-                                                                <button
-                                                                    type="button"
-                                                                    onClick={() => handleRemoveReferencePhoto(idx)}
-                                                                    className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-xl transition-all"
-                                                                    title="Remove clean reference photo"
+                                                        {/* Reference photo upload & view button (AI mode only) */}
+                                                        {isAIEnabled && (
+                                                            <>
+                                                                <input
+                                                                    type="file"
+                                                                    accept="image/*"
+                                                                    className="hidden"
+                                                                    id={`ref-photo-${idx}`}
+                                                                    onChange={(e) => {
+                                                                        const file = e.target.files?.[0];
+                                                                        if (file) handleReferencePhotoUpload(idx, file);
+                                                                    }}
+                                                                />
+                                                                <label
+                                                                    htmlFor={`ref-photo-${idx}`}
+                                                                    className={`p-2 rounded-xl transition-all cursor-pointer ${referencePhotoUploads[idx]?.uploading ? 'text-primary bg-primary/10' : item.reference_photo_url ? 'text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 bg-emerald-50/50' : 'text-slate-400 hover:text-primary hover:bg-primary/5 bg-white border border-slate-200'}`}
+                                                                    title={item.reference_photo_url ? 'Change clean reference photo' : 'Upload clean reference photo'}
                                                                 >
-                                                                    <Trash2 size={14} />
-                                                                </button>
-                                                            )}
-                                                        </>
+                                                                    {referencePhotoUploads[idx]?.uploading ? (
+                                                                        <Loader2 size={14} className="animate-spin" />
+                                                                    ) : (
+                                                                        <Camera size={14} />
+                                                                    )}
+                                                                </label>
+                                                                {item.reference_photo_url && (
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => handleRemoveReferencePhoto(idx)}
+                                                                        className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-xl transition-all"
+                                                                        title="Remove clean reference photo"
+                                                                    >
+                                                                        <Trash2 size={14} />
+                                                                    </button>
+                                                                )}
+                                                            </>
+                                                        )}
                                                         <button
                                                             type="button"
                                                             onClick={() => {
