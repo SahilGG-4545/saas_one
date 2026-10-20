@@ -156,6 +156,19 @@ export interface LiveIO {
 export interface LiveClaim { handled: boolean; background?: () => Promise<void> }
 const NOT_HANDLED: LiveClaim = { handled: false };
 
+// Owner 2026-10-20: these always go to the old bot, before any AI call or in-flight merging. Greetings / menu words get the
+// menu (Create Ticket / Book Meeting Room, or 1. Tasks / 2. Facility), and ticket / room requests reach the facility assistant
+// directly. Smart chat used to answer "hi" with a task greeting and quietly merge "I want to raise a ticket" into that turn,
+// so people could never reach tickets or rooms. Anything that mentions a task stays with smart chat.
+const MENU_WORDS = /^(?:hi+|hello+|hey+|menu|help|options|good\s*(?:morning|afternoon|evening))[\s!.]*$/i;
+const FACILITY_REQUEST = /\b(?:raise|create|log|open|file|register|submit)\s+(?:(?:a|an|new|the)\s+){0,2}(?:ticket|complaint)s?\b|\b(?:book|reserve)\s+(?:(?:a|an|the)\s+)?(?:meeting\s+|conference\s+)?room\b|^(?:create ticket|book meeting room|new ticket)[\s!.]*$/i;
+export function isMenuOrFacilityMessage(text: string): boolean {
+    const t = text.trim();
+    return MENU_WORDS.test(t) || (FACILITY_REQUEST.test(t) && !/\btasks?\b/i.test(t));
+}
+// A ticket / room request that arrived while another reply was still being written: never drop it silently.
+const HANDOFF_IN_MERGE = 'For a ticket or meeting room, please send that as its own message (or send *menu*).';
+
 /** Optional, for callers that feed the brain text from elsewhere (a voice note). Absent = exactly the old behaviour. */
 export interface LiveOptions {
     /** Shown above every reply of this turn (e.g. 🎙️ I heard: "…"). Not remembered in the brain's short memory. */
@@ -184,6 +197,7 @@ export async function claimSmartChat(body: unknown, io?: LiveIO, opts: LiveOptio
     let cand: ReturnType<typeof extractCandidate>;
     try { cand = extractCandidate(body); } catch { return NOT_HANDLED; }
     if (!cand || cand.mediaClass !== 'text' || !cand.text.trim()) return NOT_HANDLED;
+    if (isMenuOrFacilityMessage(cand.text)) return NOT_HANDLED;          // menu, tickets, rooms → the old bot (see above)
 
     // Zero-delay in-flight merging: if this user already has an active turn running,
     // catch this follow-up message and append it to that turn instead of answering separately.
@@ -371,7 +385,9 @@ async function drainInFlight(
         } else {
             try {
                 const brainResult = await runBrain(nextMsg.text, ctx, { ...io.brain, policy: DEFAULT_CONFIRM_POLICY, skipReply: true });
-                if (brainResult.status === 'ok' && brainResult.decision && brainResult.interpretation) {
+                if (brainResult.status === 'ok' && brainResult.decision?.outcome === 'HANDOFF') {
+                    combinedReply = `${combinedReply}\n\n${HANDOFF_IN_MERGE}`;
+                } else if (brainResult.status === 'ok' && brainResult.decision && brainResult.interpretation) {
                     let execResult: ExecutionResult | null = null;
                     if (brainResult.decision.outcome === 'ACT' && needsExecution(brainResult.decision.action)) {
                         execResult = await executeAction(brainResult.decision.action, ctx, io.exec);
