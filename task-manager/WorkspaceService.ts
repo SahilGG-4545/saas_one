@@ -614,6 +614,51 @@ export class WorkspaceService {
         return { id: row.id as string, from: row.title as string, to: title };
     }
 
+    /**
+     * Owner 2026-10-20 (WhatsApp "add note to onboarding: documents pending"): adds a "Remark: …" line to a task's details.
+     * Allowed for the person who holds the task, the person who gave it, anyone above the holder, or a superuser. A note
+     * removes nothing, so "Protect given tasks" does not block it. The "Given by …" trail is kept as it is.
+     */
+    static async addNote(actorUserId: string, input: { taskId?: string; note?: string; via?: string }): Promise<{ id: string }> {
+        if (!input.taskId) throw new WorkspaceError(400, 'Missing task.');
+        const note = String(input.note ?? '').replace(/\s+/g, ' ').trim();
+        if (!note) throw new WorkspaceError(400, 'The note is empty.');
+        if (note.length > 300) throw new WorkspaceError(400, 'The note is too long (300 characters at most).');
+        const actor = await this.requireUnlockedActor(actorUserId);
+
+        const { data: row, error } = await supabaseAdmin.from('task_assignments').select('*').eq('id', input.taskId).maybeSingle();
+        if (error || !row) throw new WorkspaceError(404, 'Task not found.');
+        if (row.assigned_by !== actor.id) await PermissionService.assertCanCompleteTask(actor.id, row as TaskAssignment);
+
+        const before = String(row.description || '').trim();
+        const description = before ? `${before}\nRemark: ${note}` : `Remark: ${note}`;
+        if (description.length > 1000) throw new WorkspaceError(400, 'This task already has a lot of notes. Please edit it in the Tasks tab.');
+
+        const { error: upError } = await supabaseAdmin.from('task_assignments').update({ description, updated_at: new Date().toISOString() }).eq('id', row.id);
+        if (upError) {
+            console.error('[WorkspaceService] add note failed:', upError);
+            throw new WorkspaceError(500, 'Could not add the note just now. Please try again.');
+        }
+        await TaskDatabaseService.logAudit({
+            eventType: 'task_note_added',
+            actorId: actor.id,
+            targetEmployeeId: row.employee_id,
+            taskId: row.id,
+            details: { title: row.title, note, assignedDate: row.assigned_date, via: input.via ?? 'web_tasks_tab' },
+        });
+        return { id: row.id as string };
+    }
+
+    /** Owner 2026-10-20: open tasks this person gave other people in the last `days` days (for WhatsApp "add note to …"). */
+    static async openTasksGivenBy(giverId: string, days = 30): Promise<Array<{ id: string; title: string; employee_id: string; assigned_date: string }>> {
+        const since = addDays(todayIST(), -days);
+        const { data, error } = await supabaseAdmin.from('task_assignments').select('id, title, employee_id, assigned_by, assigned_date')
+            .eq('assigned_by', giverId).neq('employee_id', giverId).neq('status', 'completed').gte('assigned_date', since)
+            .order('assigned_date', { ascending: false }).limit(200);
+        if (error) { console.error('[WorkspaceService] could not read tasks given:', error); return []; }
+        return (data || []) as Array<{ id: string; title: string; employee_id: string; assigned_date: string }>;
+    }
+
     static async deleteTask(actorUserId: string, input: { taskId?: string; via?: string }): Promise<{ id: string }> {
         if (!input.taskId) throw new WorkspaceError(400, 'Missing task.');
         const actor = await this.requireUnlockedActor(actorUserId);

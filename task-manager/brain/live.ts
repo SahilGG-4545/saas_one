@@ -544,13 +544,15 @@ async function handle(t: Turn): Promise<void> {
         next.action = decision.action;
         // Owner 2026-10-19: for new tasks keep the person's OWN words (the whole list), so "remove 3" or "make it tomorrow"
         // re-reads every line, not just a one-line summary of them.
-        next.originalSummary = (decision.action.type === 'create_tasks' || decision.action.type === 'batch') && t.depth === 0
+        // Owner 2026-10-20: a note too, so "change the note to …" re-reads their exact words.
+        next.originalSummary = (decision.action.type === 'create_tasks' || decision.action.type === 'batch' || decision.action.type === 'add_note') && t.depth === 0
             ? draftRequest(t.state.pending, t.text) : (interp.summary || null);
         next.relay = t.relay; next.titles = t.relay ? t.titles : {};
     } else if (decision.outcome === 'CLARIFY' && decision.options.length && (decision.reason === 'several_people_match' || decision.reason === 'several_tasks_match')) {
         next.pending = { kind: 'pick', options: decision.options };
         next.pickOptions = decision.options;
-        next.originalSummary = interp.summary || null;
+        // Owner 2026-10-20: "which Onboarding?" for a note keeps the person's own words, so the note text survives the choice.
+        next.originalSummary = interp.intent === 'add_note' && t.depth === 0 ? draftRequest(t.state.pending, t.text) : (interp.summary || null);
         next.relay = t.relay; next.titles = t.relay ? t.titles : {};
     } else if (decision.outcome === 'CLARIFY' && DRAFT_REASONS.has(decision.reason) && t.depth === 0
         && (decision.reason !== 'unknown_intent' || t.state.pending?.kind === 'draft' || t.text.trim().split(/\s+/).length >= 3)) {
@@ -603,6 +605,7 @@ export async function defaultLiveIO(): Promise<LiveIO> {
         async handOver(actorId, taskId, toId) { const r = await WorkspaceService.handOver(actorId, { taskId, targetUserId: toId }); return { toName: r.toName }; },
         async deleteTask(actorId, taskId) { await WorkspaceService.deleteTask(actorId, { taskId, via: 'whatsapp' }); },
         async renameTask(actorId, taskId, title) { await WorkspaceService.renameTask(actorId, { taskId, title, via: 'whatsapp' }); },
+        async addNote(actorId, taskId, note) { await WorkspaceService.addNote(actorId, { taskId, note, via: 'whatsapp' }); },
         async readPerson(actorId, personId) {
             const [actor, target] = await Promise.all([TaskDatabaseService.getEmployeeById(actorId), TaskDatabaseService.getEmployeeById(personId)]);
             if (!actor || !target) return null;

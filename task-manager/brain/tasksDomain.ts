@@ -2,7 +2,7 @@ import { matchByName } from '../TaskGateway';
 import type { DomainHandler, ExecutionResult, IntentSpec, ReplyFacts } from './domain';
 import {
     Action, BrainContext, BrainPerson, BrainTask, CHANGE_CONFIDENCE_MIN, ClarifyReason, ConfirmPolicy, Decision, Intent,
-    Interpretation, MAX_TASKS_PER_MESSAGE, MAX_TITLE_LENGTH, ProgressState, READ_CONFIDENCE_MIN, Slots, TASK_INTENTS, ViewScope, Which,
+    Interpretation, MAX_NOTE_LENGTH, MAX_TASKS_PER_MESSAGE, MAX_TITLE_LENGTH, NoteTarget, ProgressState, READ_CONFIDENCE_MIN, Slots, TASK_INTENTS, ViewScope, Which,
 } from './types';
 import { addDays, clip, contentWords, dayLabel, headedList, isGrounded, isIsoDate, norm, sectionedList, similarity } from './text';
 import { TaskQuery, findQuerySchema, periodRange, validateQuery, wordsGrounded } from './findTasks';
@@ -27,7 +27,7 @@ const INTENT_SPECS: IntentSpec[] = [
     { name: 'progress_update', description: 'reports PROGRESS short of finishing, or a status on tasks they were sent: "working on it", "half done", "stuck waiting for the vendor", or "done"/"done all" in reply to someone\'s request.',
         slots: '{"state":"working"|"partly_done"|"blocked"|"done_all"|"done_some"|"other","which":{"all":boolean,"numbers":[int],"hints":[string]},"note":string|null}' },
     { name: 'create_tasks', description: 'wants to ADD one or more tasks, for themself ("remind me to…") or for someone else ("assign Lohit a task about…"). Split distinct jobs into separate tasks.',
-        slots: '{"assignee":"me"|<person name>|"?","assignees":[<person name>],"tasks":[{"title":string,"details":string|null,"assignees":[<person name>]}],"date":"YYYY-MM-DD"|null,"group":{"whose":"team"|"department"|"everyone","department":string|null,"except":[<person name>]}|null}  — titles are short (max 12 words) and use the person\'s own words; never invent work; date only if the message gives one. When the work is for a GROUP ("everyone", "my team", "all of Tech", "sabko", "everyone except Harsh"), fill "group" and set "assignee" to "group"; NEVER list the names yourself. SEVERAL NAMED PEOPLE for the same work ("assign Parab and Neeti to conduct induction", "Sanil aur Neeti dono ko"): put every name in "assignees" (each gets the task); this is clear, never an ambiguity. A LIST where each line names its own person ("1. meeting with vendors - neeti" then "2. review quotation - sanil"): one task per line, with that line\'s person in the task\'s own "assignees". A message that only NAMES a piece of work, does not say who it is for, and is not a question ("event feedback for navratri event"): intent create_tasks with "assignee":"?" (the system then asks whether to add it to their own list or assign it).' },
+        slots: '{"assignee":"me"|<person name>|"?","assignees":[<person name>],"tasks":[{"title":string,"details":string|null,"assignees":[<person name>]}],"date":"YYYY-MM-DD"|null,"group":{"whose":"team"|"department"|"everyone","department":string|null,"except":[<person name>]}|null}  — titles are short (max 12 words) and use the person\'s own words; never invent work; date only if the message gives one. When the work is for a GROUP ("everyone", "my team", "all of Tech", "sabko", "everyone except Harsh"), fill "group" and set "assignee" to "group"; NEVER list the names yourself. SEVERAL NAMED PEOPLE for the same work ("assign Parab and Neeti to conduct induction", "Sanil aur Neeti dono ko"): put every name in "assignees" (each gets the task); this is clear, never an ambiguity. A LIST where each line names its own person ("1. meeting with vendors - neeti" then "2. review quotation - sanil"): one task per line, with that line\'s person in the task\'s own "assignees". A message that only NAMES a piece of work, does not say who it is for, and is not a question ("event feedback for navratri event"): intent create_tasks with "assignee":"?" (the system then asks whether to add it to their own list or assign it). "details" is an EXTRA detail written for that task that is not the job itself: a name, a site, a time, a reminder ("Onboarding - Satish" → title "Onboarding", details "Satish"; "vendor meeting, note: call before 3pm" → details "call before 3pm"). Anything after "note:" or "remark:" is always details. A dash alone does NOT mean a detail: "Follow-up with vendor" and "Meeting - hampers vendor" stay whole titles with details null. When unsure, keep it all in the title and set details null.' },
     { name: 'hand_over_task', description: 'wants to GIVE one of their own existing tasks to a teammate ("give task 2 to Vidya", "pass the carpet one to Harsh").',
         slots: '{"which":{"all":false,"numbers":[int],"hints":[string]},"to":<person name>|null}' },
     { name: 'answer_pending', description: 'is ANSWERING a question the bot just asked (only possible when a question is pending): "yes", "no", "the second one", "make it tomorrow instead".',
@@ -36,6 +36,8 @@ const INTENT_SPECS: IntentSpec[] = [
         slots: `{"which":{"all":boolean,"numbers":[int],"hints":[string],"group":"carried"|"today"|"YYYY-MM-DD"|null}}  — "all": true only when they say ALL their tasks. ${GROUP_HELP}` },
     { name: 'rename_task', description: 'wants to RENAME / change the name of ONE of their own tasks ("rename task 2 to Vendor follow-up", "change the carpet task name to Carpet PO").',
         slots: '{"which":{"all":false,"numbers":[int],"hints":[string]},"new_title":string|null}  — new_title is the new name in their own words (max 12 words); null if they did not give one.' },
+    { name: 'add_note', description: 'wants to ADD A NOTE / remark to a task that ALREADY EXISTS: their own, or one they gave someone ("add note to onboarding: documents pending", "onboarding wale task mein note daal do ki documents pending hain", "add a note to Srushti\'s onboarding task: call Satish first"). A person named here only says WHOSE task it is: put that name in "person". It is NEVER a new task and NEVER a hand-over. Adding a NEW task with a note is "create_tasks" with "details".',
+        slots: '{"which":{"all":false,"numbers":[int],"hints":[string]},"person":<person name>|null,"note":string}  — numbers only for a number from their own numbered list; otherwise put words of the task name in "hints". "note" is the note in their own words (max 40 words), without the task name and without the person\'s name.' },
     { name: 'find_tasks', description: 'asks any OTHER question about tasks (read-only), using filters: past or future days ("yesterday", "last week", "this month"), finished tasks ("what did I finish yesterday?"), who gave them ("what did Saniel give me?", "what have I assigned to Lohit?"), words in them ("anything about AMC?"), overdue / open for N days, fixed daily tasks, counts ("how many did Vidya finish this week?") or grouped ("by person", "by department"). For the person\'s own list for today, their team today, a department or the company today, use "view_tasks". NEVER for a change.',
         slots: `${findQuerySchema(false)}  — fill only what the person said; leave the rest at the defaults (whose "me", period "any", status "any"). "finished/completed yesterday" → status "done", date_field "finished", period "yesterday". "words" are words from their message only.` },
     { name: 'help', description: 'asks what the bot can do or how to use it.', slots: '{}' },
@@ -43,7 +45,7 @@ const INTENT_SPECS: IntentSpec[] = [
     { name: 'unknown', description: 'anything else, or you cannot tell what is wanted.', slots: '{}' },
 ];
 
-const CHANGE_INTENTS: ReadonlySet<Intent> = new Set(['complete_tasks', 'progress_update', 'create_tasks', 'hand_over_task', 'delete_tasks', 'rename_task']);
+const CHANGE_INTENTS: ReadonlySet<Intent> = new Set(['complete_tasks', 'progress_update', 'create_tasks', 'hand_over_task', 'delete_tasks', 'rename_task', 'add_note']);
 const SCOPES: readonly ViewScope[] = ['self', 'person', 'department', 'org', 'pending_overview'];
 const STATES: readonly ProgressState[] = ['working', 'partly_done', 'blocked', 'done_all', 'done_some', 'other'];
 const SELF_WORDS = new Set(['me', 'myself', 'self', 'i', 'my self', 'my own']);
@@ -135,6 +137,8 @@ function validateSlots(intent: Intent, raw: Record<string, unknown>, ctx: BrainC
             return { intent, which: parseWhich(raw.which) };   // a whole group / "all" is allowed (always previewed, then YES)
         case 'rename_task':
             return { intent, which: { ...parseWhich(raw.which), all: false }, newTitle: str(raw.new_title, MAX_TITLE_LENGTH) };
+        case 'add_note':
+            return { intent, which: { ...parseWhich(raw.which), all: false }, person: str(raw.person, 60), note: str(raw.note, MAX_NOTE_LENGTH) };
         case 'find_tasks': {
             const query = validateQuery(raw);
             // "my team" only while the "Team reports" switch is ON (tasksDomainWithTeam allows it).
@@ -162,6 +166,8 @@ function checkGrounding(slots: Slots, message: string): boolean {
         return named && slots.tasks.every(t => isGrounded(t.title, message) && (!t.details || isGrounded(t.details, message)));
     }
     if (slots.intent === 'find_tasks') return wordsGrounded(slots.query, message);
+    // Owner 2026-10-20: a note is saved on a task, so it must be the person's own words; a named person must be named by them.
+    if (slots.intent === 'add_note') return (!slots.note || isGrounded(slots.note, message)) && (!slots.person || SELF_WORDS.has(norm(slots.person)) || isGrounded(norm(slots.person).split(' ')[0], message));
     if (slots.intent === 'rename_task' && slots.newTitle) return isGrounded(slots.newTitle, message);   // the new name is theirs, never invented   // a search word must be in the message
     return true;
 }
@@ -201,10 +207,10 @@ type TaskResolution =
 
 const clarify = (reason: ClarifyReason, options: string[] = [], detail: string | null = null): Decision => ({ outcome: 'CLARIFY', reason, options, detail });
 
-function hintCandidates(hint: string, tasks: BrainTask[]): BrainTask[] {
+function hintCandidates<T extends { title: string }>(hint: string, tasks: T[]): T[] {
     const words = contentWords(hint);
     if (!words.length) return [];
-    const score = (t: BrainTask) => {
+    const score = (t: T) => {
         const tw = contentWords(t.title);
         return words.filter(w => tw.some(x => x === w || (w.length > 3 && x.length > 3 && similarity(w, x) >= 0.8))).length;
     };
@@ -442,6 +448,8 @@ function decideOne(interp: Interpretation, ctx: BrainContext, policy: ConfirmPol
             return { outcome: 'CONFIRM', action: { type: 'rename_task', taskId: r.tasks[0].id, title: slots.newTitle } };
         }
 
+        case 'add_note': return decideNote(slots, ctx);
+
         case 'answer_pending': {
             const p = ctx.pending;
             if (!p || p.kind === 'ping_reply') return clarify(p ? 'unsure_answer' : 'nothing_pending');
@@ -502,6 +510,60 @@ function decideCreate(slots: Extract<Slots, { intent: 'create_tasks' }>, ctx: Br
     const unclear = refused.map(n => `you can't assign tasks to ${n}`);
     if (actions.length === 1 && !unclear.length) return { outcome: 'CONFIRM', action: actions[0] };
     return { outcome: 'CONFIRM', action: { type: 'batch', actions, unclear } };
+}
+
+/**
+ * Owner 2026-10-20: a note on a task that already exists. Only the sender's OWN tasks and open tasks they GAVE someone
+ * (ctx.noteTargets) can be picked. A person's name only narrows WHOSE task it is: "add note to Srushti's onboarding" looks
+ * at Onboarding tasks given to Srushti; without a name, all of them. Never guesses between several (asks, showing whose).
+ * The server checks the permission again when the note is saved (WorkspaceService.addNote).
+ */
+interface NoteCandidate { id: string; title: string; ownerId: string; ownerName: string | null; date: string | null; open: boolean }
+const MAX_NOTE_OPTIONS = 10;
+const noteLabel = (c: NoteCandidate) => (c.ownerName ? `${c.title} (${c.ownerName}${c.date ? `, ${fromLabel(c.date)}` : ''})` : `${c.title} (yours)`);
+
+function decideNote(slots: Extract<Slots, { intent: 'add_note' }>, ctx: BrainContext): Decision {
+    if (!slots.note) return clarify('no_task_content', [], 'note');
+    const toAction = (c: NoteCandidate): Decision => ({ outcome: 'CONFIRM', action: { type: 'add_note', taskId: c.id, note: slots.note!, title: c.title, ownerName: c.ownerName } });
+    const own: NoteCandidate[] = ctx.tasks.map(t => ({ id: t.id, title: t.title, ownerId: ctx.sender.id, ownerName: null, date: t.from ?? null, open: t.status !== 'completed' }));
+    const given: NoteCandidate[] = (ctx.noteTargets ?? []).filter((t: NoteTarget) => t.ownerId !== ctx.sender.id)
+        .map(t => ({ id: t.id, title: t.title, ownerId: t.ownerId, ownerName: t.ownerName, date: t.date, open: true }));
+
+    // A number always means their own numbered list ("add note to task 2: …").
+    if (slots.which.numbers.length) {
+        const r = resolveOwnAny(slots.which, ctx, true);
+        if (!r.ok) return r.decision;
+        return toAction(own.find(c => c.id === r.tasks[0].id)!);
+    }
+
+    let pool = [...own, ...given];
+    if (slots.person) {
+        const key = norm(slots.person);
+        if (SELF_WORDS.has(key) || resolvePerson(slots.person, [ctx.sender]).length) pool = own;
+        else {
+            const owners = new Map<string, BrainPerson>(ctx.people.map(p => [p.id, p]));
+            for (const g of given) if (!owners.has(g.ownerId)) owners.set(g.ownerId, { id: g.ownerId, name: g.ownerName!, department: null, role: 'employee' });
+            const found = resolvePerson(slots.person, [...owners.values()].filter(p => p.id !== ctx.sender.id));
+            if (found.length > 1) return clarify('several_people_match', found.map(labelOf), slots.person);
+            if (!found.length) return clarify('person_not_found', [], slots.person);
+            pool = given.filter(c => c.ownerId === found[0].id);
+            if (!pool.length) return clarify('no_task_referenced', [...own, ...given].slice(0, MAX_NOTE_OPTIONS).map(noteLabel), `no open task you gave ${found[0].name}`);
+        }
+    }
+    if (!pool.length) return clarify('no_task_referenced');
+
+    const hint = slots.which.hints.join(' ');
+    if (!hint) {
+        const open = pool.filter(c => c.open);
+        if (open.length === 1) return toAction(open[0]);
+        return clarify('no_task_referenced', (open.length ? open : pool).slice(0, MAX_NOTE_OPTIONS).map(noteLabel));
+    }
+    const cands = hintCandidates(hint, pool);
+    const openCands = cands.filter(c => c.open);
+    const best = openCands.length ? openCands : cands;
+    if (best.length === 1) return toAction(best[0]);
+    if (!best.length) return clarify('no_task_referenced', pool.slice(0, MAX_NOTE_OPTIONS).map(noteLabel), hint);
+    return clarify('several_tasks_match', best.slice(0, MAX_NOTE_OPTIONS).map(noteLabel), hint);
 }
 
 /** Most people one group message may give work to (more → ask to narrow it down). */
@@ -628,6 +690,7 @@ const CAPABILITIES = [
     '• Mark things done ("finished the carpet one")',
     '• Add tasks for yourself or a teammate ("assign Vidya a task to chase the vendor")',
     '• Hand one of your tasks to a teammate',
+    '• Add a note to a task ("add note to onboarding: documents pending")',
 ].join('\n');
 
 const STATE_PHRASE: Record<ProgressState, string> = {
@@ -669,7 +732,8 @@ function clarifyFacts(d: Extract<Decision, { outcome: 'CLARIFY' }>, ctx: BrainCo
         case 'department_not_found': return withOptions('No such department was found. Ask which department they mean, showing the known ones.', 'Which department do you mean?');
         case 'person_not_found': return { ...base, describe: `No one called "${d.detail}" could be found among the people the person can work with. Say so and ask who they meant.`, values: { person: d.detail || '' }, required: [], fallback: `I couldn't find anyone called ${d.detail}. Who did you mean?` };
         case 'no_recipient': return { ...base, describe: d.detail ? 'The person named a group, but work can only be given to one named person at a time. Ask who exactly it is for.' : 'The person did not say who it is for. Ask who it is for.', values: {}, required: [], fallback: 'Who is this for?' };
-        case 'no_task_content': return d.detail === 'new name' || d.detail === 'same name'
+        case 'no_task_content': if (d.detail === 'note') return { ...base, describe: 'The person wants to add a note to a task but did not say what the note is. Ask what the note should say.', values: {}, required: [], fallback: 'What should the note say?' };
+            return d.detail === 'new name' || d.detail === 'same name'
             ? { ...base, describe: d.detail === 'same name' ? 'The task already has that name. Say so and ask what the new name should be.' : 'The person wants to rename a task but did not give the new name. Ask what it should be.', values: {}, required: [], fallback: d.detail === 'same name' ? 'That task already has that name. What should the new name be?' : 'What should the new name be?' }
             : { ...base, describe: 'The person wants to add a task but did not say what it is. Ask what the task should be.', values: {}, required: [], fallback: 'What should the task be?' };
         case 'add_or_assign': return { ...base, describe: `The person named a piece of work ([[work]]) but did not say who it is for. Ask ONE short question: should it go on their own list, or be assigned to someone (and who)?`,
@@ -684,6 +748,9 @@ function clarifyFacts(d: Extract<Decision, { outcome: 'CLARIFY' }>, ctx: BrainCo
     }
 }
 
+/** Owner 2026-10-20: a new task with a note reads "Onboarding (note: Satish)" in every preview. */
+const withNote = (t: { title: string; details: string | null }) => (t.details ? `${t.title} (note: ${t.details})` : t.title);
+
 /** One line of a combined preview, written by code from verified data. */
 function batchLine(a: Action, ctx: BrainContext): string {
     const titleOf = (id: string) => ctx.tasks.find(t => t.id === id)?.title ?? 'that task';
@@ -691,10 +758,11 @@ function batchLine(a: Action, ctx: BrainContext): string {
     switch (a.type) {
         case 'complete_tasks': return `Mark done: ${a.taskIds.map(titleOf).join(', ')}`;
         case 'progress_update': return a.state === 'done_all' || a.state === 'done_some' ? `Mark done: ${a.taskIds.map(titleOf).join(', ')}` : `Note ${STATE_PHRASE[a.state].replace(/^you are |^you have /, '')}: ${a.taskIds.map(titleOf).join(', ')}`;
-        case 'create_tasks': return `Add for ${who(a.assigneeId)}${a.date !== ctx.today ? ` (${dayLabel(a.date)})` : ''}: ${a.tasks.map(t => t.title).join(', ')}`;
+        case 'create_tasks': return `Add for ${who(a.assigneeId)}${a.date !== ctx.today ? ` (${dayLabel(a.date)})` : ''}: ${a.tasks.map(withNote).join(', ')}`;
         case 'hand_over_task': return `Give "${titleOf(a.taskId)}" to ${who(a.toId)}`;
         case 'delete_tasks': return `Delete: ${a.taskIds.map(titleOf).join(', ')}`;
         case 'rename_task': return `Rename "${titleOf(a.taskId)}" to "${a.title}"`;
+        case 'add_note': return `Add note to "${a.title}"${a.ownerName ? ` (${a.ownerName})` : ''}: ${a.note}`;
         default: return 'One more change';
     }
 }
@@ -735,7 +803,7 @@ function replyFacts(decision: Decision, ctx: BrainContext, result?: ExecutionRes
         const onlyCreates = a.actions.every(x => x.type === 'create_tasks');
         const who = (id: string) => (id === sender.id ? 'You' : ctx.people.find(p => p.id === id)?.name ?? 'them');
         const items = onlyCreates
-            ? a.actions.flatMap(x => x.type === 'create_tasks' ? x.tasks.map(t => `${t.title} → ${who(x.assigneeId)}${x.date !== ctx.today ? ` (${dayLabel(x.date)})` : ''}`) : [])
+            ? a.actions.flatMap(x => x.type === 'create_tasks' ? x.tasks.map(t => `${withNote(t)} → ${who(x.assigneeId)}${x.date !== ctx.today ? ` (${dayLabel(x.date)})` : ''}`) : [])
                 .map((line, i) => `${i + 1}. ${line}`).join('\n')
             : bullets(a.actions.map(x => batchLine(x, ctx)));
         const unclear = a.unclear.length ? a.unclear.join('; ') : '';
@@ -762,7 +830,7 @@ function replyFacts(decision: Decision, ctx: BrainContext, result?: ExecutionRes
     if (confirming && a.type === 'create_tasks') {
         const who = personName(a.assigneeId);
         const self = a.assigneeId === sender.id;
-        const lines = a.tasks.map(t => t.details ? `${t.title} — ${t.details}` : t.title);
+        const lines = a.tasks.map(withNote);
         const dateNote = a.date !== ctx.today ? ` for ${dayLabel(a.date)}` : '';
         return { kind: 'confirm_create', describe: `Ask the person to confirm adding ${a.tasks.length === 1 ? 'this task' : `these ${a.tasks.length} tasks`} to ${self ? 'their own list' : `${who}'s list`}${dateNote}. Nothing has been added yet.`,
             values: { assignee: who, tasks: bullets(lines), count: String(a.tasks.length), ...(dateNote ? { date: dayLabel(a.date) } : {}) },
@@ -780,6 +848,12 @@ function replyFacts(decision: Decision, ctx: BrainContext, result?: ExecutionRes
         return { kind: 'confirm_rename', describe: 'Ask the person to confirm renaming the task. Nothing has changed yet.',
             values: { from, to: a.title }, required: ['from', 'to'], asksQuestion: true, claimsNothingDone: true, names: [sender.name],
             fallback: `Rename "${from}" to "${a.title}"?` };
+    }
+    if (confirming && a.type === 'add_note') {
+        const whose = a.ownerName ? ` (${a.ownerName}'s task)` : '';
+        return { kind: 'confirm_note', describe: `Ask the person to confirm adding the note to the task${a.ownerName ? ` of ${a.ownerName}` : ''}. Nothing has changed yet.`,
+            values: { task: a.title, note: a.note }, required: ['task', 'note'], asksQuestion: true, claimsNothingDone: true, names: [sender.name, ...(a.ownerName ? [a.ownerName] : [])],
+            fallback: `Add this note to "${a.title}"${whose}?\nNote: ${a.note}` };
     }
     if (confirming && a.type === 'hand_over_task') {
         const title = titleOf(a.taskId); const to = personName(a.toId);

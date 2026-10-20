@@ -2,8 +2,8 @@
 
 import { AnimatePresence, motion, useAnimationControls, useReducedMotion } from 'framer-motion';
 import { X } from 'lucide-react';
-import { useParams } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useParams, usePathname } from 'next/navigation';
+import { useEffect, useState, type CSSProperties } from 'react';
 
 import { useAuth } from '@/frontend/context/AuthContext';
 import { isBdSuperAdmin } from '@/frontend/constants/bdSuperAdmins';
@@ -88,14 +88,34 @@ function ThoughtCloud() {
     );
 }
 
+// Public, sign-in and marketing pages never show the bot (prefix match, like proxy.ts).
+const HIDDEN_PATH_PREFIXES = [
+    '/login', '/signup', '/forgot-password', '/reset-password', '/join', '/q', '/a/', '/kiosk',
+    '/onboard', '/onboarding', '/landing', '/landing_animation', '/privacy', '/privacy-policy',
+    '/terms', '/data-deletion', '/waiting-approval', '/cc-preview', '/design-lab', '/loader-test',
+    '/test-loader', '/simple-test',
+];
+
+function isHiddenPath(pathname: string | null): boolean {
+    if (!pathname || pathname === '/') return true;
+    return HIDDEN_PATH_PREFIXES.some(prefix =>
+        prefix.endsWith('/') ? pathname.startsWith(prefix) : pathname === prefix || pathname.startsWith(`${prefix}/`),
+    );
+}
+
 /**
- * Floating HR policy assistant, bottom-right on every dashboard page. Self-gates:
- * renders nothing until the server confirms the user is an employee or staff member.
+ * Floating HR policy assistant, bottom-right on every signed-in page (mounted once in the root
+ * layout). Self-gates: renders nothing on public pages, or until the server confirms the user
+ * is an employee or staff member.
  */
 export default function HrAssistantBot() {
     const { user, membership } = useAuth();
     const params = useParams();
-    const orgId = params?.orgId as string | undefined;
+    const pathname = usePathname();
+    // /procurement, /property/... and /org/... have no [orgId] segment, so fall back to the
+    // user's own organisation for the HR documents link.
+    const orgId =
+        (params?.orgId as string | undefined) ?? membership?.org_id ?? membership?.properties?.[0]?.organization_id ?? undefined;
     const [access, setAccess] = useState<HrAccess | null>(null);
     // Reopen only for the same user who left it open.
     const [open, setOpenState] = useState(() => wasOpen && openFor === user?.id);
@@ -104,7 +124,7 @@ export default function HrAssistantBot() {
     const pending = useHrChatPending();
     const reduceMotion = useReducedMotion();
     const squash = useAnimationControls();
-    const canUse = Boolean(user && access?.canUse);
+    const canUse = Boolean(user && access?.canUse && !isHiddenPath(pathname));
 
     const setOpen = (next: boolean) => {
         wasOpen = next;
@@ -170,11 +190,19 @@ export default function HrAssistantBot() {
         return () => window.removeEventListener('keydown', onKeyDown);
     }, [open]);
 
-    if (!user || !access?.canUse) return null;
+    if (!user || !access || !canUse) return null;
 
     // BD Super Admins have the CRM ⇄ FMS pill at bottom-5 right-5; sit just above it.
     const raised = isBdSuperAdmin(user.email, membership?.org_role);
     const documentsHref = access.isAdmin && orgId ? `/${orgId}/hr-assistant/documents` : null;
+    // Sized from the viewport: ~a quarter of the width and ~70% of the height, clamped, and never
+    // taller than the space above the launcher (1rem gap at the top), so it always fits on screen.
+    const windowBottom = raised ? '10rem' : '6rem';
+    const windowSize = {
+        transformOrigin: 'bottom right',
+        '--hr-win-w': 'min(420px, max(320px, 25vw), calc(100vw - 2.5rem))',
+        '--hr-win-h': `min(640px, max(380px, 70vh), calc(100dvh - ${windowBottom} - 1rem))`,
+    } as CSSProperties;
     const showGreeting = greeting && !open && !pending;
     const showTooltip = hovered && !open && !showGreeting && !pending;
     const mood: BotMood = pending ? 'thinking' : hovered || showGreeting ? 'happy' : 'idle';
@@ -191,8 +219,8 @@ export default function HrAssistantBot() {
                         animate={{ opacity: 1, y: 0, scale: 1 }}
                         exit={{ opacity: 0, y: 24, scale: 0.95 }}
                         transition={{ type: 'spring', stiffness: 320, damping: 28 }}
-                        style={{ transformOrigin: 'bottom right' }}
-                        className={`fixed inset-0 z-[65] overflow-hidden bg-surface shadow-2xl sm:inset-auto sm:right-5 sm:h-[560px] sm:max-h-[calc(100dvh-8rem)] sm:w-[380px] sm:rounded-3xl sm:border sm:border-border ${
+                        style={windowSize}
+                        className={`fixed inset-0 z-[65] overflow-hidden bg-surface shadow-2xl sm:inset-auto sm:right-5 sm:h-[var(--hr-win-h)] sm:w-[var(--hr-win-w)] sm:rounded-2xl sm:border sm:border-border ${
                             raised ? 'sm:bottom-40' : 'sm:bottom-24'
                         }`}
                     >

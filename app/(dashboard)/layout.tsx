@@ -9,7 +9,6 @@ import DashboardSidebar, { MobileHeader } from "@/frontend/components/layout/Das
 import Loader from "@/frontend/components/ui/Loader";
 import PettyCashShell from '@/frontend/components/layout/PettyCashShell';
 import ModuleSwitch from "@/frontend/components/layout/ModuleSwitch";
-import HrAssistantBot from "@/frontend/components/hr-assistant/HrAssistantBot";
 import { isBdSuperAdmin } from "@/frontend/constants/bdSuperAdmins";
 import CrmBackground, { useWallpaper, crmThemeVars, useIsDark } from "@/frontend/components/ui/CrmBackground";
 
@@ -95,12 +94,12 @@ export default function DashboardLayout({
     if (isFullDashboard || isPettyCashWorkspace) {
         // FMS dashboard renders its own chrome (no shared sidebar) — still surface
         // the CRM⇄FMS switch for BD Super Admins.
-        return <><PettyCashShell>{isPettyCashWorkspace ? children : undefined}</PettyCashShell><ModuleSwitch /><HrAssistantBot /></>;
+        return <><PettyCashShell>{isPettyCashWorkspace ? children : undefined}</PettyCashShell><ModuleSwitch /></>;
     }
 
     if (isAccountsWorkspace) {
         // Accounts workspace provides its own sidebar; render it bare.
-        return <>{children}<HrAssistantBot /></>;
+        return <>{children}</>;
     }
 
     // BD Super Admin's CEO dashboard (/{orgId}/crm) renders its own rich top bar
@@ -157,9 +156,6 @@ export default function DashboardLayout({
 
             {/* CRM ⇄ FMS switch (BD Super Admins only; self-gates) */}
             <ModuleSwitch />
-
-            {/* Floating HR policy assistant (employees and staff; self-gates) */}
-            <HrAssistantBot />
         </div>
     );
 }

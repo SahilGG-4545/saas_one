@@ -15,6 +15,7 @@ export const TASK_INTENTS = [
     'answer_pending',    // "yes", "no", "the second one", "make it tomorrow" — answers to a question the bot asked
     'delete_tasks',      // "delete task 2", "remove the carpet one" — always previewed, then YES (owner request 2026-10-13)
     'rename_task',       // "rename task 2 to Vendor follow-up" — always previewed, then YES (owner request 2026-10-13)
+    'add_note',          // "add note to onboarding: documents pending" — own task or one they gave; previewed, then YES (owner 2026-10-20)
     'find_tasks',        // any other QUESTION about tasks: "what did I finish yesterday", "anything about AMC", "how many did Lohit finish this week" (read-only)
     'help',
     'smalltalk',
@@ -55,6 +56,8 @@ export type Slots =
     | { intent: 'find_tasks'; query: import('./findTasks').TaskQuery }
     | { intent: 'delete_tasks'; which: Which }
     | { intent: 'rename_task'; which: Which; newTitle: string | null }
+    /** Owner 2026-10-20: a note on an EXISTING task. `person` only says whose task it is (a filter, never a new task). */
+    | { intent: 'add_note'; which: Which; person: string | null; note: string | null }
     | { intent: 'help' | 'smalltalk' | 'unknown' };
 
 export interface Interpretation {
@@ -94,6 +97,9 @@ export interface BrainPerson { id: string; name: string; department: string | nu
 /** `n` is the number from the person's numbered list (same as in their messages); `from` = the day an older open task was given. */
 export interface BrainTask { n: number; id: string; title: string; status: 'pending' | 'in_progress' | 'completed'; from?: string }
 
+/** Owner 2026-10-20: an open task the sender GAVE someone else (they may add a note to it). Not numbered: found by its name. */
+export interface NoteTarget { id: string; title: string; ownerId: string; ownerName: string; date: string }
+
 export interface BrainContext {
     today: string;                     // YYYY-MM-DD
     sender: BrainPerson;
@@ -110,6 +116,8 @@ export interface BrainContext {
     /** Conversation memory (Phase 2): the real last messages of the chat, oldest first ("Person: …" / "Assistant: …").
      *  Only present while WHATSAPP_MEMORY_ENABLED is on; absent → the prompt is exactly as before. */
     conversation?: string[];
+    /** Owner 2026-10-20: open tasks the sender gave other people (for "add note to …"). Absent → only their own tasks. */
+    noteTargets?: NoteTarget[];
 }
 
 export type Action =
@@ -126,6 +134,8 @@ export type Action =
     | { type: 'delete_tasks'; taskIds: string[] }
     /** Rename one task on the person's own list. */
     | { type: 'rename_task'; taskId: string; title: string }
+    /** Add a note line ("Remark: …") to one task: their own, or one they gave (`ownerName` = whose task, null = their own). */
+    | { type: 'add_note'; taskId: string; note: string; title: string; ownerName: string | null }
     /** Several changes from ONE message, shown in one preview and carried out after one YES. `unclear` = parts not understood. */
     | { type: 'batch'; actions: Action[]; unclear: string[] };
 
@@ -172,3 +182,5 @@ export const DRAFT_TTL_MIN = 30;
 /** Extra requests read from one message on top of the first ("done 1 and add …"): at most this many. */
 export const MAX_EXTRA_REQUESTS = 4;
 export const MAX_TITLE_LENGTH = 200;
+/** Owner 2026-10-20: longest note ("Remark: …") the bot adds to a task. */
+export const MAX_NOTE_LENGTH = 300;
