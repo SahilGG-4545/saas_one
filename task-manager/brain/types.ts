@@ -16,6 +16,7 @@ export const TASK_INTENTS = [
     'delete_tasks',      // "delete task 2", "remove the carpet one" — always previewed, then YES (owner request 2026-10-13)
     'rename_task',       // "rename task 2 to Vendor follow-up" — always previewed, then YES (owner request 2026-10-13)
     'add_note',          // "add note to onboarding: documents pending" — own task or one they gave; previewed, then YES (owner 2026-10-20)
+    'remind_tasks',      // "remind srushti about onboarding" — tasks they GAVE that are still open; previewed, then YES (owner 2026-10-20)
     'find_tasks',        // any other QUESTION about tasks: "what did I finish yesterday", "anything about AMC", "how many did Lohit finish this week" (read-only)
     'help',
     'smalltalk',
@@ -58,6 +59,8 @@ export type Slots =
     | { intent: 'rename_task'; which: Which; newTitle: string | null }
     /** Owner 2026-10-20: a note on an EXISTING task. `person` only says whose task it is (a filter, never a new task). */
     | { intent: 'add_note'; which: Which; person: string | null; note: string | null }
+    /** Owner 2026-10-20: remind the people doing tasks the sender GAVE. `person` narrows whose; `overdueOnly` = only overdue ones. */
+    | { intent: 'remind_tasks'; which: Which; person: string | null; overdueOnly: boolean }
     | { intent: 'help' | 'smalltalk' | 'unknown' };
 
 export interface Interpretation {
@@ -136,6 +139,8 @@ export type Action =
     | { type: 'rename_task'; taskId: string; title: string }
     /** Add a note line ("Remark: …") to one task: their own, or one they gave (`ownerName` = whose task, null = their own). */
     | { type: 'add_note'; taskId: string; note: string; title: string; ownerName: string | null }
+    /** Remind the people doing these tasks (tasks the sender gave). `lines` = "Onboarding (Srushti, 19 Oct)" for the preview. */
+    | { type: 'remind_tasks'; taskIds: string[]; lines: string[] }
     /** Several changes from ONE message, shown in one preview and carried out after one YES. `unclear` = parts not understood. */
     | { type: 'batch'; actions: Action[]; unclear: string[] };
 
@@ -147,7 +152,7 @@ export type ClarifyReason =
     /** Owner 2026-10-19: they named a piece of work but not who it is for: add to their own list, or assign it? */
     | 'add_or_assign';
 
-export type RefuseReason = 'not_allowed_to_assign' | 'task_already_done' | 'not_allowed_to_view' | 'cannot_hand_over_to_self' | 'nothing_to_do' | 'nothing_in_group';
+export type RefuseReason = 'not_allowed_to_assign' | 'task_already_done' | 'not_allowed_to_view' | 'cannot_hand_over_to_self' | 'nothing_to_do' | 'nothing_in_group' | 'nothing_to_remind';
 
 export type Decision =
     | { outcome: 'ACT'; action: Action }

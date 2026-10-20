@@ -7,7 +7,7 @@ import { notifyGiversOfCompletion } from '@/task-manager/completionNotice';
 import { TaskAccessService } from '@/task-manager/TaskAccessService';
 import { requireActor } from '../_shared/adminGuard';
 import { TaskAssignment } from '@/task-manager/types';
-import { CARRY_LOOKBACK_DAYS, carryDaysOf } from '@/task-manager/TaskDatabaseService';
+import { MAX_CARRY_DAYS, carryDaysOf } from '@/task-manager/TaskDatabaseService';
 import { addDaysIso, parseRange } from '@/task-manager/dateRange';
 
 export const dynamic = 'force-dynamic';
@@ -91,9 +91,9 @@ export async function GET(request: NextRequest) {
         }
 
         // Owner 2026-10-15: unfinished tasks from BEFORE the range are shown too ("carry forward"), as far back as each
-        // person's department setting allows (Notifications tab, 1–7 days, or off). Never for the "Done" filter.
+        // person's department setting allows (Notifications tab, 1–30 days, or off). Never for the "Done" filter.
         const carryQuery = status === 'completed' ? null
-            : scoped(supabaseAdmin.from('task_assignments').select(select).gte('assigned_date', addDaysIso(from, -CARRY_LOOKBACK_DAYS)).lt('assigned_date', from).neq('status', 'completed'))
+            : scoped(supabaseAdmin.from('task_assignments').select(select).gte('assigned_date', addDaysIso(from, -MAX_CARRY_DAYS)).lt('assigned_date', from).neq('status', 'completed'))
                 .order('assigned_date', { ascending: true }).limit(300);
 
         const [{ data: rawTasks, error: taskErr }, carried] = await Promise.all([taskQuery.limit(500), carryQuery ?? Promise.resolve({ data: [], error: null })]);
@@ -198,6 +198,9 @@ export async function POST(request: NextRequest) {
 
             // Send instant WhatsApp notification to the assigned employee (non-blocking)
             // Same approved template as the Tasks tab (task_assigned_v1), so it also reaches people outside the 24-hour window.
+            if (target.id !== actor.id) {
+                void import('@/task-manager/taskBell').then(({ taskBell }) => taskBell({ userId: target.id, kind: 'TASK_ASSIGNED', title: `New task from ${actor.name}`, message: `${actor.name} gave you: ${newTask.title}`, departmentName: target.department_name }));
+            }
             void sendTaskAssigned(target.phone_number, {
                 titles: [newTask.title], fromLabel: personLabel(actor.name, actor.department_name),
                 date: newTask.assigned_date || new Date().toISOString().slice(0, 10), departmentId: target.department_id || undefined,

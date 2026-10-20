@@ -158,6 +158,37 @@ note, missing note). Existing brain tests pass. Live model: **not yet measured**
 **10. Laws knowingly violated, and why:** **L2**: tested offline with a scripted model only; how well the live model
 separates a note from a title (the "-" case) must be checked on real HR messages before wider roll-out.
 
+### Changes 2026-10-20 (b): notes only when marked, lists split, resend is not a yes, "remind …"
+
+**1. Workflow or agent?** `[BAA p.115]` Still a **workflow**. One new intent, `remind_tasks`, decided by plain code.
+
+**2. Context** `[BAA p.112]` Reuses `noteTargets` (open tasks the sender gave, last 30 days) to find what to remind about.
+
+**3. Cost of a false positive** `[BAA p.112]` **medium** (a reminder reaches people). Always previewed, sent only after
+a yes; several people's tasks fit one name → asks which; no name, no task and no "overdue" → asks, never reminds everyone.
+Server re-checks (`WorkspaceService.remindTasks`): only open tasks the actor gave, at most once an hour per task, only
+where "Assigned by me" is ON. A wrong yes is now blocked in code: a reply longer than one line or 8 words is never a yes
+(`isShortReply`); it becomes a change and a new preview.
+
+**4. Tools** `[BAA pp.93–94, 107]` N/A, no tool added. New `ExecIO.remindTasks`. New template `task_reminder_v1`.
+
+**5. Prompt** `[BAA pp.105, 114]` `create_tasks`: a note only with "note:" / "remark:", and a list is one task per line or
+item. Fixed rule E: sending the request again is a change, never a yes. New intent spec `remind_tasks`. In code,
+`foldUnmarkedNotes` puts any unmarked "details" back into the title (nothing becomes a note by guesswork).
+
+**6. Memory** `[BAA pp.100–103]` None added.
+
+**7. Multi-agent?** `[BAA p.116]` Single workflow.
+
+**8. Evaluation** `[BAA pp.118–119]` Offline: `test_brain_notes.ts` now 27 checks (adds Sanil's list, the resend case,
+5 remind cases); `test_brain_hr_requests.ts` updated (an unmarked detail stays in the title). Existing brain tests pass.
+Live model: **not yet measured**.
+
+**9. Trace** `[BAA pp.119–120]` Audit row `task_reminded` per task (actor, holder, via).
+
+**10. Laws knowingly violated, and why:** **L2**: scripted model only; list splitting and remind-vs-new-task must be
+checked on the live model with real HR messages.
+
 ## Agent Spec — Task Brain Prompt Auto-Tuner
 
 **1. Workflow or agent?** **workflow** — load new labelled cases → draft tunable sections once → validate in code →

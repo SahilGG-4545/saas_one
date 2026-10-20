@@ -2,14 +2,18 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
-import { Check, Clock, Eye, Loader2, Pencil, RefreshCw, Trash2, X } from 'lucide-react';
+import { Bell, Check, Clock, Eye, Loader2, Pencil, RefreshCw, Trash2, X } from 'lucide-react';
 import { AssignedTask, EASE, avatarGradient, columnLabel, initials, shortDate, shortDateTime } from './types';
 
 /**
  * "Assigned by me" (owner 2026-10-19): every task I gave to someone, with who holds it, its status and timestamps.
  * I can edit or delete the ones I gave. Tasks given by people below me in the reporting chain are listed too, view only.
  * The server decides what is listed and what may be changed; this screen only shows it.
+ * Owner 2026-10-20: "Remind" on an open task I gave, and "Remind all overdue" (one message per person, at most once an hour).
  */
+
+/** Today in India (YYYY-MM-DD): a task given before today and still open is overdue. */
+const todayIndia = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 
 const STATUS_PILL: Record<AssignedTask['status'], string> = {
     pending: 'bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300',
@@ -19,16 +23,24 @@ const STATUS_PILL: Record<AssignedTask['status'], string> = {
 
 type Who = 'me' | 'team';
 
-function Row({ task, onEdit, onDelete }: {
+function Row({ task, onEdit, onDelete, onRemind }: {
     task: AssignedTask;
     onEdit: (id: string, title: string, description: string) => Promise<boolean>;
     onDelete: (id: string) => Promise<boolean>;
+    onRemind: (ids: string[]) => Promise<void>;
 }) {
     const [mode, setMode] = useState<'view' | 'edit' | 'confirm'>('view');
     const [title, setTitle] = useState(task.title);
     const [details, setDetails] = useState(task.description || '');
     const [busy, setBusy] = useState(false);
+    const [reminding, setReminding] = useState(false);
     const done = task.status === 'completed';
+    const remind = async () => {
+        if (reminding) return;
+        setReminding(true);
+        await onRemind([task.id]);
+        setReminding(false);
+    };
 
     const save = async () => {
         if (!title.trim() || busy) return;
@@ -84,6 +96,11 @@ function Row({ task, onEdit, onDelete }: {
                         <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-black ${STATUS_PILL[task.status]}`}>{columnLabel(task.status)}</span>
                         {task.mine ? (
                             <>
+                                {!done && (
+                                    <button type="button" onClick={remind} disabled={reminding} aria-label={`Remind ${task.holderName} about ${task.title}`} title={`Remind ${task.holderName}`} className="shrink-0 rounded-lg p-1 text-zinc-400 hover:bg-amber-50 hover:text-amber-600 disabled:opacity-60 dark:hover:bg-amber-950/30">
+                                        {reminding ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Bell className="h-3.5 w-3.5" />}
+                                    </button>
+                                )}
                                 <button type="button" onClick={() => setMode('edit')} aria-label={`Edit ${task.title}`} title="Edit" className="shrink-0 rounded-lg p-1 text-zinc-400 hover:bg-indigo-50 hover:text-indigo-600 dark:hover:bg-indigo-950/30">
                                     <Pencil className="h-3.5 w-3.5" />
                                 </button>
@@ -146,6 +163,8 @@ export default function AssignedView({ from, to, onEdit, onDelete }: {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [who, setWho] = useState<Who>('me');
+    const [flash, setFlash] = useState<{ ok: boolean; text: string } | null>(null);
+    const [remindingAll, setRemindingAll] = useState(false);
 
     const load = useCallback(async () => {
         setLoading(true);
@@ -173,6 +192,29 @@ export default function AssignedView({ from, to, onEdit, onDelete }: {
         if (ok) load();
         return ok;
     };
+    // Owner 2026-10-20: remind the people doing these tasks. The server checks everything again (who gave it, still open,
+    // not reminded in the last hour) and says what it skipped.
+    const remind = async (ids: string[]) => {
+        try {
+            const res = await fetch('/api/task-manager/workspace', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'remind_tasks', taskIds: ids }) });
+            const data = await res.json();
+            if (!res.ok || !data.success) throw new Error(data.error || 'Could not send the reminder');
+            const sent = (data.reminded as Array<{ name: string; count: number }>).map(r => `${r.name} (${r.count})`).join(', ');
+            const skipped = (data.skipped as Array<{ title: string; why: string }>);
+            const tail = skipped.length ? ` Skipped ${skipped.length}: ${skipped.slice(0, 3).map(s => `${s.title} (${s.why})`).join('; ')}${skipped.length > 3 ? '…' : ''}` : '';
+            setFlash(sent ? { ok: true, text: `Reminder sent to ${sent}.${tail}` } : { ok: false, text: `Nothing was sent.${tail}` });
+        } catch (err) {
+            setFlash({ ok: false, text: err instanceof Error ? err.message : 'Could not send the reminder' });
+        }
+    };
+    const overdueMine = useMemo(() => { const today = todayIndia(); return mineList.filter(t => t.status !== 'completed' && t.assignedDate < today); }, [mineList]);
+    const remindAllOverdue = async () => {
+        if (remindingAll || !overdueMine.length) return;
+        setRemindingAll(true);
+        await remind(overdueMine.slice(0, 50).map(t => t.id));
+        setRemindingAll(false);
+    };
+
     const remove = async (id: string) => {
         const ok = await onDelete(id);
         if (ok) setTasks(t => (t || []).filter(x => x.id !== id));
@@ -196,10 +238,24 @@ export default function AssignedView({ from, to, onEdit, onDelete }: {
                 ) : (
                     <p className="text-xs font-semibold text-zinc-500">Tasks you gave to other people, and how they are going.</p>
                 )}
+                <div className="flex items-center gap-2">
+                {who === 'me' && overdueMine.length > 0 && (
+                    <button type="button" onClick={remindAllOverdue} disabled={remindingAll} className="flex items-center gap-1.5 whitespace-nowrap rounded-2xl border border-amber-300 bg-amber-50 px-3 py-1.5 text-[11px] font-black text-amber-800 hover:bg-amber-100 disabled:opacity-60 dark:border-amber-700/50 dark:bg-amber-950/30 dark:text-amber-300">
+                        {remindingAll ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Bell className="h-3.5 w-3.5" />} Remind all overdue ({overdueMine.length})
+                    </button>
+                )}
                 <button type="button" onClick={load} disabled={loading} aria-label="Refresh" className="rounded-2xl border border-zinc-200 bg-white p-2 text-zinc-500 hover:text-zinc-800 disabled:opacity-60 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:text-zinc-200">
                     <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
                 </button>
+                </div>
             </div>
+
+            {flash && (
+                <p role="status" className={`flex items-start gap-2 rounded-2xl border px-4 py-2.5 text-xs font-medium ${flash.ok ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:text-emerald-200' : 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200'}`}>
+                    <span className="flex-1">{flash.text}</span>
+                    <button type="button" onClick={() => setFlash(null)} aria-label="Dismiss" className="shrink-0 opacity-60 hover:opacity-100"><X className="h-3.5 w-3.5" /></button>
+                </p>
+            )}
 
             {error && <p className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs font-medium text-rose-800 dark:border-rose-900/50 dark:bg-rose-950/30 dark:text-rose-200">{error}</p>}
 
@@ -212,7 +268,7 @@ export default function AssignedView({ from, to, onEdit, onDelete }: {
             ) : (
                 <ul className="grid grid-cols-1 gap-2.5 md:grid-cols-2 xl:grid-cols-3">
                     <AnimatePresence initial={!reduce}>
-                        {shown.map(t => <Row key={t.id} task={t} onEdit={edit} onDelete={remove} />)}
+                        {shown.map(t => <Row key={t.id} task={t} onEdit={edit} onDelete={remove} onRemind={remind} />)}
                     </AnimatePresence>
                 </ul>
             )}

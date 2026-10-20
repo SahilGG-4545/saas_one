@@ -54,6 +54,9 @@ export interface LiveState {
     lastOutcome?: string | null;
 }
 
+/** Owner 2026-10-20: a reply short enough to be a plain yes ("yes", "haan kar do", "ok go ahead") — one line, at most 8 words. */
+export const isShortReply = (text: string): boolean => !/\n/.test(text.trim()) && text.trim().split(/\s+/).filter(Boolean).length <= 8;
+
 const EMPTY: LiveState = { recent: [], pending: null, action: null, originalSummary: null, pickOptions: [], relay: false, titles: {} };
 
 /** Owner 2026-10-19: an unfinished request is kept for DRAFT_TTL_MIN minutes, then forgotten. */
@@ -501,8 +504,14 @@ async function handle(t: Turn): Promise<void> {
 
     // ── an answer to a question the bot asked ───────────────────────────────
     if (decision.outcome === 'ACT' && decision.action.type === 'answer_pending') {
-        const a = decision.action;
+        let a = decision.action;
         if (a.answer === 'no') return say(t.result, null, 'clear');
+        // Owner 2026-10-20 (Sanil sent his request again and it was saved as if he had said yes): only a SHORT reply can be a
+        // yes. A longer message is a new version of the request → re-read with it (a new preview), or ask for a clear yes.
+        if (a.answer === 'yes' && t.state.action && !isShortReply(t.text)) {
+            if (t.depth === 0 && t.state.originalSummary) a = { ...a, answer: 'edit', instruction: t.text };
+            else { await io.reply(phone, prefixed(t, 'Please reply *yes* to go ahead, or *no* to cancel.')); return; }
+        }
         if (a.answer === 'yes' && t.state.action) {
             const change = t.frontDoor ? changeFromAction(t.state.action, ctx) : null;   // read BEFORE it changes
             const a0 = Date.now();
@@ -606,6 +615,7 @@ export async function defaultLiveIO(): Promise<LiveIO> {
         async deleteTask(actorId, taskId) { await WorkspaceService.deleteTask(actorId, { taskId, via: 'whatsapp' }); },
         async renameTask(actorId, taskId, title) { await WorkspaceService.renameTask(actorId, { taskId, title, via: 'whatsapp' }); },
         async addNote(actorId, taskId, note) { await WorkspaceService.addNote(actorId, { taskId, note, via: 'whatsapp' }); },
+        remindTasks: (actorId, taskIds) => WorkspaceService.remindTasks(actorId, { taskIds, via: 'whatsapp' }),
         async readPerson(actorId, personId) {
             const [actor, target] = await Promise.all([TaskDatabaseService.getEmployeeById(actorId), TaskDatabaseService.getEmployeeById(personId)]);
             if (!actor || !target) return null;

@@ -14,6 +14,8 @@ import { TaskMessagingService } from './TaskMessagingService';
  *   task_overdue_alert_v1        (rule "Overdue alert", built in TaskNotificationService) Hello {{1}} · {{2}} overdue · {{3}}
  *   task_dependency_v1           Hello {{1}} · {{2}} says this is pending on you · Task: {{3}}   (owner 2026-10-19; must be
  *                                approved in AiSensy / Meta before it is delivered. Until then the in-app notice still works.)
+ *   task_reminder_v1             Hello {{1}} · {{2}} is waiting on these tasks · {{3}}   (owner 2026-10-20, the person who GAVE
+ *                                the tasks reminds the person doing them; same approval note as above)
  */
 
 export const ASSIGNED_CAMPAIGN = process.env.AISENSY_TASK_ASSIGNED_CAMPAIGN || 'task_assigned_v1';
@@ -22,6 +24,7 @@ export const HANDOVER_CAMPAIGN = process.env.AISENSY_TASK_HANDOVER_CAMPAIGN || '
 export const COMPLETED_CAMPAIGN = process.env.AISENSY_TASK_COMPLETED_CAMPAIGN || 'task_completed_notice_v1';
 export const TEAM_DIGEST_CAMPAIGN = process.env.AISENSY_TASK_TEAM_DIGEST_CAMPAIGN || 'task_manager_team_digest_v1';
 export const DEPENDENCY_CAMPAIGN = process.env.AISENSY_TASK_DEPENDENCY_CAMPAIGN || 'task_dependency_v1';
+export const REMINDER_CAMPAIGN = process.env.AISENSY_TASK_REMINDER_CAMPAIGN || 'task_reminder_v1';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -230,6 +233,28 @@ export async function sendTaskDependency(phone: string | null | undefined, input
         });
     } catch (err) {
         console.error('[taskAlerts] Failed to send pending-on-you alert:', err instanceof Error ? err.message : err);
+        return false;
+    }
+}
+
+export function reminderParams(recipientName: string, fromLabel: string, titles: string[]): [string, string, string] {
+    return [firstName(recipientName), oneLine(fromLabel, 100) || 'A teammate', taskList(titles)];
+}
+export function reminderPreview(p: [string, string, string]): string {
+    return `🔔 Task Reminder\n\nHello ${p[0]},\n${p[1]} is waiting on these tasks:\n📋 ${p[2]}\nPlease update them when done.`;
+}
+
+/** "The tasks I gave you are still pending" (owner 2026-10-20). Never throws. Gated like every other alert. */
+export async function sendTaskReminder(phone: string | null | undefined, input: { recipientName: string; fromLabel: string; titles: string[]; departmentId?: string }): Promise<boolean> {
+    if (!validPhone(phone) || input.titles.length === 0) return false;
+    const params = reminderParams(input.recipientName, input.fromLabel, input.titles);
+    try {
+        return await TaskMessagingService.sendMessage(phone, reminderPreview(params), {
+            messageType: 'task_reminder', departmentId: input.departmentId,
+            campaignName: REMINDER_CAMPAIGN, templateParams: params, templateOnly: true,
+        });
+    } catch (err) {
+        console.error('[taskAlerts] Failed to send task reminder:', err instanceof Error ? err.message : err);
         return false;
     }
 }
