@@ -121,7 +121,7 @@ async function run() {
     check('preview numbers EVERY line with its person', /1\. Meeting with hampers vendors → Vidya Nair/.test(last(w)) && /Review quotation of vendors → Suraj Verma/.test(last(w)) && /Talk to mehul about alpine meeting → Dipti Rao/.test(last(w)), w.sent);
     check('the person\'s own words are kept for edits (the whole list)', /hampers vendors/.test(w.state?.data.originalSummary || '') && /dipti/.test(w.state?.data.originalSummary || ''), w.state?.data.originalSummary);
     await turn(w, 'haan kar do');
-    check('yes → all 4 tasks saved for the right people', JSON.stringify(assigned(w)) === JSON.stringify(['Meeting with hampers vendors→u2', 'Review quotation of vendors→u5', 'Talk to alpine team about govt schemes→u2', 'Talk to mehul about alpine meeting→u6']), assigned(w));
+    check('yes → all 4 tasks saved for the right people', JSON.stringify(assigned(w)) === JSON.stringify(['Meeting with hampers vendors→u2', 'Review quotation of vendors→u5', 'Talk to alpine team about govt schemes - check their availability→u2', 'Talk to mehul about alpine meeting→u6']), assigned(w));
     check('Vidya\'s two tasks → ONE grouped alert, not two', w.exec.filter((e: any[]) => e[0] === 'alert' && e[1] === 'u2' && e[2] === 2).length === 1, w.exec);
 
     console.log('\n3. Change on a list preview ("remove 2")');

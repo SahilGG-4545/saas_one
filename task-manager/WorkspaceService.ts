@@ -1,11 +1,11 @@
 import { supabaseAdmin } from '@/backend/lib/supabase/admin';
-import { CARRY_LOOKBACK_DAYS, TaskDatabaseService, carryDaysOf } from './TaskDatabaseService';
+import { MAX_CARRY_DAYS, TaskDatabaseService, carryDaysOf } from './TaskDatabaseService';
 import { ALL_TIME_FROM } from './dateRange';
 import { TaskAccessService } from './TaskAccessService';
 import { PermissionService } from './PermissionService';
 import { HierarchyService } from './HierarchyService';
-import { personLabel, sendTaskAssigned, sendTaskDependency, sendTaskHandover } from './taskAlerts';
-import { NotificationService } from '@/backend/services/NotificationService';
+import { personLabel, sendTaskAssigned, sendTaskDependency, sendTaskHandover, sendTaskReminder } from './taskAlerts';
+import { shortList, taskBell } from './taskBell';
 import { notifyGiversOfCompletion } from './completionNotice';
 import { Employee, TaskAssignment, TaskStatus } from './types';
 
@@ -252,11 +252,11 @@ export class WorkspaceService {
                 supabaseAdmin.from('task_assignments').select(select).in('employee_id', ids).gte('assigned_date', date).lte('assigned_date', to)
                     .order('assigned_date', { ascending: false }).limit(1000),   // "All time": the newest 1,000
                 supabaseAdmin.from('task_assignments').select(select).in('employee_id', ids)
-                    .lt('assigned_date', date).gte('assigned_date', addDays(date, -CARRY_LOOKBACK_DAYS)).neq('status', 'completed'),
+                    .lt('assigned_date', date).gte('assigned_date', addDays(date, -MAX_CARRY_DAYS)).neq('status', 'completed'),
                 // Owner 2026-10-19: a carried-forward task finished during the days shown stays on the board (in Done),
                 // instead of jumping back to the day it was first given (same rule as the WhatsApp list, isCompletedOn).
                 supabaseAdmin.from('task_assignments').select(select).in('employee_id', ids)
-                    .lt('assigned_date', date).gte('assigned_date', addDays(date, -CARRY_LOOKBACK_DAYS)).eq('status', 'completed')
+                    .lt('assigned_date', date).gte('assigned_date', addDays(date, -MAX_CARRY_DAYS)).eq('status', 'completed')
                     .gte('completed_at', istDayStart(date)).lt('completed_at', istDayStart(addDays(to, 1))),
             ]);
             if (today.error) throw today.error;
@@ -429,6 +429,7 @@ export class WorkspaceService {
         if (actorUserId === targetUserId || titles.length === 0) return;
         const [actor, target] = await Promise.all([TaskDatabaseService.getEmployeeById(actorUserId), TaskDatabaseService.getEmployeeById(targetUserId)]);
         if (!actor || !target) return;
+        void taskBell({ userId: target.id, kind: 'TASK_ASSIGNED', title: `New task${titles.length === 1 ? '' : 's'} from ${actor.name}`, message: `${actor.name} gave you: ${shortList(titles)}`, departmentName: target.department_name });
         await sendTaskAssigned(target.phone_number, { titles, fromLabel: personLabel(actor.name, actor.department_name), date, departmentId: target.department_id || undefined });
     }
 
@@ -469,6 +470,7 @@ export class WorkspaceService {
         // Tell the assignee (never for your own list) with the approved template. Goes through the safety gate, so nothing is
         // sent in Pretend Mode. notify:false = the caller sends ONE grouped alert for several tasks (alertAssigned).
         if (input.notify !== false && target.id !== actor.id) {
+            void taskBell({ userId: target.id, kind: 'TASK_ASSIGNED', title: `New task from ${actor.name}`, message: `${actor.name} gave you: ${task.title}`, departmentName: target.department_name });
             void sendTaskAssigned(target.phone_number, { titles: [task.title], fromLabel: personLabel(actor.name, actor.department_name), date: task.assigned_date, departmentId: target.department_id || undefined });
         }
 
@@ -545,6 +547,7 @@ export class WorkspaceService {
 
         // Tell the receiver who gave it (names only; gated, so nothing is sent in Pretend Mode). Never blocks the hand-over.
         // Approved template, so it reaches people outside WhatsApp's 24-hour window too.
+        void taskBell({ userId: target.id, kind: 'TASK_HANDOVER', title: `Task handed over by ${actor.name}`, message: `${actor.name} handed over: ${row.title}`, departmentName: target.department_name });
         void sendTaskHandover(target.phone_number, {
             recipientName: target.name, fromLabel: personLabel(actor.name, actor.department_name), titles: [row.title], date: row.assigned_date,
             departmentId: target.department_id || undefined,
@@ -611,6 +614,7 @@ export class WorkspaceService {
             taskId: row.id,
             details: { from: row.title, to: title, assignedDate: row.assigned_date, via: input.via ?? 'web_tasks_tab' },
         });
+        await this.bellHolderOfChange(actor, row, `${actor.name} renamed your task "${row.title}" to "${title}".`);
         return { id: row.id as string, from: row.title as string, to: title };
     }
 
@@ -646,6 +650,7 @@ export class WorkspaceService {
             taskId: row.id,
             details: { title: row.title, note, assignedDate: row.assigned_date, via: input.via ?? 'web_tasks_tab' },
         });
+        await this.bellHolderOfChange(actor, row, `${actor.name} added a note to "${row.title}": ${note}`);
         return { id: row.id as string };
     }
 
@@ -692,7 +697,16 @@ export class WorkspaceService {
             console.error('[WorkspaceService] delete failed:', delError);
             throw new WorkspaceError(500, 'Could not delete the task just now. Please try again.');
         }
+        await this.bellHolderOfChange(actor, row, `${actor.name} deleted your task "${row.title}".`);
         return { id: row.id as string };
+    }
+
+    /** Owner 2026-10-20: tell the person holding a task (bell + push) when SOMEONE ELSE changed it. Never throws. */
+    private static async bellHolderOfChange(actor: Employee, row: { employee_id: string }, message: string): Promise<void> {
+        if (row.employee_id === actor.id) return;
+        const holder = await TaskDatabaseService.getEmployeeById(row.employee_id).catch(() => null);
+        if (!holder || !holder.active) return;
+        void taskBell({ userId: holder.id, kind: 'TASK_CHANGED', title: `${actor.name} changed your task`, message, departmentName: holder.department_name });
     }
 
     /** Refuses when the task was given by someone else and the actor is neither that person nor a superuser. */
@@ -726,7 +740,7 @@ export class WorkspaceService {
         const below = hierarchy.allReports(actor.id).map(p => p.userId);
         const givers = [actor.id, ...below];
         const select = 'id, title, description, employee_id, assigned_by, assigned_date, status, created_at, completed_at';
-        const lookback = addDays(from, -CARRY_LOOKBACK_DAYS);
+        const lookback = addDays(from, -MAX_CARRY_DAYS);
 
         const [open, done] = await Promise.all([
             supabaseAdmin.from('task_assignments').select(select).in('assigned_by', givers).neq('status', 'completed')
@@ -800,6 +814,7 @@ export class WorkspaceService {
             taskId: row.id,
             details: { fromTitle: row.title, toTitle: title, assignedDate: row.assigned_date, via: 'web_tasks_tab' },
         });
+        await this.bellHolderOfChange(actor, row, `${actor.name} edited your task "${row.title}"${title !== row.title ? ` (now "${title}")` : ''}.`);
         return { id: row.id as string };
     }
 
@@ -843,13 +858,7 @@ export class WorkspaceService {
         });
 
         // In the app (bell + push). Never blocks the request.
-        void NotificationService.send({
-            userId: target.id,
-            type: 'TASK_DEPENDENCY',
-            title: 'A task is pending on you',
-            message: `${actor.name}'s task "${row.title}" is pending on you.`,
-            priority: 'NORMAL',
-        }).catch(err => console.error('[WorkspaceService] dependency in-app notice failed:', err));
+        void taskBell({ userId: target.id, kind: 'TASK_DEPENDENCY', title: 'A task is pending on you', message: `${actor.name}'s task "${row.title}" is pending on you.`, departmentName: target.department_name });
 
         // WhatsApp (gated: nothing is sent while Pretend Mode is ON).
         void sendTaskDependency(target.phone_number, {
@@ -858,6 +867,70 @@ export class WorkspaceService {
         });
 
         return { toName: target.name };
+    }
+
+    /**
+     * Owner 2026-10-20 — "Remind": the person who GAVE tasks reminds the people doing them that they are still pending.
+     * Works where the "Assigned by me" switch is ON (superusers always). Only open tasks this person gave someone else
+     * (a superuser: any open task given to someone). Each task at most once an hour. ONE in-app notice and ONE WhatsApp
+     * message per person, listing their tasks ("Onboarding (given 19 Oct, 1 day overdue)"). Nothing about the tasks changes.
+     */
+    static async remindTasks(actorUserId: string, input: { taskIds?: unknown; via?: string }): Promise<{ reminded: Array<{ name: string; count: number }>; skipped: Array<{ title: string; why: string }> }> {
+        const ids = Array.isArray(input.taskIds) ? [...new Set(input.taskIds.filter((x): x is string => typeof x === 'string' && x.length > 0))] : [];
+        if (!ids.length) throw new WorkspaceError(400, 'Choose at least one task to remind about.');
+        if (ids.length > 50) throw new WorkspaceError(400, 'At most 50 tasks at a time.');
+        const actor = await this.requireUnlockedActor(actorUserId);
+        const isSuper = actor.role === 'superuser';
+        if (!isSuper && !(await TaskAccessService.teamFeaturesFor(actor.department_id)).assignedTab) {
+            throw new WorkspaceError(403, 'Reminders come with the "Assigned by me" tab, which is not switched on for your team.', 'FEATURE_OFF');
+        }
+
+        const { data: rows, error } = await supabaseAdmin.from('task_assignments').select('id, title, employee_id, assigned_by, assigned_date, status').in('id', ids);
+        if (error) throw error;
+        const hourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+        const { data: recent } = await supabaseAdmin.from('task_audit_logs').select('task_id').eq('event_type', 'task_reminded').in('task_id', ids).gte('created_at', hourAgo);
+        const recentIds = new Set((recent || []).map(r => r.task_id as string));
+
+        const today = todayIST();
+        const skipped: Array<{ title: string; why: string }> = [];
+        const byHolder = new Map<string, Array<{ id: string; title: string; assigned_date: string }>>();
+        for (const id of ids) {
+            const r = (rows || []).find(x => x.id === id);
+            if (!r) { skipped.push({ title: 'A task', why: 'not found' }); continue; }
+            const title = r.title as string;
+            if (r.employee_id === actor.id || !(r.assigned_by === actor.id || (isSuper && isGivenByOther(r)))) { skipped.push({ title, why: 'you did not give this task' }); continue; }
+            if (r.status === 'completed') { skipped.push({ title, why: 'already done' }); continue; }
+            if (recentIds.has(id)) { skipped.push({ title, why: 'already reminded in the last hour' }); continue; }
+            const list = byHolder.get(r.employee_id as string) ?? [];
+            list.push({ id, title, assigned_date: r.assigned_date as string });
+            byHolder.set(r.employee_id as string, list);
+        }
+
+        const line = (t: { title: string; assigned_date: string }) => {
+            const late = Math.round((Date.parse(`${today}T12:00:00Z`) - Date.parse(`${t.assigned_date}T12:00:00Z`)) / 86400000);
+            return late > 0 ? `${t.title} (given ${shortDay(t.assigned_date)}, ${late} day${late === 1 ? '' : 's'} overdue)` : t.title;
+        };
+        const reminded: Array<{ name: string; count: number }> = [];
+        for (const [holderId, tasks] of byHolder) {
+            const holder = await TaskDatabaseService.getEmployeeById(holderId);
+            if (!holder || !holder.active) { tasks.forEach(t => skipped.push({ title: t.title, why: 'that person is no longer active' })); continue; }
+            for (const t of tasks) {
+                await TaskDatabaseService.logAudit({
+                    eventType: 'task_reminded', actorId: actor.id, targetEmployeeId: holder.id, taskId: t.id,
+                    details: { title: t.title, assignedDate: t.assigned_date, via: input.via ?? 'web_tasks_tab' },
+                });
+            }
+            const lines = tasks.map(line);
+            // In the app (bell + push). Never blocks the request.
+            void taskBell({ userId: holder.id, kind: 'TASK_REMINDER', title: `Reminder from ${actor.name}`, message: `${actor.name} is waiting on: ${lines.join('; ')}`, departmentName: holder.department_name });
+            // WhatsApp (gated: nothing is sent while Pretend Mode is ON).
+            void sendTaskReminder(holder.phone_number, {
+                recipientName: holder.name, fromLabel: personLabel(actor.name, actor.department_name), titles: lines,
+                departmentId: holder.department_id || undefined,
+            });
+            reminded.push({ name: holder.name, count: tasks.length });
+        }
+        return { reminded, skipped };
     }
 
     /**

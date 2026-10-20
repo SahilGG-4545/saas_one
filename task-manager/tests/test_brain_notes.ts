@@ -39,10 +39,24 @@ async function run() {
         mkI('add_note', { which: { all: false, numbers, hints }, person, note: text }, 'Add a note to a task');
     const interps = (msg: string): any => {
         const m = msg.toLowerCase(), has = (s: string) => m.includes(s);
+        const remindI = (hints: string[], person: string | null, overdueOnly = false) => mkI('remind_tasks', { which: { all: false, numbers: [], hints }, person, overdue_only: overdueOnly }, 'Remind');
+        if (has('remind vidya about onboarding')) return remindI(['onboarding'], 'Vidya');
+        if (has('remind about onboarding')) return remindI(['onboarding'], null);
+        if (has('remind suraj')) return remindI([], 'Suraj');
+        if (has('remind everyone about overdue')) return remindI([], 'everyone', true);
+        if (has('remind harsh')) return remindI([], 'Harsh');
         if (has('specifically') && has('vidya')) return note(['onboarding'], 'Vidya', 'documents pending');
         if (m.trim() === '1') return mkI('answer_pending', { answer: 'pick', pick: 1, instruction: null }, 'The first one');
         if (m.trim() === 'yes') return mkI('answer_pending', { answer: 'yes', pick: null, instruction: null }, 'Yes');
-        if (has('give vidya onboarding - satish')) return mkI('create_tasks', { assignee: 'Vidya', tasks: [{ title: 'Onboarding', details: 'Satish' }], date: null }, 'Give Vidya onboarding');
+        // the AI (wrongly) treats words as a note: code keeps a note ONLY when the person wrote "note:" / "remark:"
+        if (has('give vidya onboarding')) return mkI('create_tasks', { assignee: 'Vidya', tasks: [{ title: 'Onboarding', details: 'Satish' }], date: null }, 'Give Vidya onboarding');
+        // Sanil, 2026-10-20: he sent his list again in a new form while the preview was waiting
+        if (has('change of mind') && has('new lineups')) return mkI('create_tasks', { assignee: 'me', tasks: ['New lineups Ops', 'Bangalore Drive', 'Technical exe', 'Ops manager', 'AFM'].map(title => ({ title, details: null })), date: null }, 'Add 5 tasks');
+        if (has('add tasks\nnew lineups ops,bangalore drive')) return mkI('answer_pending', { answer: 'yes', pick: null, instruction: null }, 'Agreed');
+        if (has('1. mail event report')) return mkI('create_tasks', { assignee: 'me', tasks: [
+            { title: 'Mail event report', details: null }, { title: 'Navratri budget and count update', details: 'from Srushti' },
+            { title: 'Diwali poll', details: 'from Team' }, { title: 'Mail to Divesh', details: 'about my arrears' }], date: null }, 'Add 4 tasks');
+        if (has('new lineups ops')) return mkI('create_tasks', { assignee: 'me', tasks: [{ title: 'New lineups Ops, Bangalore Drive', details: 'Technical exe, Ops manager, AFM' }], date: null }, 'Add a task');
         if (has("vidya's onboarding")) return note(['onboarding'], 'Vidya', 'documents pending');
         if (has("harsh's onboarding")) return note(['onboarding'], 'Harsh', 'documents pending');
         if (has('note to onboarding: documents pending')) return note(['onboarding'], null, 'documents pending');
@@ -78,6 +92,7 @@ async function run() {
                 assign: async (a: string, i: any) => { w.exec.push(['assign', a, i.targetUserId, i.title, i.description]); },
                 handOver: async () => { w.exec.push(['handover']); return { toName: 'x' }; },
                 addNote: async (a: string, taskId: string, text: string) => { w.exec.push(['note', a, taskId, text]); },
+                remindTasks: async (a: string, ids: string[]) => { w.exec.push(['remind', a, ids]); return { reminded: [{ name: 'Vidya Nair', count: ids.length }], skipped: [] }; },
                 readPerson: async () => '', readInsight: async () => '',
             },
             reply: async (_p: string, t: string) => { w.sent.push(t); },
@@ -96,12 +111,32 @@ async function run() {
 
     console.log('\n1. A new task with a note');
     let w = mk();
-    await turn(w, 'give vidya onboarding - satish');
-    check('the preview shows the note next to the task, nothing saved yet', /Onboarding \(note: Satish\)/.test(last(w)) && w.exec.length === 0, w.sent);
+    await turn(w, 'give vidya onboarding, note: satish');
+    check('"note:" → the preview shows the note next to the task, nothing saved yet', /Onboarding \(note: Satish\)/.test(last(w)) && w.exec.length === 0, w.sent);
     await turn(w, 'yes');
     check('yes → saved for Vidya with the note as "Remark: Satish"', JSON.stringify(w.exec) === JSON.stringify([['assign', 'u1', 'u2', 'Onboarding', 'Remark: Satish']]), w.exec);
+    check('the "Added" reply shows the note too', /Onboarding \(note: Satish\)/.test(last(w)), last(w));
+    w = mk();
+    await turn(w, 'give vidya onboarding - satish');
+    check('no "note:" written → NO note; every word stays in the task name', w.state?.data.action?.tasks?.[0]?.title === 'Onboarding - Satish' && w.state.data.action.tasks[0].details === null && !/note:/.test(last(w)), w.state?.data.action);
     const spec = tasksDomain.intents.find(s => s.name === 'create_tasks')!;
-    check('the AI is told a dash alone is NOT a note (keep it in the title when unsure)', /A dash alone does NOT mean a detail/.test(spec.slots) && /When unsure, keep it all in the title/.test(spec.slots));
+    check('the AI is told: a note only with "note:" / "remark:", and a list is one task per line or item', /ONLY when the message marks a note/.test(spec.slots) && /ONE TASK PER LINE OR ITEM/.test(spec.slots));
+
+    console.log('\n1c. Roohi\'s numbered list with a detail line under each task (2026-10-20)');
+    w = mk();
+    await turn(w, '1. Mail event report\nPending\n\n2. Navratri budget and count update\nPending · from srushti\n\n3. Diwali poll\nPending · from Team\n\n4. Mail to Divesh\nPending · about my arrears\nadd these in tasks');
+    const rt = w.state?.data.action?.tasks || [];
+    check('the detail lines stay as notes ("from Srushti", "from Team", "about my arrears")', rt.length === 4 && rt[1].details === 'from Srushti' && rt[2].details === 'from Team' && rt[3].details === 'about my arrears' && /Diwali poll \(note: from Team\)/.test(last(w)), rt);
+
+    console.log('\n1b. Sanil\'s list (2026-10-20)');
+    w = mk();
+    await turn(w, 'Add task\nNew lineups Ops,\nBangalore Drive.\nTechnical exe, Ops manager, AFM');
+    check('the roles are NOT turned into a note (no "note:" in his message)', !/note:/.test(last(w)) && w.state?.data.action?.tasks?.every((t: any) => t.details === null), { sent: last(w), action: w.state?.data.action });
+    await turn(w, 'Add tasks\nNew lineups Ops,Bangalore Drive,Technical exe, Ops manager, AFM');
+    check('sending it again is NOT a yes, even if the AI reads it as one: nothing saved', w.exec.length === 0, w.exec);
+    check('→ a NEW preview from his new message (5 tasks), waiting for yes', w.state?.data.pending?.kind === 'confirm' && w.state.data.action?.tasks?.length === 5, w.state?.data.action);
+    await turn(w, 'yes');
+    check('yes → the 5 tasks are saved', w.exec.filter((e: any[]) => e[0] === 'assign').length === 5, w.exec);
 
     console.log('\n2. A note on a task given to someone, naming the person');
     w = mk();
@@ -143,6 +178,26 @@ async function run() {
     const d: any = tasksDomain.decide({ intent: 'add_note', confidence: 0.95, language: 'en', ambiguities: [], clarifyQuestion: null, summary: '', grounded: true,
         slots: { intent: 'add_note', which: { all: false, numbers: [], hints: ['onboarding'] }, person: 'Vidya', note: null } } as any, { ...world('default'), noteTargets: GIVEN } as any, { confirmProgressUpdates: false });
     check('no note given → asks what it should say, nothing saved', !w.state?.data.action && w.exec.length === 0 && d.outcome === 'CLARIFY' && d.reason === 'no_task_content' && d.detail === 'note', d);
+
+    console.log('\n7. Remind someone about a task you gave them');
+    w = mk();
+    await turn(w, 'remind vidya about onboarding');
+    check('preview of the reminder (Vidya\'s Onboarding only), nothing sent yet', w.state?.data.action?.type === 'remind_tasks' && JSON.stringify(w.state.data.action.taskIds) === '["g1"]' && /Onboarding \(Vidya Nair/.test(last(w)) && w.exec.length === 0, { sent: last(w), action: w.state?.data.action });
+    await turn(w, 'yes');
+    check('yes → the reminder is sent for that task', JSON.stringify(w.exec) === JSON.stringify([['remind', 'u1', ['g1']]]), w.exec);
+    check('the reply says who was reminded', /Vidya Nair/.test(last(w)), last(w));
+    w = mk();
+    await turn(w, 'remind about onboarding');
+    check('no name and two people have "Onboarding" → asks which, nothing sent', w.state?.data.pending?.kind === 'pick' && w.exec.length === 0, w.state?.data);
+    w = mk();
+    await turn(w, 'remind suraj about his pending tasks');
+    check('a name and no task → all open tasks given to Suraj', JSON.stringify(w.state?.data.action?.taskIds) === '["g3"]', w.state?.data.action);
+    w = mk();
+    await turn(w, 'remind everyone about overdue tasks');
+    check('"overdue" → only tasks given before today (Vidya\'s, from 7 Oct)', JSON.stringify(w.state?.data.action?.taskIds) === '["g1"]', w.state?.data.action);
+    w = mk();
+    await turn(w, 'remind harsh');
+    check('nothing given to Harsh → says so, nothing sent', !w.state?.data.action && w.exec.length === 0 && w.state?.data.lastOutcome === 'REFUSE', w.state?.data);
 
     check('\nnothing in this test touched the network', net.length === 0, net);
     console.log(failures === 0 ? '\n🎉 NOTES (SMART CHAT) TESTS PASSED\n' : `\n❌ ${failures} FAILED\n`);
