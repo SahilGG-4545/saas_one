@@ -24,6 +24,8 @@ export interface ExecIO {
     /** Delete / rename one of the actor's tasks (the same checked functions as the Tasks tab). Optional: absent → "not available". */
     deleteTask?(actorId: string, taskId: string): Promise<void>;
     renameTask?(actorId: string, taskId: string, title: string): Promise<void>;
+    /** Owner 2026-10-20: add a "Remark: …" line to a task (own, or one they gave; checked again by the server). Optional. */
+    addNote?(actorId: string, taskId: string, note: string): Promise<void>;
     /** Another person's tasks as text, or null when the actor may not see them. */
     readPerson(actorId: string, personId: string): Promise<string | null>;
     /** Phase 4 "Team reports": today's progress of the people this person may give work to, as text (null = not available). */
@@ -43,6 +45,9 @@ export interface ExecOptions {
     /** Titles of the tasks in that request (they are not on the person's own list). */
     titles?: Record<string, string>;
 }
+
+/** Owner 2026-10-20: notes are saved as a "Remark: …" line (the same wording Task import uses, shown on the card). */
+export const NOTE_PREFIX = 'Remark: ';
 
 const bullets = (lines: string[]) => lines.map(l => `• ${l}`).join('\n');
 const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
@@ -117,7 +122,7 @@ export async function executeAction(action: Action, ctx: BrainContext, io: ExecI
             const who = nameOf(action.assigneeId);
             // Several tasks for one person → create them quietly, then send ONE alert listing the ones that were really created.
             const group = action.tasks.length > 1 && !!io.alertAssigned;
-            const r = await each(action.tasks, t => io.assign(me, { targetUserId: action.assigneeId, title: t.title, description: t.details ?? undefined, date: action.date, ...(group ? { notify: false } : {}) }), t => t.title);
+            const r = await each(action.tasks, t => io.assign(me, { targetUserId: action.assigneeId, title: t.title, description: t.details ? `${NOTE_PREFIX}${t.details}` : undefined, date: action.date, ...(group ? { notify: false } : {}) }), t => t.title);
             if (group && r.done.length) { try { await io.alertAssigned!(me, action.assigneeId, r.done, action.date); } catch { /* the tasks exist; a failed alert must not fail them */ } }
             return outcome('Added', 'add', { one: 'task', many: 'tasks' }, r.done, r.failed, who === 'you' ? ' to your list' : ` for ${who}`);
         }
@@ -169,6 +174,17 @@ export async function executeAction(action: Action, ctx: BrainContext, io: ExecI
                 return { summary: 'Renamed the task.', values: { details: `• ${from} → ${action.title}` } };
             } catch (err) {
                 return { summary: `I could not rename it. ${reason(err)}`, values: { details: `• ${from}` } };
+            }
+        }
+
+        case 'add_note': {
+            if (!io.addNote) return { summary: 'Adding notes from WhatsApp is not available right now.', values: {} };
+            const line = `• ${action.title}${action.ownerName ? ` (${action.ownerName})` : ''}: ${action.note}`;
+            try {
+                await io.addNote(me, action.taskId, action.note);
+                return { summary: 'Added the note.', values: { details: line } };
+            } catch (err) {
+                return { summary: `I could not add the note. ${reason(err)}`, values: { details: line } };
             }
         }
 

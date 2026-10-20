@@ -130,38 +130,40 @@ export function HrAssistantChat({ documentsHref, onClose }: HrAssistantChatProps
     }
 
     return (
-        <section className="flex h-full min-h-0 flex-col overflow-hidden bg-surface">
-            <header className="flex items-center gap-3 bg-primary px-4 py-3 text-white">
-                <BotFace className="size-10 shrink-0" mood={pending ? 'thinking' : 'idle'} />
+        <section className="@container flex h-full min-h-0 flex-col overflow-hidden bg-surface">
+            <header className="flex shrink-0 items-center gap-2.5 bg-primary px-3.5 py-2.5 text-white">
+                <BotFace className="size-8 shrink-0" mood={pending ? 'thinking' : 'idle'} />
                 <div className="min-w-0 flex-1">
-                    <h2 className="font-display text-sm font-bold leading-tight">HR Policy Assistant</h2>
-                    <p className="text-xs text-white/80">Ask anything about the company HR policy.</p>
+                    <h2 className="truncate font-display text-sm font-bold leading-tight">HR Policy Assistant</h2>
+                    {/* One-line header: the subtitle only shows when the window is wide enough. */}
+                    <p className="hidden truncate text-[11px] text-white/80 @min-[360px]:block">Ask anything about the company HR policy.</p>
                 </div>
                 {documentsHref && (
                     <Link
                         href={documentsHref}
                         onClick={onClose}
                         title="Manage documents"
-                        className="inline-flex items-center gap-1.5 rounded-lg bg-white/15 px-2.5 py-1.5 text-xs font-semibold transition hover:bg-white/25"
+                        aria-label="Manage HR policy documents"
+                        className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-white/15 px-2 py-1.5 text-xs font-semibold transition hover:bg-white/25"
                     >
                         <FolderCog className="size-4" aria-hidden />
-                        <span className="hidden sm:inline">Documents</span>
+                        <span className="hidden @min-[400px]:inline">Documents</span>
                     </Link>
                 )}
                 <button
                     type="button"
                     onClick={onClose}
                     aria-label="Close HR assistant"
-                    className="rounded-lg p-1.5 transition hover:bg-white/15"
+                    className="shrink-0 rounded-lg p-1.5 transition hover:bg-white/15"
                 >
                     <X className="size-4" aria-hidden />
                 </button>
             </header>
 
-            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto bg-background px-4 py-5" aria-live="polite">
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto bg-background px-3.5 py-4" aria-live="polite">
                 {messages.length === 0 && !pending && (
-                    <div className="flex flex-col items-center gap-3 pt-4 text-center">
-                        <BotFace className="size-16" />
+                    <div className="flex flex-col items-center gap-2 pt-1 text-center">
+                        <BotFace className="size-12" />
                         <p className="font-display text-sm font-semibold text-text-primary">Hi! How can I help?</p>
                         <p className="text-xs text-text-secondary">Try one of these:</p>
                         <div className="flex flex-col items-stretch gap-2">
@@ -170,7 +172,7 @@ export function HrAssistantChat({ documentsHref, onClose }: HrAssistantChatProps
                                     key={suggestion}
                                     type="button"
                                     onClick={() => submit(suggestion)}
-                                    className="rounded-full border border-border bg-surface px-3 py-1.5 text-xs font-medium text-text-primary transition hover:border-primary hover:bg-primary/10"
+                                    className="rounded-full border border-border bg-surface px-3 py-1 text-xs font-medium text-text-primary transition hover:border-primary hover:bg-primary/10"
                                 >
                                     {suggestion}
                                 </button>
@@ -196,7 +198,7 @@ export function HrAssistantChat({ documentsHref, onClose }: HrAssistantChatProps
                                 <BotFace className="size-7 shrink-0" />
                             )}
                             <div
-                                className={`max-w-[80%] whitespace-pre-wrap rounded-2xl px-3.5 py-2 text-sm leading-relaxed ${
+                                className={`max-w-[80%] whitespace-pre-wrap rounded-2xl px-3 py-1.5 text-[13px] leading-relaxed ${
                                     message.role === 'user'
                                         ? 'rounded-tr-sm bg-primary text-white'
                                         : message.blocked || message.error
@@ -222,7 +224,7 @@ export function HrAssistantChat({ documentsHref, onClose }: HrAssistantChatProps
                 <div ref={bottomRef} />
             </div>
 
-            <form onSubmit={onSubmit} className="flex items-end gap-2 border-t border-border bg-surface p-3">
+            <form onSubmit={onSubmit} className="flex shrink-0 items-end gap-2 border-t border-border bg-surface p-2.5">
                 <label htmlFor="hr-assistant-input" className="sr-only">
                     Ask a question about HR policy
                 </label>
@@ -235,13 +237,13 @@ export function HrAssistantChat({ documentsHref, onClose }: HrAssistantChatProps
                     maxLength={MAX_QUESTION_LENGTH}
                     rows={1}
                     placeholder="Ask about leave, WFH, notice period..."
-                    className="max-h-32 min-h-10 flex-1 resize-none rounded-[var(--radius-md)] border border-border bg-surface px-3 py-2 text-sm text-text-primary outline-none transition-smooth placeholder:text-text-tertiary hover:border-primary/50 focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary"
+                    className="max-h-28 min-h-9 flex-1 resize-none rounded-[var(--radius-md)] border border-border bg-surface px-3 py-1.5 text-[13px] text-text-primary outline-none transition-smooth placeholder:text-text-tertiary hover:border-primary/50 focus-visible:border-primary focus-visible:ring-1 focus-visible:ring-primary"
                 />
                 <button
                     type="submit"
                     disabled={pending || !input.trim()}
                     aria-label="Send"
-                    className="flex size-10 shrink-0 items-center justify-center rounded-[var(--radius-md)] bg-primary text-white transition hover:bg-primary-dark disabled:opacity-40"
+                    className="flex size-9 shrink-0 items-center justify-center rounded-[var(--radius-md)] bg-primary text-white transition hover:bg-primary-dark disabled:opacity-40"
                 >
                     <SendHorizontal className="size-4" aria-hidden />
                 </button>

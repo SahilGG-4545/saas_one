@@ -1,6 +1,6 @@
 # HR Policy Assistant
 
-A floating bot in the bottom-right corner of every dashboard page. Employees and staff can
+A floating bot in the bottom-right corner of every signed-in page. Employees and staff can
 ask it about company HR policy. It answers **only** from the live version of each uploaded
 policy and runs safety checks on every question and every answer. HR admins upload,
 version and restore the policies on `/{orgId}/hr-assistant/documents`.
@@ -21,7 +21,7 @@ Screenshots from the standalone build (before restyling) are in [hr-assistant/sc
 | Mascot SVG | `frontend/components/hr-assistant/BotFace.tsx` |
 | Policy manager UI | `frontend/components/hr-assistant/HrDocumentManager.tsx` |
 | Policy manager page (HR admins only, 404 otherwise) | `app/(dashboard)/[orgId]/hr-assistant/documents/page.tsx` |
-| Bot mount points | `app/(dashboard)/layout.tsx`, in all three layout branches |
+| Bot mount point | `app/layout.tsx` (root), once. It hides itself on public pages (`HIDDEN_PATH_PREFIXES` in `HrAssistantBot.tsx`), because staff land on `/procurement`, `/property/...`, `/org/...` and `/{orgId}/...` |
 | API routes | `app/api/hr-assistant/**` |
 | Pipeline, ingest, versioning, access | `backend/lib/hr-assistant/` (`config.ts` holds every setting) |
 | Migration | `supabase/migrations/20261019000001_hr_assistant.sql` |
