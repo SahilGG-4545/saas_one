@@ -160,8 +160,9 @@ async function run() {
     }
     check('"everyone", "the team", "all", "someone" are never a recipient → CLARIFY', true);
     check('no task content → CLARIFY', decide(interp('create_tasks', { assignee: 'Lohit', tasks: [], date: null })).outcome === 'CLARIFY');
-    d = decide(interp('create_tasks', { assignee: 'me', tasks: Array.from({ length: 16 }, (_, i) => ({ title: `Task ${i}`, details: null })), date: null }));
-    check('more than 15 tasks in one message → CLARIFY (too many)', d.outcome === 'CLARIFY' && d.reason === 'too_many_tasks');
+    // Owner 2026-10-19: the limit is 30 per message (was 15).
+    d = decide(interp('create_tasks', { assignee: 'me', tasks: Array.from({ length: 31 }, (_, i) => ({ title: `Task ${i}`, details: null })), date: null }));
+    check('more than 30 tasks in one message → CLARIFY (too many)', d.outcome === 'CLARIFY' && d.reason === 'too_many_tasks');
 
     console.log('\n7. Deciding: handing over');
     d = decide(interp('hand_over_task', { which: which({ numbers: [5] }), to: 'Vidhya' }));

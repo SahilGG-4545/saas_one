@@ -695,6 +695,13 @@ export class TaskNotificationService {
                 continue;
             }
 
+            // Owner 2026-10-20: the overdue alert also goes to the dashboard bell (+ push), as ONE summary per person per run.
+            if (options.rule?.ruleType === 'overdue_alert') {
+                const overdue = this.overdueTasks(tasks, targetDate);
+                const { shortList, taskBell } = await import('./taskBell');
+                void taskBell({ userId: emp.id, kind: 'TASK_OVERDUE', title: `You have ${overdue.length} overdue task${overdue.length === 1 ? '' : 's'}`, message: `Still open from earlier days: ${shortList(overdue.map(t => t.title))}`, departmentName: emp.department_name });
+            }
+
             // Dispatch message via TaskMessagingService with rule-specific campaign, departmentId, and clean {{1}} parameter
             try {
                 // task_overdue_alert_v1 has three blanks (name, count, list); the other rule templates have one (the list).

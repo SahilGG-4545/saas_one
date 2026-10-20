@@ -15,6 +15,8 @@ export const TASK_INTENTS = [
     'answer_pending',    // "yes", "no", "the second one", "make it tomorrow" — answers to a question the bot asked
     'delete_tasks',      // "delete task 2", "remove the carpet one" — always previewed, then YES (owner request 2026-10-13)
     'rename_task',       // "rename task 2 to Vendor follow-up" — always previewed, then YES (owner request 2026-10-13)
+    'add_note',          // "add note to onboarding: documents pending" — own task or one they gave; previewed, then YES (owner 2026-10-20)
+    'remind_tasks',      // "remind srushti about onboarding" — tasks they GAVE that are still open; previewed, then YES (owner 2026-10-20)
     'find_tasks',        // any other QUESTION about tasks: "what did I finish yesterday", "anything about AMC", "how many did Lohit finish this week" (read-only)
     'help',
     'smalltalk',
@@ -42,7 +44,11 @@ export type Slots =
     | { intent: 'view_tasks'; scope: ViewScope; person: string | null; department: string | null; /** only tasks carried over from earlier days (own list) */ carriedOnly?: boolean }
     | { intent: 'complete_tasks'; which: Which }
     | { intent: 'progress_update'; state: ProgressState; which: Which; note: string | null }
-    | { intent: 'create_tasks'; assignee: string; tasks: Array<{ title: string; details: string | null }>; date: string | null;
+    | { intent: 'create_tasks'; assignee: string; tasks: Array<{ title: string; details: string | null;
+            /** Owner 2026-10-19: who THIS task is for, when it differs per line ("1. meeting with vendors - neeti"). */
+            assignees?: string[] }>; date: string | null;
+        /** Owner 2026-10-19: several people for the whole message ("assign Parab and Neeti to conduct induction"). */
+        assignees?: string[];
         /** A GROUP the AI read from the message ("everyone", "my team", "all of Tech except Harsh"). Code turns it into people. */
         group?: { whose: 'team' | 'department' | 'everyone'; department: string | null; except: string[] } | null }
     | { intent: 'hand_over_task'; which: Which; to: string | null }
@@ -51,6 +57,10 @@ export type Slots =
     | { intent: 'find_tasks'; query: import('./findTasks').TaskQuery }
     | { intent: 'delete_tasks'; which: Which }
     | { intent: 'rename_task'; which: Which; newTitle: string | null }
+    /** Owner 2026-10-20: a note on an EXISTING task. `person` only says whose task it is (a filter, never a new task). */
+    | { intent: 'add_note'; which: Which; person: string | null; note: string | null }
+    /** Owner 2026-10-20: remind the people doing tasks the sender GAVE. `person` narrows whose; `overdueOnly` = only overdue ones. */
+    | { intent: 'remind_tasks'; which: Which; person: string | null; overdueOnly: boolean }
     | { intent: 'help' | 'smalltalk' | 'unknown' };
 
 export interface Interpretation {
@@ -79,13 +89,19 @@ export type PendingState =
     | { kind: 'confirm'; summary: string }
     | { kind: 'pick'; options: string[] }
     | { kind: 'preview'; count: number }
-    | { kind: 'ping_reply'; assigner: string; taskIds: string[]; taskTitles: string[]; /** Names of everyone who gave these tasks, when more than one person is waiting on the reply. */ assigners?: string[] };
+    | { kind: 'ping_reply'; assigner: string; taskIds: string[]; taskTitles: string[]; /** Names of everyone who gave these tasks, when more than one person is waiting on the reply. */ assigners?: string[] }
+    /** Owner 2026-10-19: an UNFINISHED request. The bot asked a question about it; the next message fills the gap ("both",
+     *  "only Neeti", "assign it to Srushti") instead of starting over. `request` = the person's own words so far. */
+    | { kind: 'draft'; request: string; question: string | null; at: string };
 
 export type Role = 'employee' | 'reporting_manager' | 'superuser';
 
 export interface BrainPerson { id: string; name: string; department: string | null; role: Role }
 /** `n` is the number from the person's numbered list (same as in their messages); `from` = the day an older open task was given. */
 export interface BrainTask { n: number; id: string; title: string; status: 'pending' | 'in_progress' | 'completed'; from?: string }
+
+/** Owner 2026-10-20: an open task the sender GAVE someone else (they may add a note to it). Not numbered: found by its name. */
+export interface NoteTarget { id: string; title: string; ownerId: string; ownerName: string; date: string }
 
 export interface BrainContext {
     today: string;                     // YYYY-MM-DD
@@ -103,6 +119,8 @@ export interface BrainContext {
     /** Conversation memory (Phase 2): the real last messages of the chat, oldest first ("Person: …" / "Assistant: …").
      *  Only present while WHATSAPP_MEMORY_ENABLED is on; absent → the prompt is exactly as before. */
     conversation?: string[];
+    /** Owner 2026-10-20: open tasks the sender gave other people (for "add note to …"). Absent → only their own tasks. */
+    noteTargets?: NoteTarget[];
 }
 
 export type Action =
@@ -119,6 +137,10 @@ export type Action =
     | { type: 'delete_tasks'; taskIds: string[] }
     /** Rename one task on the person's own list. */
     | { type: 'rename_task'; taskId: string; title: string }
+    /** Add a note line ("Remark: …") to one task: their own, or one they gave (`ownerName` = whose task, null = their own). */
+    | { type: 'add_note'; taskId: string; note: string; title: string; ownerName: string | null }
+    /** Remind the people doing these tasks (tasks the sender gave). `lines` = "Onboarding (Srushti, 19 Oct)" for the preview. */
+    | { type: 'remind_tasks'; taskIds: string[]; lines: string[] }
     /** Several changes from ONE message, shown in one preview and carried out after one YES. `unclear` = parts not understood. */
     | { type: 'batch'; actions: Action[]; unclear: string[] };
 
@@ -126,9 +148,11 @@ export type ClarifyReason =
     | 'low_confidence' | 'ai_flagged_ambiguity' | 'unknown_intent'
     | 'no_task_referenced' | 'task_number_out_of_range' | 'several_tasks_match'
     | 'person_not_found' | 'several_people_match' | 'no_recipient' | 'no_task_content'
-    | 'nothing_pending' | 'unsure_answer' | 'bad_pick' | 'too_many_tasks' | 'not_grounded' | 'department_not_found';
+    | 'nothing_pending' | 'unsure_answer' | 'bad_pick' | 'too_many_tasks' | 'not_grounded' | 'department_not_found'
+    /** Owner 2026-10-19: they named a piece of work but not who it is for: add to their own list, or assign it? */
+    | 'add_or_assign';
 
-export type RefuseReason = 'not_allowed_to_assign' | 'task_already_done' | 'not_allowed_to_view' | 'cannot_hand_over_to_self' | 'nothing_to_do' | 'nothing_in_group';
+export type RefuseReason = 'not_allowed_to_assign' | 'task_already_done' | 'not_allowed_to_view' | 'cannot_hand_over_to_self' | 'nothing_to_do' | 'nothing_in_group' | 'nothing_to_remind';
 
 export type Decision =
     | { outcome: 'ACT'; action: Action }
@@ -156,7 +180,12 @@ export const DEFAULT_CONFIRM_POLICY: ConfirmPolicy = { confirmProgressUpdates: f
 /** Confidence below which a CHANGE is never proposed; the bot asks instead. Reads use the lower bar. */
 export const CHANGE_CONFIDENCE_MIN = 0.8;
 export const READ_CONFIDENCE_MIN = 0.55;
-export const MAX_TASKS_PER_MESSAGE = 15;
+/** Owner 2026-10-19: 15 → 30 (HR send longer lists). */
+export const MAX_TASKS_PER_MESSAGE = 30;
+/** Owner 2026-10-19: how long an unfinished request (a "draft") waits for the answer to the bot's question. */
+export const DRAFT_TTL_MIN = 30;
 /** Extra requests read from one message on top of the first ("done 1 and add …"): at most this many. */
 export const MAX_EXTRA_REQUESTS = 4;
 export const MAX_TITLE_LENGTH = 200;
+/** Owner 2026-10-20: longest note ("Remark: …") the bot adds to a task. */
+export const MAX_NOTE_LENGTH = 300;

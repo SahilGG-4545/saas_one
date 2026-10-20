@@ -6,6 +6,9 @@ import { AlertTriangle, Bell, CheckCircle2, Clock, Eye, Loader2, Lock, Moon, Plu
 import { EASE } from './types';
 import TimeWheelPicker from './TimeWheelPicker';
 
+/** Most days a team can carry unfinished tasks forward (same limit as MAX_CARRY_DAYS on the server, which checks it again). */
+const MAX_CARRY_DAYS = 30;
+
 /**
  * Notifications view: a team sets WHEN its Task Manager messages go out and WHAT they say.
  * Scope and permissions are enforced by the server; this screen never sends anything.
@@ -269,6 +272,8 @@ function CarryForwardCard({ value, canEdit, onSave }: { value: CarryForward; can
     const [saving, setSaving] = useState(false);
     useEffect(() => { setDraft(value); }, [value]);
     const dirty = draft.enabled !== value.enabled || draft.days !== value.days;
+    // Owner 2026-10-20: any number of days from 1 to 30 can be typed, not only the 1–7 buttons.
+    const daysOk = Number.isInteger(draft.days) && draft.days >= 1 && draft.days <= MAX_CARRY_DAYS;
     const cap = 'text-[10px] font-black uppercase tracking-widest text-zinc-500';
     return (
         <section className="space-y-4 rounded-3xl border border-zinc-200 bg-white p-5 shadow-xs dark:border-zinc-800 dark:bg-zinc-900" aria-labelledby="carry-forward-title">
@@ -292,7 +297,19 @@ function CarryForwardCard({ value, canEdit, onSave }: { value: CarryForward; can
                                 className={`h-9 min-w-9 rounded-full px-2 text-xs font-black transition-all disabled:cursor-not-allowed ${on ? 'bg-indigo-600 text-white shadow-sm' : 'bg-zinc-100 text-zinc-500 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700'}`}>{n}</button>
                         );
                     })}
+                    <label className="ml-1 flex items-center gap-1.5 text-[11px] font-bold text-zinc-500">
+                        or
+                        <input
+                            type="number" inputMode="numeric" min={1} max={MAX_CARRY_DAYS} step={1}
+                            value={Number.isFinite(draft.days) ? draft.days : ''} disabled={!canEdit || !draft.enabled}
+                            onChange={e => setDraft(d => ({ ...d, days: e.target.value === '' ? NaN : Math.floor(Number(e.target.value)) }))}
+                            aria-label={`Number of days, 1 to ${MAX_CARRY_DAYS}`}
+                            className={`h-9 w-16 rounded-full border bg-white px-3 text-center text-xs font-black text-zinc-800 outline-none focus:border-indigo-400 disabled:cursor-not-allowed dark:bg-zinc-950 dark:text-zinc-100 ${daysOk ? 'border-zinc-300 dark:border-zinc-700' : 'border-rose-400'}`}
+                        />
+                        days (up to {MAX_CARRY_DAYS})
+                    </label>
                 </div>
+                {!daysOk && draft.enabled && <p className="mt-1.5 text-[11px] font-bold text-rose-600">Enter a whole number from 1 to {MAX_CARRY_DAYS}.</p>}
                 <p className="mt-2 text-[11px] text-zinc-500">
                     {draft.enabled ? (draft.days === 1 ? 'Unfinished tasks from yesterday are carried into today.' : `Unfinished tasks from the last ${draft.days} days are carried into today.`) : 'Only today’s tasks are shown. Older unfinished tasks stay in the dashboard but not in WhatsApp.'}
                     {' '}This applies to every message your team gets and to the bot&apos;s &ldquo;tasks&rdquo; list.
@@ -301,7 +318,7 @@ function CarryForwardCard({ value, canEdit, onSave }: { value: CarryForward; can
 
             {canEdit && (
                 <footer className="flex justify-end border-t border-zinc-100 pt-3 dark:border-zinc-800">
-                    <button type="button" disabled={!dirty || saving} onClick={async () => { setSaving(true); try { await onSave(draft); } finally { setSaving(false); } }}
+                    <button type="button" disabled={!dirty || saving || (draft.enabled && !daysOk)} onClick={async () => { setSaving(true); try { await onSave(draft); } finally { setSaving(false); } }}
                         className="flex items-center gap-1.5 rounded-xl bg-indigo-600 px-4 py-2 text-xs font-black text-white shadow-sm transition-all hover:bg-indigo-700 disabled:opacity-40">
                         {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}{dirty ? 'Save changes' : 'Saved'}
                     </button>

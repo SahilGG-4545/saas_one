@@ -87,6 +87,108 @@ Prompt versions OFF, the Phase 4 prompt remains byte-identical. Invalid or unava
 built-in prompt. Admin-labelled real mistakes become permanent evaluation cases; a nightly workflow can draft a
 candidate, but code gates and an admin activation are required before it becomes live.
 
+### Changes 2026-10-19 (HR roll-out): several people per request, unfinished requests, "add or assign?"
+
+**1. Workflow or agent?** `[BAA p.115]` Still a **workflow** (understand → validate → decide → reply). No new tools, no
+new model, no new loop. The model still only proposes; code resolves every name and checks every permission.
+
+**2. Context** `[BAA p.112]` New pending kind `draft`: the person's own words for an unfinished request plus the exact
+question the bot asked, kept for 30 minutes (`DRAFT_TTL_MIN`). Given to the model as a separate, labelled block (fixed
+rule D) and counted as the person's own words for grounding. It is never the assistant's text.
+
+**3. Cost of a false positive** `[BAA p.112]` **high** (it assigns work) → unchanged: every new task, for any number of
+people, is shown in ONE preview and saved only after a yes. A person the sender may not give work to is left out and
+named in the preview, never silently dropped or added.
+
+**4. Tools** `[BAA pp.93–94, 107]` N/A — no tool added. `create_tasks` slots gain `assignees` (whole message) and a
+per-task `assignees`; both are bounded (10 names, 60 chars) and every name is resolved by `resolvePerson` and
+`mayGiveWorkTo` before anything is proposed. `"assignee":"?"` → `CLARIFY add_or_assign` (no action).
+
+**5. Prompt** `[BAA pp.105, 114]` Locked fixed rules added outside the tunable steps: **D** (unfinished request: answer
+/ side question / new request / drop, by meaning) and **E** (yes / no / change answers in English, Hindi, Hinglish).
+The tunable steps and examples are unchanged, so stored prompt versions still apply.
+
+**6. Memory** `[BAA pp.100–103]` The draft is conversation state, not agentic memory: no write tool, scoped to one
+phone, expires after 30 minutes or when the request is confirmed, refused or dropped.
+
+**7. Multi-agent?** `[BAA p.116]` Single workflow. Several people / a person per line become the existing `batch`
+action (one preview, one yes), so no new execution path.
+
+**8. Evaluation** `[BAA pp.118–119]` Offline: `task-manager/tests/test_brain_hr_requests.ts` (27 checks: several
+people, a per-line list, "remove 2" on a list, the "both" regression, "add or assign?", a side question keeping the
+draft, "rehne do", a person not allowed, 30 vs 31 tasks, draft expiry); the existing brain tests pass (two checks
+updated for the new limit and preview wording). Live model: **not yet measured**.
+
+**9. Trace** `[BAA pp.119–120]` Unchanged audit row per turn; the draft is visible in the saved state (`pending.kind`).
+
+**10. Laws knowingly violated, and why:** **L2** — the new rules are tested offline with a scripted model only; they
+must be checked on the live model (`run_eval.ts` with new HR cases, owner approval for provider cost) and on real HR
+messages before wider roll-out. Limit raised 15 → 30 per message on owner request.
+
+### Changes 2026-10-20: notes on tasks (new task with a note, and "add note to …")
+
+**1. Workflow or agent?** `[BAA p.115]` Still a **workflow**. One new intent, `add_note`, decided by plain code; no new
+tool, model or loop.
+
+**2. Context** `[BAA p.112]` New optional `noteTargets`: open tasks the sender GAVE others in the last 30 days (id,
+title, holder name, day; at most 200). Used only by code to find the task; the model never sees ids.
+
+**3. Cost of a false positive** `[BAA p.112]` **medium** (a note lands on the wrong task). Every note is previewed and
+saved only after a yes. Two tasks that fit → the bot asks which, showing whose task each is. A named person only narrows
+the search (never a new task or a hand-over). The server re-checks permission in `WorkspaceService.addNote` (holder,
+giver, anyone above the holder, or a superuser).
+
+**4. Tools** `[BAA pp.93–94, 107]` N/A, no tool added. New `ExecIO.addNote` calls the checked server function. Slots
+are bounded (note 300 chars, person 60, hints 6).
+
+**5. Prompt** `[BAA pp.105, 114]` New intent spec `add_note`; `create_tasks` now explains `details` (a dash alone is not
+a note; unsure → keep it in the title; "note:" always is). Tunable steps and examples unchanged.
+
+**6. Memory** `[BAA pp.100–103]` None added. For a note, the "which one?" choice and "change the note" replay keep the
+person's own words (so the note text is grounded on their message).
+
+**7. Multi-agent?** `[BAA p.116]` Single workflow; `add_note` also works inside a `batch` preview.
+
+**8. Evaluation** `[BAA pp.118–119]` Offline: `task-manager/tests/test_brain_notes.ts` (15 checks: new task with a
+note, note on a given task by name, two matches → pick, single match, own task by number, unknown person, ungrounded
+note, missing note). Existing brain tests pass. Live model: **not yet measured**.
+
+**9. Trace** `[BAA pp.119–120]` Audit row `task_note_added` (actor, task, note, via) plus the usual per-turn row.
+
+**10. Laws knowingly violated, and why:** **L2**: tested offline with a scripted model only; how well the live model
+separates a note from a title (the "-" case) must be checked on real HR messages before wider roll-out.
+
+### Changes 2026-10-20 (b): notes only when marked, lists split, resend is not a yes, "remind …"
+
+**1. Workflow or agent?** `[BAA p.115]` Still a **workflow**. One new intent, `remind_tasks`, decided by plain code.
+
+**2. Context** `[BAA p.112]` Reuses `noteTargets` (open tasks the sender gave, last 30 days) to find what to remind about.
+
+**3. Cost of a false positive** `[BAA p.112]` **medium** (a reminder reaches people). Always previewed, sent only after
+a yes; several people's tasks fit one name → asks which; no name, no task and no "overdue" → asks, never reminds everyone.
+Server re-checks (`WorkspaceService.remindTasks`): only open tasks the actor gave, at most once an hour per task, only
+where "Assigned by me" is ON. A wrong yes is now blocked in code: a reply longer than one line or 8 words is never a yes
+(`isShortReply`); it becomes a change and a new preview.
+
+**4. Tools** `[BAA pp.93–94, 107]` N/A, no tool added. New `ExecIO.remindTasks`. New template `task_reminder_v1`.
+
+**5. Prompt** `[BAA pp.105, 114]` `create_tasks`: a note only with "note:" / "remark:", and a list is one task per line or
+item. Fixed rule E: sending the request again is a change, never a yes. New intent spec `remind_tasks`. In code,
+`foldUnmarkedNotes` puts any unmarked "details" back into the title (nothing becomes a note by guesswork).
+
+**6. Memory** `[BAA pp.100–103]` None added.
+
+**7. Multi-agent?** `[BAA p.116]` Single workflow.
+
+**8. Evaluation** `[BAA pp.118–119]` Offline: `test_brain_notes.ts` now 27 checks (adds Sanil's list, the resend case,
+5 remind cases); `test_brain_hr_requests.ts` updated (an unmarked detail stays in the title). Existing brain tests pass.
+Live model: **not yet measured**.
+
+**9. Trace** `[BAA pp.119–120]` Audit row `task_reminded` per task (actor, holder, via).
+
+**10. Laws knowingly violated, and why:** **L2**: scripted model only; list splitting and remind-vs-new-task must be
+checked on the live model with real HR messages.
+
 ## Agent Spec — Task Brain Prompt Auto-Tuner
 
 **1. Workflow or agent?** **workflow** — load new labelled cases → draft tunable sections once → validate in code →
