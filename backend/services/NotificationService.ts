@@ -755,22 +755,41 @@ export class NotificationService {
             const templateTitle = (completion.template as any)?.title || 'Checklist';
             const completerName = completer?.full_name || 'Staff';
 
+            // Resolve assigned approver for this property
+            let approverId: string | null = (completion as any)?.approver_id || null;
+            if (!approverId && completion.property_id) {
+                const { data: propSettings } = await supabaseAdmin
+                    .from('checklist_property_settings')
+                    .select('approver_user_id')
+                    .eq('property_id', completion.property_id)
+                    .maybeSingle();
+                if (propSettings?.approver_user_id) {
+                    approverId = propSettings.approver_user_id;
+                }
+            }
+
             const { WhatsAppRecipientResolver } = await import('./WhatsAppRecipientResolver');
             const { users: waUsers } = await WhatsAppRecipientResolver.resolveRecipients({
                 organizationId: completion.organization_id,
                 propertyId: completion.property_id,
                 featureKey: 'checklist_completed',
-                contextualUserIds: [completion.completed_by]
+                contextualUsers: {
+                    requesterId: completion.completed_by,
+                    approverId: approverId || undefined
+                }
             });
 
             for (const u of waUsers) {
+                const isApproverUser = approverId && u.id === approverId;
                 await this.send({
                     userId: u.id,
                     propertyId: completion.property_id,
                     organizationId: completion.organization_id,
                     type: 'SOP_COMPLETED',
-                    title: 'Checklist Completed ✅',
-                    message: `"${templateTitle}" was completed by ${completerName}.`,
+                    title: isApproverUser ? 'Checklist Ready for Review 📋' : 'Checklist Completed ✅',
+                    message: isApproverUser 
+                        ? `"${templateTitle}" was completed by ${completerName} and is waiting for your review.`
+                        : `"${templateTitle}" was completed by ${completerName}.`,
                     deepLink: `/properties/${completion.property_id}/sop?completionId=${completionId}`
                 });
             }
@@ -783,7 +802,8 @@ export class NotificationService {
                     property_id: completion.property_id,
                     completion_id: completionId,
                     template_title: templateTitle,
-                    completed_by: completion.completed_by
+                    completed_by: completion.completed_by,
+                    approver_id: approverId
                 }
             });
         } catch (err) {
