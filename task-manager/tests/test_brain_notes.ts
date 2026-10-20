@@ -117,6 +117,9 @@ async function run() {
     check('yes → saved for Vidya with the note as "Remark: Satish"', JSON.stringify(w.exec) === JSON.stringify([['assign', 'u1', 'u2', 'Onboarding', 'Remark: Satish']]), w.exec);
     check('the "Added" reply shows the note too', /Onboarding \(note: Satish\)/.test(last(w)), last(w));
     w = mk();
+    await turn(w, 'give vidya onboarding note satish');
+    check('the word "note" without ":" also makes a note', /Onboarding \(note: Satish\)/.test(last(w)), last(w));
+    w = mk();
     await turn(w, 'give vidya onboarding - satish');
     check('no "note:" written → NO note; every word stays in the task name', w.state?.data.action?.tasks?.[0]?.title === 'Onboarding - Satish' && w.state.data.action.tasks[0].details === null && !/note:/.test(last(w)), w.state?.data.action);
     const spec = tasksDomain.intents.find(s => s.name === 'create_tasks')!;

@@ -8,6 +8,13 @@ import { createClient } from '@/frontend/utils/supabase/client';
 import { Toast } from '@/frontend/components/ui/Toast';
 import SOPCADConfigModal from '@/frontend/components/sop/SOPCADConfigModal';
 
+export interface ChecklistStepParameter {
+    id: string;
+    name: string;
+    type: 'yes_no' | 'checkbox' | 'text' | 'number';
+    is_required?: boolean;
+}
+
 interface SOPTemplateFormModalProps {
     isOpen: boolean;
     onClose: () => void;
@@ -35,8 +42,6 @@ const SOPTemplateFormModal: React.FC<SOPTemplateFormModalProps> = ({ isOpen, onC
         end_time: '17:00',
     });
 
-
-
     const [items, setItems] = useState<any[]>([]);
     const [newItem, setNewItem] = useState({
         title: '',
@@ -47,8 +52,12 @@ const SOPTemplateFormModal: React.FC<SOPTemplateFormModalProps> = ({ isOpen, onC
         is_optional: false,
         start_time: '',
         end_time: '',
+        parameters: [] as ChecklistStepParameter[],
     });
     const [showStepTimeSlot, setShowStepTimeSlot] = useState(false);
+    const [showParametersSection, setShowParametersSection] = useState(false);
+    const [paramDraftName, setParamDraftName] = useState('');
+    const [paramDraftType, setParamDraftType] = useState<'yes_no' | 'checkbox' | 'text' | 'number'>('yes_no');
     const [editingIndex, setEditingIndex] = useState<number | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [isLoadingMembers, setIsLoadingMembers] = useState(false);
@@ -61,9 +70,30 @@ const SOPTemplateFormModal: React.FC<SOPTemplateFormModalProps> = ({ isOpen, onC
     const activeTemplateId = template?.id || createdTemplateId;
     const [referencePhotoUploads, setReferencePhotoUploads] = useState<Record<number, { uploading: boolean; url?: string }>>({});
     const [templateCADStatus, setTemplateCADStatus] = useState<{ hasCAD: boolean; imageUrl?: string } | null>(null);
-
+    const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
+    const [isDraftLoaded, setIsDraftLoaded] = useState(false);
+    const [propertyChecklistMode, setPropertyChecklistMode] = useState<'basic' | 'advanced'>('basic');
+    const isAIEnabled = propertyChecklistMode === 'advanced';
 
     const supabase = React.useMemo(() => createClient(), []);
+
+    useEffect(() => {
+        if (!isOpen || !propertyId) return;
+
+        const fetchSettings = async () => {
+            try {
+                const res = await fetch(`/api/properties/${propertyId}/checklist-settings`);
+                const data = await res.json();
+                if (res.ok && data.settings?.checklist_mode) {
+                    setPropertyChecklistMode(data.settings.checklist_mode);
+                }
+            } catch (err) {
+                console.error('Error fetching checklist settings for template:', err);
+            }
+        };
+
+        fetchSettings();
+    }, [isOpen, propertyId]);
 
     useEffect(() => {
         const fetchMembers = async () => {
@@ -113,10 +143,12 @@ const SOPTemplateFormModal: React.FC<SOPTemplateFormModalProps> = ({ isOpen, onC
     }, []);
 
     useEffect(() => {
+        if (!isOpen) return;
+
         if (template) {
             setCreatedTemplateId(null);
             setFormData({
-                title: template.title,
+                title: template.title || '',
                 description: template.description || '',
                 category: template.category || 'general',
                 frequency: template.frequency || 'daily',
@@ -126,6 +158,7 @@ const SOPTemplateFormModal: React.FC<SOPTemplateFormModalProps> = ({ isOpen, onC
             });
 
             setItems(template.items || []);
+            setIsDraftLoaded(false);
         } else if (initialData) {
             setCreatedTemplateId(null);
             setFormData({
@@ -149,47 +182,187 @@ const SOPTemplateFormModal: React.FC<SOPTemplateFormModalProps> = ({ isOpen, onC
                     order_index: idx,
                 }))
             );
+            setIsDraftLoaded(false);
         } else {
-            setCreatedTemplateId(null);
-            setFormData({
-                title: '',
-                description: '',
-                category: 'general',
-                frequency: 'daily',
-                assigned_to: [],
-                start_time: '',
-                end_time: '',
-            });
+            // Check for saved draft in localStorage
+            let restored = false;
+            if (typeof window !== 'undefined' && propertyId) {
+                try {
+                    const rawDraft = localStorage.getItem(`sop_template_draft_${propertyId}`);
+                    if (rawDraft) {
+                        const parsed = JSON.parse(rawDraft);
+                        const hasDraftData = !!(
+                            parsed.formData?.title?.trim() ||
+                            parsed.formData?.description?.trim() ||
+                            (parsed.items && parsed.items.length > 0) ||
+                            parsed.newItem?.title?.trim()
+                        );
+                        if (hasDraftData) {
+                            setCreatedTemplateId(null);
+                            setFormData({
+                                title: parsed.formData?.title || '',
+                                description: parsed.formData?.description || '',
+                                category: parsed.formData?.category || 'general',
+                                frequency: parsed.formData?.frequency || 'daily',
+                                assigned_to: parsed.formData?.assigned_to || [],
+                                start_time: parsed.formData?.start_time || '',
+                                end_time: parsed.formData?.end_time || '',
+                            });
+                            setItems(Array.isArray(parsed.items) ? parsed.items : []);
+                            if (parsed.newItem?.title || (parsed.newItem?.parameters && parsed.newItem.parameters.length > 0)) {
+                                setNewItem({
+                                    title: parsed.newItem.title || '',
+                                    description: parsed.newItem.description || '',
+                                    requires_photo: !!parsed.newItem.requires_photo,
+                                    requires_comment: !!parsed.newItem.requires_comment,
+                                    type: parsed.newItem.type || 'checkbox',
+                                    is_optional: false,
+                                    start_time: parsed.newItem.start_time || '',
+                                    end_time: parsed.newItem.end_time || '',
+                                    parameters: Array.isArray(parsed.newItem.parameters) ? parsed.newItem.parameters : [],
+                                });
+                            }
+                            setIsDraftLoaded(true);
+                            setLastSavedAt(parsed.savedAt || Date.now());
+                            restored = true;
+                        }
+                    }
+                } catch (err) {
+                    console.error('Failed to load checklist draft:', err);
+                }
+            }
 
-            setItems([]);
+            if (!restored) {
+                setCreatedTemplateId(null);
+                setFormData({
+                    title: '',
+                    description: '',
+                    category: 'general',
+                    frequency: 'daily',
+                    assigned_to: [],
+                    start_time: '',
+                    end_time: '',
+                });
+
+                setItems([]);
+                setIsDraftLoaded(false);
+                setLastSavedAt(null);
+            }
         }
-    }, [template, initialData, isOpen]);
+    }, [template, initialData, isOpen, propertyId]);
+
+    // Autosave draft to localStorage on any change while creating a template
+    useEffect(() => {
+        if (!isOpen || template || !propertyId || typeof window !== 'undefined' ? false : true) return;
+        if (typeof window === 'undefined') return;
+
+        const hasContent = !!(
+            formData.title?.trim() ||
+            formData.description?.trim() ||
+            (items && items.length > 0) ||
+            newItem.title?.trim() ||
+            (newItem.parameters && newItem.parameters.length > 0)
+        );
+
+        if (!hasContent) return;
+
+        const timer = setTimeout(() => {
+            try {
+                const now = Date.now();
+                const draft = {
+                    formData,
+                    items,
+                    newItem,
+                    savedAt: now,
+                };
+                localStorage.setItem(`sop_template_draft_${propertyId}`, JSON.stringify(draft));
+                sessionStorage.setItem(`sop_template_modal_open_${propertyId}`, 'true');
+                try { localStorage.removeItem(`sop_template_modal_open_${propertyId}`); } catch {}
+                setLastSavedAt(now);
+                setIsDraftLoaded(true);
+                window.dispatchEvent(new Event('sop_draft_updated'));
+            } catch (e) {
+                console.error('Failed to autosave checklist draft:', e);
+            }
+        }, 300);
+
+        return () => clearTimeout(timer);
+    }, [formData, items, newItem, isOpen, template, propertyId]);
+
+    const handleDiscardDraft = () => {
+        try {
+            if (typeof window !== 'undefined' && propertyId) {
+                localStorage.removeItem(`sop_template_draft_${propertyId}`);
+                localStorage.removeItem(`sop_template_modal_open_${propertyId}`);
+                sessionStorage.removeItem(`sop_template_modal_open_${propertyId}`);
+                sessionStorage.removeItem(`sop_editing_template_id_${propertyId}`);
+                window.dispatchEvent(new Event('sop_draft_updated'));
+            }
+        } catch {}
+
+        setFormData({
+            title: '',
+            description: '',
+            category: 'general',
+            frequency: 'daily',
+            assigned_to: [],
+            start_time: '',
+            end_time: '',
+        });
+        setItems([]);
+        setNewItem({
+            title: '',
+            description: '',
+            requires_photo: false,
+            requires_comment: false,
+            type: 'checkbox',
+            is_optional: false,
+            start_time: '',
+            end_time: '',
+            parameters: [],
+        });
+        setIsDraftLoaded(false);
+        setLastSavedAt(null);
+        setToast({ message: 'Checklist draft cleared', type: 'success' });
+    };
+
+    const handleCloseModal = () => {
+        try {
+            if (typeof window !== 'undefined' && propertyId) {
+                localStorage.removeItem(`sop_template_modal_open_${propertyId}`);
+                sessionStorage.removeItem(`sop_template_modal_open_${propertyId}`);
+                sessionStorage.removeItem(`sop_editing_template_id_${propertyId}`);
+            }
+        } catch {}
+        onClose();
+    };
 
     const handleAddItem = () => {
         if (!newItem.title) {
-            setToast({ message: 'Item title is required', type: 'error' });
+            setToast({ message: 'Step title is required', type: 'error' });
             return;
         }
 
+        const itemToSave = {
+            ...newItem,
+            parameters: Array.isArray(newItem.parameters) ? newItem.parameters : [],
+            is_optional: false,
+        };
+
         if (editingIndex !== null) {
-            // Update existing item
             const updatedItems = [...items];
             updatedItems[editingIndex] = {
-                ...newItem,
+                ...itemToSave,
                 order_index: editingIndex,
-                is_optional: false    // Force mandatory
             };
             setItems(updatedItems);
             setEditingIndex(null);
         } else {
-            // Add new item
             setItems([...items, {
-                ...newItem,
+                ...itemToSave,
                 order_index: items.length,
-                is_optional: false    // Force mandatory
             }]);
         }
-
 
         setNewItem({
             title: '',
@@ -200,8 +373,36 @@ const SOPTemplateFormModal: React.FC<SOPTemplateFormModalProps> = ({ isOpen, onC
             is_optional: false,
             start_time: '',
             end_time: '',
+            parameters: [],
         });
         setShowStepTimeSlot(false);
+        setShowParametersSection(false);
+        setParamDraftName('');
+    };
+
+    const handleAddParam = () => {
+        if (!paramDraftName.trim()) {
+            setToast({ message: 'Parameter name is required', type: 'error' });
+            return;
+        }
+        const newParam: ChecklistStepParameter = {
+            id: `param_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+            name: paramDraftName.trim(),
+            type: paramDraftType,
+            is_required: true,
+        };
+        setNewItem(prev => ({
+            ...prev,
+            parameters: [...(prev.parameters || []), newParam],
+        }));
+        setParamDraftName('');
+    };
+
+    const handleRemoveParam = (paramId: string) => {
+        setNewItem(prev => ({
+            ...prev,
+            parameters: (prev.parameters || []).filter(p => p.id !== paramId),
+        }));
     };
 
     const handleRemoveItem = (index: number) => {
@@ -302,6 +503,10 @@ const SOPTemplateFormModal: React.FC<SOPTemplateFormModalProps> = ({ isOpen, onC
                     order_index: idx,
                     start_time: it.start_time || null,
                     end_time: it.end_time || null,
+                    parameters: Array.isArray(it.parameters) ? it.parameters : [],
+                    reference_photo_url: it.reference_photo_url || null,
+                    reference_photo_source: it.reference_photo_source || null,
+                    cad_area_id: it.cad_area_id || null,
                 })),
             };
 
@@ -316,6 +521,16 @@ const SOPTemplateFormModal: React.FC<SOPTemplateFormModalProps> = ({ isOpen, onC
 
             const newId = data.template?.id || data.id;
             if (newId) {
+                try {
+                    if (typeof window !== 'undefined' && propertyId) {
+                        localStorage.removeItem(`sop_template_draft_${propertyId}`);
+                        localStorage.removeItem(`sop_template_modal_open_${propertyId}`);
+                        sessionStorage.removeItem(`sop_template_modal_open_${propertyId}`);
+                        sessionStorage.removeItem(`sop_editing_template_id_${propertyId}`);
+                        window.dispatchEvent(new Event('sop_draft_updated'));
+                    }
+                } catch {}
+                setIsDraftLoaded(false);
                 setCreatedTemplateId(newId);
                 if (data.template?.items && data.template.items.length > 0) {
                     setItems(data.template.items);
@@ -353,6 +568,10 @@ const SOPTemplateFormModal: React.FC<SOPTemplateFormModalProps> = ({ isOpen, onC
                     order_index: idx,
                     start_time: it.start_time || null,
                     end_time: it.end_time || null,
+                    parameters: Array.isArray(it.parameters) ? it.parameters : [],
+                    reference_photo_url: it.reference_photo_url || null,
+                    reference_photo_source: it.reference_photo_source || null,
+                    cad_area_id: it.cad_area_id || null,
                 })),
             };
 
@@ -368,6 +587,17 @@ const SOPTemplateFormModal: React.FC<SOPTemplateFormModalProps> = ({ isOpen, onC
 
                 const data = await response.json();
                 if (!response.ok) throw new Error(data.error || 'Failed to update template');
+
+                try {
+                    if (typeof window !== 'undefined' && propertyId) {
+                        localStorage.removeItem(`sop_template_draft_${propertyId}`);
+                        localStorage.removeItem(`sop_template_modal_open_${propertyId}`);
+                        sessionStorage.removeItem(`sop_template_modal_open_${propertyId}`);
+                        sessionStorage.removeItem(`sop_editing_template_id_${propertyId}`);
+                        window.dispatchEvent(new Event('sop_draft_updated'));
+                    }
+                } catch {}
+                setIsDraftLoaded(false);
             } else {
                 // Create template
                 const response = await fetch(`/api/properties/${propertyId}/sop/templates`, {
@@ -378,10 +608,21 @@ const SOPTemplateFormModal: React.FC<SOPTemplateFormModalProps> = ({ isOpen, onC
 
                 const data = await response.json();
                 if (!response.ok) throw new Error(data.error || 'Failed to create template');
+
+                try {
+                    if (typeof window !== 'undefined' && propertyId) {
+                        localStorage.removeItem(`sop_template_draft_${propertyId}`);
+                        localStorage.removeItem(`sop_template_modal_open_${propertyId}`);
+                        sessionStorage.removeItem(`sop_template_modal_open_${propertyId}`);
+                        sessionStorage.removeItem(`sop_editing_template_id_${propertyId}`);
+                        window.dispatchEvent(new Event('sop_draft_updated'));
+                    }
+                } catch {}
+                setIsDraftLoaded(false);
             }
 
             onSuccess?.();
-            onClose();
+            handleCloseModal();
         } catch (err) {
             setToast({ message: err instanceof Error ? err.message : 'Error saving template', type: 'error' });
         } finally {
@@ -496,7 +737,7 @@ const SOPTemplateFormModal: React.FC<SOPTemplateFormModalProps> = ({ isOpen, onC
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 1 }}
                         exit={{ opacity: 0 }}
-                        onClick={onClose}
+                        onClick={handleCloseModal}
                         className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm"
                     />
 
@@ -520,12 +761,21 @@ const SOPTemplateFormModal: React.FC<SOPTemplateFormModalProps> = ({ isOpen, onC
                                     {template ? 'Edit Checklist' : 'Create Checklist'}<br className="sm:hidden" />
                                     <span className="sm:inline"> Template</span>
                                 </h2>
-                                <p className="text-slate-400 text-[10px] font-black uppercase tracking-widest mt-1">
-                                    Define standard procedures
-                                </p>
+                                <div className="flex items-center gap-2 mt-1 flex-wrap">
+                                    <p className="text-slate-400 text-[10px] font-black uppercase tracking-widest">
+                                        Define standard procedures
+                                    </p>
+                                    {!template && (
+                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200/50">
+                                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                                            Autosaved
+                                            {lastSavedAt ? ` · ${new Date(lastSavedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}
+                                        </span>
+                                    )}
+                                </div>
                             </div>
                             <button
-                                onClick={onClose}
+                                onClick={handleCloseModal}
                                 className="w-8 h-8 flex items-center justify-center bg-slate-100 text-slate-500 hover:bg-slate-200 rounded-full transition-all flex-shrink-0 mt-0.5"
                             >
                                 <X size={16} />
@@ -534,6 +784,25 @@ const SOPTemplateFormModal: React.FC<SOPTemplateFormModalProps> = ({ isOpen, onC
 
                         {/* Scrollable body */}
                         <div className="flex-1 overflow-y-auto px-5 pb-2 space-y-5">
+
+                            {/* Draft Restored Banner */}
+                            {!template && isDraftLoaded && (
+                                <div className="flex items-center justify-between px-3.5 py-2.5 bg-amber-500/10 border border-amber-500/25 rounded-2xl text-amber-900">
+                                    <div className="flex items-center gap-2 min-w-0">
+                                        <span className="w-2 h-2 rounded-full bg-amber-500 flex-shrink-0" />
+                                        <p className="text-xs font-semibold truncate">
+                                            Restored unsaved draft from your previous session
+                                        </p>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={handleDiscardDraft}
+                                        className="text-[11px] font-black uppercase tracking-wider text-amber-700 hover:text-rose-600 transition-colors ml-2 flex-shrink-0"
+                                    >
+                                        Discard
+                                    </button>
+                                </div>
+                            )}
 
                             {/* ── GENERAL INFORMATION ── */}
                             <div>
@@ -557,29 +826,31 @@ const SOPTemplateFormModal: React.FC<SOPTemplateFormModalProps> = ({ isOpen, onC
                                         />
                                     </div>
 
-                                    {/* CAD Configuration */}
-                                    <div className="flex items-center justify-between px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl">
-                                        <div className="flex items-center gap-2.5">
-                                            <div className="w-8 h-8 rounded-xl bg-primary/10 flex items-center justify-center">
-                                                <MapPin size={14} className="text-primary" />
+                                    {/* CAD Configuration (Only in AI-Enabled mode) */}
+                                    {isAIEnabled && (
+                                        <div className="flex items-center justify-between px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl">
+                                            <div className="flex items-center gap-2.5">
+                                                <div className="w-8 h-8 rounded-xl bg-primary/10 flex items-center justify-center">
+                                                    <MapPin size={14} className="text-primary" />
+                                                </div>
+                                                <div>
+                                                    <p className="text-xs font-black text-slate-900">CAD Floor Plan</p>
+                                                    <p className="text-[9px] text-slate-400 font-medium">
+                                                        {templateCADStatus?.hasCAD ? 'Configured — click to edit areas' : 'Upload floor plan & map areas to steps'}
+                                                    </p>
+                                                </div>
                                             </div>
-                                            <div>
-                                                <p className="text-xs font-black text-slate-900">CAD Floor Plan</p>
-                                                <p className="text-[9px] text-slate-400 font-medium">
-                                                    {templateCADStatus?.hasCAD ? 'Configured — click to edit areas' : 'Upload floor plan & map areas to steps'}
-                                                </p>
-                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={handleOpenCAD}
+                                                disabled={isLoading}
+                                                className="px-3 py-1.5 bg-primary text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-primary/90 transition-all flex items-center gap-1"
+                                            >
+                                                {isLoading ? <Loader2 size={10} className="animate-spin" /> : null}
+                                                {templateCADStatus?.hasCAD ? 'Edit CAD' : 'Upload CAD'}
+                                            </button>
                                         </div>
-                                        <button
-                                            type="button"
-                                            onClick={handleOpenCAD}
-                                            disabled={isLoading}
-                                            className="px-3 py-1.5 bg-primary text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-primary/90 transition-all flex items-center gap-1"
-                                        >
-                                            {isLoading ? <Loader2 size={10} className="animate-spin" /> : null}
-                                            {templateCADStatus?.hasCAD ? 'Edit CAD' : 'Upload CAD'}
-                                        </button>
-                                    </div>
+                                    )}
 
                                     <div>
                                         <label className={labelCls}>Description</label>
@@ -807,6 +1078,12 @@ const SOPTemplateFormModal: React.FC<SOPTemplateFormModalProps> = ({ isOpen, onC
                                                                     CAD Area
                                                                 </span>
                                                             )}
+                                                            {/* Parameters badge */}
+                                                            {Array.isArray(item.parameters) && item.parameters.length > 0 && (
+                                                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-purple-50 text-purple-700 border border-purple-200 rounded text-[9px] font-black uppercase tracking-wider">
+                                                                    {item.parameters.length} Parameter{item.parameters.length > 1 ? 's' : ''}
+                                                                </span>
+                                                            )}
                                                         </div>
                                                         {item.description && <p className="text-[10px] text-slate-400 font-medium truncate mt-0.5">{item.description}</p>}
                                                         {(item.start_time || item.end_time) && (
@@ -818,41 +1095,58 @@ const SOPTemplateFormModal: React.FC<SOPTemplateFormModalProps> = ({ isOpen, onC
                                                         )}
                                                     </div>
                                                     <div className="flex items-center gap-1 flex-shrink-0">
-                                                        {/* Reference photo upload & view button */}
-                                                        <>
-                                                            <input
-                                                                type="file"
-                                                                accept="image/*"
-                                                                className="hidden"
-                                                                id={`ref-photo-${idx}`}
-                                                                onChange={(e) => {
-                                                                    const file = e.target.files?.[0];
-                                                                    if (file) handleReferencePhotoUpload(idx, file);
-                                                                }}
-                                                            />
-                                                            <label
-                                                                htmlFor={`ref-photo-${idx}`}
-                                                                className={`p-2 rounded-xl transition-all cursor-pointer ${referencePhotoUploads[idx]?.uploading ? 'text-primary bg-primary/10' : item.reference_photo_url ? 'text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 bg-emerald-50/50' : 'text-slate-400 hover:text-primary hover:bg-primary/5 bg-white border border-slate-200'}`}
-                                                                title={item.reference_photo_url ? 'Change clean reference photo' : 'Upload clean reference photo'}
-                                                            >
-                                                                {referencePhotoUploads[idx]?.uploading ? (
-                                                                    <Loader2 size={14} className="animate-spin" />
-                                                                ) : (
-                                                                    <Camera size={14} />
-                                                                )}
-                                                            </label>
-                                                            {item.reference_photo_url && (
-                                                                <button
-                                                                    type="button"
-                                                                    onClick={() => handleRemoveReferencePhoto(idx)}
-                                                                    className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-xl transition-all"
-                                                                    title="Remove clean reference photo"
+                                                        {/* Reference photo upload & view button (AI mode only) */}
+                                                        {isAIEnabled && (
+                                                            <>
+                                                                <input
+                                                                    type="file"
+                                                                    accept="image/*"
+                                                                    className="hidden"
+                                                                    id={`ref-photo-${idx}`}
+                                                                    onChange={(e) => {
+                                                                        const file = e.target.files?.[0];
+                                                                        if (file) handleReferencePhotoUpload(idx, file);
+                                                                    }}
+                                                                />
+                                                                <label
+                                                                    htmlFor={`ref-photo-${idx}`}
+                                                                    className={`p-2 rounded-xl transition-all cursor-pointer ${referencePhotoUploads[idx]?.uploading ? 'text-primary bg-primary/10' : item.reference_photo_url ? 'text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 bg-emerald-50/50' : 'text-slate-400 hover:text-primary hover:bg-primary/5 bg-white border border-slate-200'}`}
+                                                                    title={item.reference_photo_url ? 'Change clean reference photo' : 'Upload clean reference photo'}
                                                                 >
-                                                                    <Trash2 size={14} />
-                                                                </button>
-                                                            )}
-                                                        </>
-                                                        <button type="button" onClick={() => { setNewItem(item); setEditingIndex(idx); setShowStepTimeSlot(!!(item.start_time || item.end_time)); }} className="p-2 text-slate-400 hover:text-primary hover:bg-primary/5 rounded-xl transition-all" title="Edit Step"><Edit3 size={14} /></button>
+                                                                    {referencePhotoUploads[idx]?.uploading ? (
+                                                                        <Loader2 size={14} className="animate-spin" />
+                                                                    ) : (
+                                                                        <Camera size={14} />
+                                                                    )}
+                                                                </label>
+                                                                {item.reference_photo_url && (
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => handleRemoveReferencePhoto(idx)}
+                                                                        className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-xl transition-all"
+                                                                        title="Remove clean reference photo"
+                                                                    >
+                                                                        <Trash2 size={14} />
+                                                                    </button>
+                                                                )}
+                                                            </>
+                                                        )}
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => {
+                                                                setNewItem({
+                                                                    ...item,
+                                                                    parameters: Array.isArray(item.parameters) ? [...item.parameters] : [],
+                                                                });
+                                                                setEditingIndex(idx);
+                                                                setShowStepTimeSlot(!!(item.start_time || item.end_time));
+                                                                setShowParametersSection(Array.isArray(item.parameters) && item.parameters.length > 0);
+                                                            }}
+                                                            className="p-2 text-slate-400 hover:text-primary hover:bg-primary/5 rounded-xl transition-all"
+                                                            title="Edit Step"
+                                                        >
+                                                            <Edit3 size={14} />
+                                                        </button>
                                                         <button type="button" onClick={() => handleRemoveItem(idx)} className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-xl transition-all" title="Delete Step"><Trash2 size={14} /></button>
                                                     </div>
                                                 </div>
@@ -887,7 +1181,93 @@ const SOPTemplateFormModal: React.FC<SOPTemplateFormModalProps> = ({ isOpen, onC
                                         </select>
                                     </div>
 
-                                    {/* Verification Requirements Removed - Optional for all steps per user request */}
+                                    {/* Checklist Parameters (Optional Sub-checks under this Step) */}
+                                    <div className="bg-white border border-slate-200 rounded-2xl p-3.5 space-y-3">
+                                        <div className="flex items-center justify-between">
+                                            <div>
+                                                <p className="text-[10px] font-black text-slate-800 uppercase tracking-widest">
+                                                    Parameters / Checkpoints <span className="normal-case text-[9px] text-slate-400 font-medium">(Optional)</span>
+                                                </p>
+                                                <p className="text-[9px] text-slate-400 font-medium mt-0.5">
+                                                    Sub-checks like Carpet, Lights, Dusting. No photo required for parameters.
+                                                </p>
+                                            </div>
+                                            {(!newItem.parameters || newItem.parameters.length === 0) && !showParametersSection ? (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setShowParametersSection(true)}
+                                                    className="text-[9px] font-black text-primary uppercase tracking-widest hover:underline px-1"
+                                                >
+                                                    + Add Parameters
+                                                </button>
+                                            ) : null}
+                                        </div>
+
+                                        {(showParametersSection || (newItem.parameters && newItem.parameters.length > 0)) && (
+                                            <div className="space-y-2 pt-1 border-t border-slate-100">
+                                                {/* List of drafted parameters */}
+                                                {newItem.parameters && newItem.parameters.length > 0 && (
+                                                    <div className="space-y-1.5 mb-2">
+                                                        {newItem.parameters.map((param, pIdx) => (
+                                                            <div key={param.id || pIdx} className="flex items-center justify-between px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl">
+                                                                <div className="flex items-center gap-2">
+                                                                    <span className="w-4 h-4 rounded-full bg-slate-200 text-slate-600 text-[8px] font-black flex items-center justify-center">
+                                                                        {pIdx + 1}
+                                                                    </span>
+                                                                    <span className="text-xs font-bold text-slate-800">{param.name}</span>
+                                                                    <span className="px-1.5 py-0.5 bg-white text-[8px] font-black text-slate-500 uppercase rounded border border-slate-100">
+                                                                        {param.type === 'yes_no' ? 'Yes / No' : param.type}
+                                                                    </span>
+                                                                </div>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => handleRemoveParam(param.id)}
+                                                                    className="text-slate-400 hover:text-rose-500 p-1 rounded-lg"
+                                                                    title="Remove parameter"
+                                                                >
+                                                                    <Trash2 size={12} />
+                                                                </button>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                )}
+
+                                                {/* Input row for adding a parameter */}
+                                                <div className="flex gap-2 items-center">
+                                                    <input
+                                                        type="text"
+                                                        placeholder="e.g. Carpet, Lights, Dusting"
+                                                        value={paramDraftName}
+                                                        onChange={(e) => setParamDraftName(e.target.value)}
+                                                        onKeyDown={(e) => {
+                                                            if (e.key === 'Enter') {
+                                                                e.preventDefault();
+                                                                handleAddParam();
+                                                            }
+                                                        }}
+                                                        className="flex-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:outline-none focus:border-primary"
+                                                    />
+                                                    <select
+                                                        value={paramDraftType}
+                                                        onChange={(e) => setParamDraftType(e.target.value as any)}
+                                                        className="w-28 px-2 py-2 bg-slate-50 border border-slate-200 rounded-xl text-[10px] font-black appearance-none focus:outline-none focus:border-primary"
+                                                    >
+                                                        <option value="yes_no">Yes / No</option>
+                                                        <option value="checkbox">Checkbox</option>
+                                                        <option value="text">Text</option>
+                                                        <option value="number">Number</option>
+                                                    </select>
+                                                    <button
+                                                        type="button"
+                                                        onClick={handleAddParam}
+                                                        className="px-3 py-2 bg-slate-900 text-white rounded-xl text-[10px] font-black uppercase tracking-wider hover:bg-slate-800 transition-all flex items-center gap-1 flex-shrink-0"
+                                                    >
+                                                        <Plus size={11} /> Add
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
 
                                     {/* Step-level time slot */}
                                     {!showStepTimeSlot ? (
@@ -924,7 +1304,7 @@ const SOPTemplateFormModal: React.FC<SOPTemplateFormModalProps> = ({ isOpen, onC
                                         {editingIndex !== null ? <><Check size={14} /> Update Step</> : <><Plus size={14} /> Add Step</>}
                                     </button>
                                     {editingIndex !== null && (
-                                        <button type="button" onClick={() => { setEditingIndex(null); setShowStepTimeSlot(false); setNewItem({ title: '', description: '', requires_photo: true, requires_comment: false, type: 'checkbox', is_optional: false, start_time: '', end_time: '' }); }}
+                                        <button type="button" onClick={() => { setEditingIndex(null); setShowStepTimeSlot(false); setShowParametersSection(false); setParamDraftName(''); setNewItem({ title: '', description: '', requires_photo: false, requires_comment: false, type: 'checkbox', is_optional: false, start_time: '', end_time: '', parameters: [] }); }}
                                             className="w-full text-[10px] font-black text-slate-400 py-1.5 hover:text-slate-600 uppercase tracking-widest transition-all">
                                             Cancel Editing
                                         </button>
@@ -938,10 +1318,18 @@ const SOPTemplateFormModal: React.FC<SOPTemplateFormModalProps> = ({ isOpen, onC
 
                         {/* Footer */}
                         <div className="flex items-center justify-between px-5 py-4 border-t border-slate-100 bg-white flex-shrink-0">
-                            <button type="button" onClick={onClose}
-                                className="text-slate-500 font-black uppercase tracking-widest text-[10px] hover:text-slate-800 transition-all px-2 py-2">
-                                Cancel
-                            </button>
+                            <div className="flex items-center gap-2">
+                                <button type="button" onClick={handleCloseModal}
+                                    className="text-slate-500 font-black uppercase tracking-widest text-[10px] hover:text-slate-800 transition-all px-2 py-2">
+                                    Cancel
+                                </button>
+                                {!template && isDraftLoaded && (
+                                    <button type="button" onClick={handleDiscardDraft}
+                                        className="text-rose-500 hover:text-rose-700 font-black uppercase tracking-widest text-[10px] transition-all px-2 py-2">
+                                        Discard Draft
+                                    </button>
+                                )}
+                            </div>
                             <button onClick={handleSubmit} disabled={isLoading}
                                 className="flex-1 ml-4 py-3 bg-slate-900 text-white rounded-2xl font-black uppercase tracking-widest text-[10px] hover:bg-slate-800 transition-all shadow-lg disabled:opacity-50">
                                 {isLoading ? 'Saving...' : template ? 'Save Changes' : 'Create Template'}
