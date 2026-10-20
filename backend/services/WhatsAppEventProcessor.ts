@@ -1767,6 +1767,19 @@ export const WhatsAppEventProcessor = {
         const propertyName = await this.getPropertyName(payload.property_id);
         const completedBy = await this.getUserDetails(payload.completed_by);
 
+        // Resolve assigned approver for this property/completion if configured
+        let approverId = payload.approver_id;
+        if (!approverId && payload.property_id) {
+            const { data: propSettings } = await supabaseAdmin
+                .from('checklist_property_settings')
+                .select('approver_user_id')
+                .eq('property_id', payload.property_id)
+                .maybeSingle();
+            if (propSettings?.approver_user_id) {
+                approverId = propSettings.approver_user_id;
+            }
+        }
+
         await this.dispatch({
             featureKey: 'checklist_completed',
             templateEventKey: 'checklist_completed',
@@ -1781,7 +1794,7 @@ export const WhatsAppEventProcessor = {
                 time: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })
             },
             summaryMessage: `Checklist "${payload.template_title}" completed at ${propertyName} by ${completedBy.name}`,
-            contextualUserIds: { requesterId: payload.completed_by }
+            contextualUserIds: { requesterId: payload.completed_by, approverId }
         });
     },
 

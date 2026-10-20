@@ -371,7 +371,7 @@ const MODULES_META: ModuleMeta[] = [
                 key: 'checklist_completed',
                 name: 'Checklist Completed & Submitted',
                 description: 'Sent to designated supervisors/property admins when checklist photos and items are submitted.',
-                hasContextual: { requester: true }
+                hasContextual: { approver: true, requester: true }
             },
             {
                 key: 'checklist_overdue_alert',
@@ -675,7 +675,7 @@ const DEFAULT_NOTIFICATION_MATRIX: NotificationMatrix = {
     checklists: {
         checklist_slot_reminder: { channels: { email: false, whatsapp: true, push: true }, roles: ['mst', 'staff'], user_ids: [], notify_assignee: true, reminder_minutes: 30 },
         checklist_started: { channels: { email: false, whatsapp: true, push: true }, roles: ['mst', 'staff'], user_ids: [], notify_assignee: true },
-        checklist_completed: { channels: { email: true, whatsapp: true, push: true }, roles: ['property_admin', 'soft_service_manager', 'soft_service_supervisor'], user_ids: [], notify_requester: true },
+        checklist_completed: { channels: { email: true, whatsapp: true, push: true }, roles: ['property_admin', 'soft_service_manager', 'soft_service_supervisor'], user_ids: [], notify_approver: true, notify_requester: true },
         checklist_overdue_alert: { channels: { email: true, whatsapp: true, push: true }, roles: ['property_admin', 'org_super_admin'], user_ids: [], notify_assignee: true },
         checklist_rated: { channels: { email: false, whatsapp: true, push: true }, roles: [], user_ids: [], notify_requester: true }
     },

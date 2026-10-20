@@ -99,6 +99,10 @@ export async function PUT(
                     is_mandatory: item.is_mandatory !== false,
                     start_time: item.start_time || null,
                     end_time: item.end_time || null,
+                    parameters: Array.isArray(item.parameters) ? item.parameters : [],
+                    reference_photo_url: item.reference_photo_url || null,
+                    reference_photo_source: item.reference_photo_source || null,
+                    cad_area_id: item.cad_area_id || null,
                 }));
 
                 const { error: itemsError } = await supabaseAdmin
