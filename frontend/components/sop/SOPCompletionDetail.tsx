@@ -47,41 +47,47 @@ const SOPCompletionDetail: React.FC<SOPCompletionDetailProps> = ({ completionId,
     const [aiScoring, setAiScoring] = useState<Record<string, boolean>>({});
     const [stepNotes, setStepNotes] = useState<Record<string, string>>({});
     const [approvingItemId, setApprovingItemId] = useState<string | null>(null);
+    const [isAIEnabled, setIsAIEnabled] = useState<boolean>(false);
+    const [isAutoEvaluating, setIsAutoEvaluating] = useState<boolean>(false);
+    const autoEvaluatedRef = React.useRef<Set<string>>(new Set());
     const supabase = React.useMemo(() => createClient(), []);
 
-    // Fire-and-forget AI cleanliness scoring after a photo is (re-)uploaded
-    const triggerAIScoring = useCallback((completionItemId: string) => {
+    // AI cleanliness & parameter scoring after a photo is uploaded or on auto-evaluation
+    const triggerAIScoring = useCallback(async (completionItemId: string) => {
         setAiScoring(prev => ({ ...prev, [completionItemId]: true }));
-        fetch(`/api/properties/${propertyId}/sop/completions/${completionId}/score-photo`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ completionItemId }),
-        })
-            .then(async (res) => {
-                const data = await res.json().catch(() => ({}));
-                if (res.ok) {
-                    setCompletion((prev: any) => prev ? ({
-                        ...prev,
-                        items: prev.items.map((it: any) =>
-                            it.id === completionItemId
-                                ? { 
-                                    ...it, 
-                                    ai_cleanliness_score: data.score, 
-                                    ai_cleanliness_reason: data.reason, 
-                                    ai_parameter_scores: data.parameters || data.parameterScores || it.ai_parameter_scores, 
-                                    ai_reference_used: data.referenceUsed, 
-                                    ai_analyzed_at: new Date().toISOString() 
-                                }
-                                : it
-                        ),
-                    }) : prev);
-                } else {
-                    console.warn('[AI Score] Scoring skipped:', data.error);
-                }
-            })
-            .catch((err) => console.warn('[AI Score] Request failed:', err))
-            .finally(() => setAiScoring(prev => ({ ...prev, [completionItemId]: false })));
-    }, [completionId, propertyId]);
+        try {
+            const propId = completion?.property_id || propertyId;
+            const res = await fetch(`/api/properties/${propId}/sop/completions/${completionId}/score-photo`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ completionItemId }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (res.ok && !data.skipped) {
+                setCompletion((prev: any) => prev ? ({
+                    ...prev,
+                    items: prev.items.map((it: any) =>
+                        it.id === completionItemId
+                            ? { 
+                                ...it, 
+                                ai_cleanliness_score: data.score, 
+                                ai_cleanliness_reason: data.reason, 
+                                ai_parameter_scores: data.parameters || data.parameterScores || it.ai_parameter_scores, 
+                                ai_reference_used: data.referenceUsed, 
+                                ai_analyzed_at: new Date().toISOString() 
+                            }
+                            : it
+                    ),
+                }) : prev);
+            } else {
+                console.warn('[AI Score] Scoring skipped:', data.error || data.reason);
+            }
+        } catch (err) {
+            console.warn('[AI Score] Request failed:', err);
+        } finally {
+            setAiScoring(prev => ({ ...prev, [completionItemId]: false }));
+        }
+    }, [completionId, propertyId, completion?.property_id]);
 
     const handleStepApproval = useCallback(async (itemId: string, status: 'approved' | 'rejected') => {
         setApprovingItemId(itemId);
@@ -130,6 +136,10 @@ const SOPCompletionDetail: React.FC<SOPCompletionDetailProps> = ({ completionId,
 
                 const data = json.completion;
 
+                if (typeof json.is_ai_enabled === 'boolean') {
+                    setIsAIEnabled(json.is_ai_enabled);
+                }
+
                 // Sort items by order_index
                 if (data.items) {
                     data.items.sort((a: any, b: any) =>
@@ -147,6 +157,62 @@ const SOPCompletionDetail: React.FC<SOPCompletionDetailProps> = ({ completionId,
 
         fetchDetail();
     }, [completionId, propertyId]);
+
+    // Ensure AI setting is synced with property settings
+    useEffect(() => {
+        const propId = completion?.property_id || propertyId;
+        if (!propId || propId === 'all' || propId === 'undefined') return;
+
+        fetch(`/api/properties/${propId}/checklist-settings`)
+            .then(res => res.json())
+            .then(data => {
+                if (data?.settings) {
+                    const mode = data.settings.checklist_mode || 'basic';
+                    const enabled = mode === 'advanced' || !!data.settings.ai_scoring_enabled;
+                    setIsAIEnabled(enabled);
+                }
+            })
+            .catch(err => console.warn('[AI Check] Property settings fetch error:', err));
+    }, [propertyId, completion?.property_id]);
+
+    // When AI enabled is ON, directly evaluate any completed item with photo that hasn't been scored yet (one-time only)
+    useEffect(() => {
+        if (!isAIEnabled || !completion?.items) return;
+
+        // One-time evaluation guard: only evaluate if photo exists and it has NOT been evaluated before
+        const unscoredItems = completion.items.filter(
+            (it: any) =>
+                it.photo_url &&
+                (it.ai_cleanliness_score === null || it.ai_cleanliness_score === undefined) &&
+                !it.ai_analyzed_at &&
+                !autoEvaluatedRef.current.has(it.id)
+        );
+
+        if (unscoredItems.length === 0) return;
+
+        let isCancelled = false;
+
+        const runAutoEvaluationQueue = async () => {
+            setIsAutoEvaluating(true);
+            try {
+                for (const it of unscoredItems) {
+                    if (isCancelled) break;
+                    autoEvaluatedRef.current.add(it.id);
+                    await triggerAIScoring(it.id);
+                }
+            } finally {
+                if (!isCancelled) {
+                    setIsAutoEvaluating(false);
+                }
+            }
+        };
+
+        runAutoEvaluationQueue();
+
+        return () => {
+            isCancelled = true;
+        };
+    }, [isAIEnabled, completion?.items, triggerAIScoring]);
 
     const handleRate = useCallback(async (itemId: string, rating: number) => {
         if (!currentUserId) return;
@@ -443,6 +509,64 @@ const SOPCompletionDetail: React.FC<SOPCompletionDetailProps> = ({ completionId,
                     />
                 </div>
             </div>
+
+            {/* AI Vision Cleanliness Summary Card (Only shown if AI is enabled for this property and there are photos) */}
+            {isAIEnabled && (() => {
+                const photoItems = effectiveItems.filter((it: any) => Boolean(it.photo_url));
+                if (photoItems.length === 0) return null;
+
+                const evaluatedItems = photoItems.filter((it: any) => it.ai_cleanliness_score !== null && it.ai_cleanliness_score !== undefined);
+                const avgScore = evaluatedItems.length > 0
+                    ? Math.round(evaluatedItems.reduce((acc: number, it: any) => acc + Number(it.ai_cleanliness_score || 0), 0) / evaluatedItems.length)
+                    : null;
+                const isStillEvaluating = isAutoEvaluating || photoItems.some((it: any) => aiScoring[it.id]);
+
+                return (
+                    <div className="bg-gradient-to-r from-violet-50/80 via-indigo-50/40 to-slate-50 border border-violet-200/70 rounded-xl p-3 md:p-3.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-2xs">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                            <div className="w-9 h-9 rounded-xl bg-violet-600 text-white flex items-center justify-center flex-shrink-0 shadow-sm">
+                                {isStillEvaluating ? (
+                                    <Loader2 size={18} className="animate-spin text-white" />
+                                ) : (
+                                    <Eye size={18} />
+                                )}
+                            </div>
+                            <div className="min-w-0">
+                                <div className="flex items-center gap-2">
+                                    <h4 className="text-[11px] md:text-xs font-black uppercase tracking-wider text-violet-950">
+                                        AI Vision Inspection
+                                    </h4>
+                                    <span className="px-2 py-0.5 rounded-full bg-violet-100 text-violet-700 text-[8px] font-black uppercase tracking-wider border border-violet-200">
+                                        AI Enabled
+                                    </span>
+                                </div>
+                                <p className="text-[10px] md:text-[11px] text-violet-700 font-medium truncate mt-0.5">
+                                    {isStillEvaluating
+                                        ? `Evaluating ${photoItems.length - evaluatedItems.length} photo${photoItems.length - evaluatedItems.length > 1 ? 's' : ''} in real-time with AI Vision...`
+                                        : avgScore !== null
+                                        ? `${evaluatedItems.length}/${photoItems.length} photo${photoItems.length > 1 ? 's' : ''} inspected · Average Cleanliness: ${avgScore}/100`
+                                        : `${photoItems.length} photo${photoItems.length > 1 ? 's' : ''} submitted`}
+                                </p>
+                            </div>
+                        </div>
+
+                        {avgScore !== null && (
+                            <div className="flex items-center gap-2 self-end sm:self-auto flex-shrink-0">
+                                <div className={`px-3 py-1.5 rounded-xl font-black text-xs flex items-center gap-1.5 shadow-2xs ${
+                                    avgScore >= 80 
+                                        ? 'bg-emerald-500 text-white' 
+                                        : avgScore >= 50 
+                                        ? 'bg-amber-500 text-white' 
+                                        : 'bg-rose-500 text-white'
+                                }`}>
+                                    <span className="text-[10px] uppercase tracking-wider opacity-90">AI Score:</span>
+                                    <span className="text-sm">{avgScore}/100</span>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                );
+            })()}
 
             {/* Overall Approver / Checker Review Banner */}
             {completion && (
@@ -809,8 +933,8 @@ const SOPCompletionDetail: React.FC<SOPCompletionDetailProps> = ({ completionId,
                                             </button>
                                         </div>
                                     </div>
-                                    {/* ── AI Cleanliness Score (On-Demand) ── */}
-                                    {item.photo_url && (
+                                    {/* ── AI Cleanliness Score & Parameter Evaluation ── */}
+                                    {item.photo_url && (isAIEnabled || (item.ai_cleanliness_score !== null && item.ai_cleanliness_score !== undefined)) && (
                                         <div className="mt-2 md:mt-3">
                                             {aiScoring[item.id] || (item.ai_cleanliness_score !== null && item.ai_cleanliness_score !== undefined) ? (() => {
                                                 const isScoring = aiScoring[item.id];
@@ -828,7 +952,7 @@ const SOPCompletionDetail: React.FC<SOPCompletionDetailProps> = ({ completionId,
                                                         {isScoring ? (
                                                             <div className="flex items-center gap-2">
                                                                 <Loader2 size={13} className="text-primary animate-spin flex-shrink-0" />
-                                                                <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest">AI analyzing cleanliness...</span>
+                                                                <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest">AI analyzing cleanliness & parameters...</span>
                                                             </div>
                                                         ) : (
                                                             <>
@@ -845,25 +969,30 @@ const SOPCompletionDetail: React.FC<SOPCompletionDetailProps> = ({ completionId,
                                                                         )}
                                                                     </div>
                                                                 </div>
-                                                                <button
-                                                                    onClick={() => triggerAIScoring(item.id)}
-                                                                    className="px-2 py-1 text-[8px] font-black uppercase tracking-widest bg-white hover:bg-slate-100 border border-slate-200 rounded-lg text-slate-600 flex-shrink-0 transition-all"
-                                                                >
-                                                                    Re-Audit
-                                                                </button>
+                                                                <div className="flex items-center gap-1 px-2.5 py-1 bg-white border border-slate-200 rounded-lg text-slate-500 text-[8px] font-black uppercase tracking-wider flex-shrink-0 shadow-2xs">
+                                                                    <ShieldCheck size={11} className="text-emerald-500" />
+                                                                    <span>Saved Audit</span>
+                                                                </div>
                                                             </>
                                                         )}
                                                     </div>
                                                 );
-                                            })() : (
-                                                <button
-                                                    onClick={() => triggerAIScoring(item.id)}
-                                                    className="w-full sm:w-auto flex items-center justify-center gap-1.5 px-3 py-2 bg-primary/10 hover:bg-primary/20 text-primary border border-primary/20 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all cursor-pointer"
-                                                >
-                                                    <Eye size={12} />
-                                                    <span>Audit Cleanliness (AI)</span>
-                                                </button>
-                                            )}
+                                            })() : isAIEnabled ? (
+                                                <div className="px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-2">
+                                                    <div className="flex items-center gap-2">
+                                                        <Loader2 size={13} className="text-primary animate-spin" />
+                                                        <span className="text-[9px] font-black uppercase tracking-widest text-slate-500">
+                                                            Evaluating with AI Vision...
+                                                        </span>
+                                                    </div>
+                                                    <button
+                                                        onClick={() => triggerAIScoring(item.id)}
+                                                        className="px-2 py-1 text-[8px] font-black uppercase tracking-widest bg-white hover:bg-slate-100 border border-slate-200 rounded-lg text-slate-600 transition-all"
+                                                    >
+                                                        Evaluate Now
+                                                    </button>
+                                                </div>
+                                            ) : null}
                                         </div>
                                     )}
 

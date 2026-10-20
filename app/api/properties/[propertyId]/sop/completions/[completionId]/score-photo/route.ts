@@ -82,7 +82,7 @@ export async function POST(
         // Load the completion item (field photo + checked_at capture timestamp)
         const { data: completionItem, error: itemError } = await supabaseAdmin
             .from('sop_completion_items')
-            .select('id, photo_url, checklist_item_id, checked_at')
+            .select('id, photo_url, checklist_item_id, checked_at, ai_cleanliness_score, ai_cleanliness_reason, ai_parameter_scores, ai_reference_used, ai_analyzed_at')
             .eq('id', completionItemId)
             .eq('completion_id', completionId)
             .maybeSingle();
@@ -93,6 +93,25 @@ export async function POST(
 
         if (!completionItem.photo_url) {
             return NextResponse.json({ error: 'No photo uploaded for this step yet' }, { status: 400 });
+        }
+
+        // Idempotency Guard: Completed/submitted checklist steps are evaluated one time only.
+        // Whichever user opens the checklist, reuse the saved score, reason, and parameters.
+        if (
+            completionItem.ai_cleanliness_score !== null &&
+            completionItem.ai_cleanliness_score !== undefined &&
+            !body.force
+        ) {
+            return NextResponse.json({
+                success: true,
+                already_evaluated: true,
+                score: completionItem.ai_cleanliness_score,
+                reason: completionItem.ai_cleanliness_reason || 'Cleanliness evaluation completed.',
+                pass: completionItem.ai_cleanliness_score >= 70,
+                parameters: completionItem.ai_parameter_scores || [],
+                parameterScores: completionItem.ai_parameter_scores || [],
+                referenceUsed: completionItem.ai_reference_used,
+            });
         }
 
         // Load the checklist item (reference config & sub-parameters)

@@ -82,10 +82,53 @@ export async function GET(
                 console.error('[GET healed completion error]:', healedError);
             }
 
-            return NextResponse.json({ success: true, completion: healed || completion });
+            const finalCompletion = healed || completion;
+            const effectivePropId = finalCompletion.property_id || propertyId;
+            let isAiEnabled = false;
+            if (effectivePropId && effectivePropId !== 'all' && effectivePropId !== 'undefined' && effectivePropId !== 'null') {
+                const { data: propSettings } = await supabaseAdmin
+                    .from('checklist_property_settings')
+                    .select('checklist_mode, ai_scoring_enabled')
+                    .eq('property_id', effectivePropId)
+                    .maybeSingle();
+
+                if (propSettings) {
+                    isAiEnabled = propSettings.checklist_mode === 'advanced' || propSettings.ai_scoring_enabled === true;
+                } else {
+                    const { data: prop } = await supabaseAdmin
+                        .from('properties')
+                        .select('checklist_mode')
+                        .eq('id', effectivePropId)
+                        .maybeSingle();
+                    isAiEnabled = prop?.checklist_mode === 'advanced';
+                }
+            }
+
+            return NextResponse.json({ success: true, completion: finalCompletion, is_ai_enabled: isAiEnabled });
         }
 
-        return NextResponse.json({ success: true, completion });
+        const effectivePropId = completion.property_id || propertyId;
+        let isAiEnabled = false;
+        if (effectivePropId && effectivePropId !== 'all' && effectivePropId !== 'undefined' && effectivePropId !== 'null') {
+            const { data: propSettings } = await supabaseAdmin
+                .from('checklist_property_settings')
+                .select('checklist_mode, ai_scoring_enabled')
+                .eq('property_id', effectivePropId)
+                .maybeSingle();
+
+            if (propSettings) {
+                isAiEnabled = propSettings.checklist_mode === 'advanced' || propSettings.ai_scoring_enabled === true;
+            } else {
+                const { data: prop } = await supabaseAdmin
+                    .from('properties')
+                    .select('checklist_mode')
+                    .eq('id', effectivePropId)
+                    .maybeSingle();
+                isAiEnabled = prop?.checklist_mode === 'advanced';
+            }
+        }
+
+        return NextResponse.json({ success: true, completion, is_ai_enabled: isAiEnabled });
     } catch (err) {
         return NextResponse.json(
             { error: err instanceof Error ? err.message : 'Unknown error' },

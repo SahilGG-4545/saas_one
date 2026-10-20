@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/frontend/utils/supabase/server';
+import { supabaseAdmin } from '@/backend/lib/supabase/admin';
 import Groq from 'groq-sdk';
 import sharp from 'sharp';
 import crypto from 'crypto';
@@ -11,6 +12,7 @@ import { extractActualImageTimestamp, getAllowedInspectionDates } from '@/lib/so
  * Allows uploading a clean reference benchmark photo and a test field photo
  * with configurable parameters to evaluate vision classification, scoring,
  * and timestamp detection in real-time.
+ * RESTRICTED: Accessible exclusively to Org Super Admins (org_super_admin, master_admin, ops_super_admin).
  */
 export async function POST(
     request: NextRequest,
@@ -23,6 +25,25 @@ export async function POST(
         const { data: { user }, error: authError } = await supabase.auth.getUser();
         if (authError || !user) {
             return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        // Enforce RBAC: Vision Lab is strictly restricted to Org Super Admins
+        const [profileRes, orgRes, propRes] = await Promise.all([
+            supabaseAdmin.from('users').select('is_master_admin').eq('id', user.id).maybeSingle(),
+            supabaseAdmin.from('organization_memberships').select('role').eq('user_id', user.id).eq('is_active', true),
+            supabaseAdmin.from('property_memberships').select('role').eq('user_id', user.id).eq('is_active', true),
+        ]);
+
+        const SUPER_ADMIN_ROLES = ['org_super_admin', 'master_admin', 'ops_super_admin'];
+        const isMasterAdmin = Boolean(profileRes.data?.is_master_admin || user.user_metadata?.is_master_admin);
+        const hasOrgSuperAdminRole = (orgRes.data || []).some(m => m.role && SUPER_ADMIN_ROLES.includes(m.role.toLowerCase()));
+        const hasPropSuperAdminRole = (propRes.data || []).some(m => m.role && SUPER_ADMIN_ROLES.includes(m.role.toLowerCase()));
+
+        if (!isMasterAdmin && !hasOrgSuperAdminRole && !hasPropSuperAdminRole) {
+            return NextResponse.json(
+                { error: 'Forbidden: Vision Lab is restricted to Org Super Admins only' },
+                { status: 403 }
+            );
         }
 
         const body = await request.json();
