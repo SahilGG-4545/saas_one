@@ -1,8 +1,9 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Sparkles, CheckSquare, ShieldCheck, UserCheck, Bell, Save, Loader2, Info, MapPin, Camera, Search, ChevronDown, Check, X, MessageSquare } from 'lucide-react';
+import { Sparkles, CheckSquare, ShieldCheck, UserCheck, Bell, Save, Loader2, Info, MapPin, Camera, Search, ChevronDown, Check, X, MessageSquare, FlaskConical } from 'lucide-react';
 import { Toast } from '@/frontend/components/ui/Toast';
+import { SOPVisionTestingModal } from './SOPVisionTestingModal';
 
 interface SOPChecklistSettingsSectionProps {
     propertyId: string;
@@ -41,6 +42,7 @@ export const SOPChecklistSettingsSection: React.FC<SOPChecklistSettingsSectionPr
     const [reminderEnabled, setReminderEnabled] = useState(true);
     const [reminderLeadTime, setReminderLeadTime] = useState<number>(15);
     const [reminderChannels, setReminderChannels] = useState<string[]>(['push']);
+    const [showVisionModal, setShowVisionModal] = useState(false);
 
     // Fetch initial settings
     useEffect(() => {
@@ -306,6 +308,31 @@ export const SOPChecklistSettingsSection: React.FC<SOPChecklistSettingsSectionPr
                         />
                     </div>
                 )}
+                {/* AI Vision Testing Sandbox Launcher */}
+                <div className="p-4 bg-gradient-to-r from-violet-50 to-indigo-50/70 rounded-2xl border border-violet-200/90 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+                    <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-xl bg-violet-600 text-white flex items-center justify-center flex-shrink-0 shadow-xs">
+                            <FlaskConical size={18} />
+                        </div>
+                        <div>
+                            <div className="flex items-center gap-2">
+                                <p className="text-xs font-black text-violet-950">AI Vision Testing Lab & Sandbox</p>
+                                <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-violet-200 text-violet-800">Interactive</span>
+                            </div>
+                            <p className="text-[11px] text-violet-700/80 font-medium">
+                                Upload clean reference photos against test photos, configure parameters, and test our vision scoring live.
+                            </p>
+                        </div>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => setShowVisionModal(true)}
+                        className="px-4 py-2.5 rounded-xl bg-violet-600 hover:bg-violet-700 text-white text-xs font-black uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-sm transition-all flex-shrink-0"
+                    >
+                        <Sparkles size={13} />
+                        <span>Open Vision Lab</span>
+                    </button>
+                </div>
             </div>
 
             {/* Section 2: Checker / Approver Configuration */}
@@ -593,6 +620,13 @@ export const SOPChecklistSettingsSection: React.FC<SOPChecklistSettingsSectionPr
                     Save Configuration
                 </button>
             </div>
+
+            {/* AI Vision Testing Modal */}
+            <SOPVisionTestingModal
+                isOpen={showVisionModal}
+                onClose={() => setShowVisionModal(false)}
+                propertyId={propertyId}
+            />
 
             {toast && (
                 <Toast

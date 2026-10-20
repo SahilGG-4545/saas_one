@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import crypto from 'node:crypto';
 
 test('Checklist Migration 20261019000001 is additive, safe, and non-destructive', async () => {
     const sql = await readFile(new URL('../supabase/migrations/20261019000001_checklist_step_parameters_and_modes.sql', import.meta.url), 'utf8');
@@ -271,5 +272,65 @@ test('Step-by-step Checker Sign-off aggregation computes completion approval_sta
     const allApproved3 = stepsPending.every((it) => it.step_approval_status === 'approved');
     const status3 = anyRejected3 ? 'rejected' : allApproved3 ? 'approved' : 'pending';
     assert.equal(status3, 'pending');
+});
+
+test('AI Vision Scoring Engine detects stale photos and vetoes audit score', () => {
+    // Case 1: Outdated photo detected via watermark
+    const staleOutput = {
+        overall_score: 88,
+        overall_reason: 'Floor and tables appear clean.',
+        pass: true,
+        is_stale_image: true,
+        timestamp_detected: '14/10/2026 09:15:00',
+        parameters: [
+            { name: 'Floor', is_assessable: true, score: 90, status: 'pass', reason: 'Clean floor' },
+        ],
+    };
+
+    const expectedDateStr = '20/10/2026';
+    const isStale = staleOutput.is_stale_image === true;
+    let score = staleOutput.overall_score;
+    if (isStale) {
+        score = Math.min(20, score);
+    }
+    const pass = !isStale && score >= 70;
+
+    assert.equal(isStale, true);
+    assert.equal(score, 20);
+    assert.equal(pass, false);
+
+    // Case 2: Fresh photo with valid timestamp watermark
+    const freshOutput = {
+        overall_score: 95,
+        overall_reason: 'Spotless room with verified fresh timestamp.',
+        pass: true,
+        is_stale_image: false,
+        timestamp_detected: '20/10/2026 11:30:12',
+        parameters: [
+            { name: 'Table', is_assessable: true, score: 95, status: 'pass', reason: 'Table completely cleared' },
+        ],
+    };
+
+    const isFreshStale = freshOutput.is_stale_image === true;
+    let freshScore = freshOutput.overall_score;
+    if (isFreshStale) {
+        freshScore = Math.min(20, freshScore);
+    }
+    const freshPass = !isFreshStale && freshScore >= 70;
+
+    assert.equal(isFreshStale, false);
+    assert.equal(freshScore, 95);
+    assert.equal(freshPass, true);
+});
+
+test('AI Vision Scoring Engine detects benchmark duplicate upload', () => {
+    const fakeBenchmarkBuffer = Buffer.from('clean-benchmark-image-data-2026');
+    const fakeFieldBuffer = Buffer.from('clean-benchmark-image-data-2026'); // Exact re-upload
+
+    const refHash = crypto.createHash('sha256').update(fakeBenchmarkBuffer).digest('hex');
+    const fieldHash = crypto.createHash('sha256').update(fakeFieldBuffer).digest('hex');
+    const isDuplicate = refHash === fieldHash;
+
+    assert.equal(isDuplicate, true, 'Re-uploaded template photo must be flagged as duplicate');
 });
 

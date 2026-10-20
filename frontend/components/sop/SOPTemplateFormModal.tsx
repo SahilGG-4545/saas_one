@@ -276,7 +276,8 @@ const SOPTemplateFormModal: React.FC<SOPTemplateFormModalProps> = ({ isOpen, onC
                     savedAt: now,
                 };
                 localStorage.setItem(`sop_template_draft_${propertyId}`, JSON.stringify(draft));
-                localStorage.setItem(`sop_template_modal_open_${propertyId}`, 'true');
+                sessionStorage.setItem(`sop_template_modal_open_${propertyId}`, 'true');
+                try { localStorage.removeItem(`sop_template_modal_open_${propertyId}`); } catch {}
                 setLastSavedAt(now);
                 setIsDraftLoaded(true);
                 window.dispatchEvent(new Event('sop_draft_updated'));
@@ -293,6 +294,8 @@ const SOPTemplateFormModal: React.FC<SOPTemplateFormModalProps> = ({ isOpen, onC
             if (typeof window !== 'undefined' && propertyId) {
                 localStorage.removeItem(`sop_template_draft_${propertyId}`);
                 localStorage.removeItem(`sop_template_modal_open_${propertyId}`);
+                sessionStorage.removeItem(`sop_template_modal_open_${propertyId}`);
+                sessionStorage.removeItem(`sop_editing_template_id_${propertyId}`);
                 window.dispatchEvent(new Event('sop_draft_updated'));
             }
         } catch {}
@@ -327,6 +330,8 @@ const SOPTemplateFormModal: React.FC<SOPTemplateFormModalProps> = ({ isOpen, onC
         try {
             if (typeof window !== 'undefined' && propertyId) {
                 localStorage.removeItem(`sop_template_modal_open_${propertyId}`);
+                sessionStorage.removeItem(`sop_template_modal_open_${propertyId}`);
+                sessionStorage.removeItem(`sop_editing_template_id_${propertyId}`);
             }
         } catch {}
         onClose();
@@ -520,6 +525,8 @@ const SOPTemplateFormModal: React.FC<SOPTemplateFormModalProps> = ({ isOpen, onC
                     if (typeof window !== 'undefined' && propertyId) {
                         localStorage.removeItem(`sop_template_draft_${propertyId}`);
                         localStorage.removeItem(`sop_template_modal_open_${propertyId}`);
+                        sessionStorage.removeItem(`sop_template_modal_open_${propertyId}`);
+                        sessionStorage.removeItem(`sop_editing_template_id_${propertyId}`);
                         window.dispatchEvent(new Event('sop_draft_updated'));
                     }
                 } catch {}
@@ -580,6 +587,17 @@ const SOPTemplateFormModal: React.FC<SOPTemplateFormModalProps> = ({ isOpen, onC
 
                 const data = await response.json();
                 if (!response.ok) throw new Error(data.error || 'Failed to update template');
+
+                try {
+                    if (typeof window !== 'undefined' && propertyId) {
+                        localStorage.removeItem(`sop_template_draft_${propertyId}`);
+                        localStorage.removeItem(`sop_template_modal_open_${propertyId}`);
+                        sessionStorage.removeItem(`sop_template_modal_open_${propertyId}`);
+                        sessionStorage.removeItem(`sop_editing_template_id_${propertyId}`);
+                        window.dispatchEvent(new Event('sop_draft_updated'));
+                    }
+                } catch {}
+                setIsDraftLoaded(false);
             } else {
                 // Create template
                 const response = await fetch(`/api/properties/${propertyId}/sop/templates`, {
@@ -595,6 +613,8 @@ const SOPTemplateFormModal: React.FC<SOPTemplateFormModalProps> = ({ isOpen, onC
                     if (typeof window !== 'undefined' && propertyId) {
                         localStorage.removeItem(`sop_template_draft_${propertyId}`);
                         localStorage.removeItem(`sop_template_modal_open_${propertyId}`);
+                        sessionStorage.removeItem(`sop_template_modal_open_${propertyId}`);
+                        sessionStorage.removeItem(`sop_editing_template_id_${propertyId}`);
                         window.dispatchEvent(new Event('sop_draft_updated'));
                     }
                 } catch {}

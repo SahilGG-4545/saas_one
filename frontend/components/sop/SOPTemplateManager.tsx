@@ -76,22 +76,42 @@ const SOPTemplateManager: React.FC<SOPTemplateManagerProps> = ({ propertyId, pro
         return () => window.removeEventListener('sop_draft_updated', checkDraft);
     }, [checkDraft]);
 
-    // Restore modal if user refreshed while modal was open
+    // Restore modal if user refreshed while modal was open (scoped to current browser tab session only)
     useEffect(() => {
         if (!propertyId || typeof window === 'undefined') return;
-        const wasOpen = localStorage.getItem(`sop_template_modal_open_${propertyId}`) === 'true';
-        const draftRaw = localStorage.getItem(`sop_template_draft_${propertyId}`);
-        if (wasOpen && draftRaw) {
-            try {
-                const parsed = JSON.parse(draftRaw);
-                if (parsed.formData?.title || (parsed.items && parsed.items.length > 0) || parsed.newItem?.title) {
-                    setEditingTemplate(null);
-                    setAiPrefill(null);
-                    setShowFormModal(true);
+
+        // Clean up legacy permanent localStorage key so it never unexpectedly forces the modal open
+        try {
+            localStorage.removeItem(`sop_template_modal_open_${propertyId}`);
+        } catch {}
+
+        try {
+            const wasOpen = sessionStorage.getItem(`sop_template_modal_open_${propertyId}`) === 'true';
+            const editingId = sessionStorage.getItem(`sop_editing_template_id_${propertyId}`);
+            const draftRaw = localStorage.getItem(`sop_template_draft_${propertyId}`);
+
+            if (wasOpen) {
+                if (editingId && templates.length > 0) {
+                    const match = templates.find(t => t.id === editingId);
+                    if (match) {
+                        setEditingTemplate(match);
+                        setAiPrefill(null);
+                        setShowFormModal(true);
+                        return;
+                    }
                 }
-            } catch {}
-        }
-    }, [propertyId]);
+
+                if (draftRaw) {
+                    const parsed = JSON.parse(draftRaw);
+                    if (parsed.formData?.title || (parsed.items && parsed.items.length > 0) || parsed.newItem?.title) {
+                        setEditingTemplate(null);
+                        setAiPrefill(null);
+                        setShowFormModal(true);
+                    }
+                }
+            }
+        } catch {}
+    }, [propertyId, templates]);
 
     useEffect(() => {
         const id = setInterval(() => setLiveNow(new Date()), 1000);
@@ -306,7 +326,9 @@ const SOPTemplateManager: React.FC<SOPTemplateManagerProps> = ({ propertyId, pro
                                 setAiPrefill(null);
                                 setShowFormModal(true);
                                 if (propertyId && typeof window !== 'undefined') {
-                                    localStorage.setItem(`sop_template_modal_open_${propertyId}`, 'true');
+                                    sessionStorage.setItem(`sop_template_modal_open_${propertyId}`, 'true');
+                                    sessionStorage.removeItem(`sop_editing_template_id_${propertyId}`);
+                                    try { localStorage.removeItem(`sop_template_modal_open_${propertyId}`); } catch {}
                                 }
                             }}
                             className="flex items-center gap-1 px-2.5 md:px-3 py-1.5 bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition-all shadow-sm font-black uppercase tracking-widest text-[8px] md:text-[9px] flex-shrink-0"
@@ -350,7 +372,9 @@ const SOPTemplateManager: React.FC<SOPTemplateManagerProps> = ({ propertyId, pro
                                 setAiPrefill(null);
                                 setShowFormModal(true);
                                 if (propertyId && typeof window !== 'undefined') {
-                                    localStorage.setItem(`sop_template_modal_open_${propertyId}`, 'true');
+                                    sessionStorage.setItem(`sop_template_modal_open_${propertyId}`, 'true');
+                                    sessionStorage.removeItem(`sop_editing_template_id_${propertyId}`);
+                                    try { localStorage.removeItem(`sop_template_modal_open_${propertyId}`); } catch {}
                                 }
                             }}
                             className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold transition-all shadow-sm flex items-center gap-1"
@@ -363,6 +387,8 @@ const SOPTemplateManager: React.FC<SOPTemplateManagerProps> = ({ propertyId, pro
                                     try {
                                         localStorage.removeItem(`sop_template_draft_${propertyId}`);
                                         localStorage.removeItem(`sop_template_modal_open_${propertyId}`);
+                                        sessionStorage.removeItem(`sop_template_modal_open_${propertyId}`);
+                                        sessionStorage.removeItem(`sop_editing_template_id_${propertyId}`);
                                     } catch {}
                                     checkDraft();
                                 }
@@ -634,7 +660,16 @@ const SOPTemplateManager: React.FC<SOPTemplateManagerProps> = ({ propertyId, pro
                                                         </button>
                                                     )}
                                                     <button
-                                                        onClick={(e) => { e.stopPropagation(); setEditingTemplate(template); setShowFormModal(true); }}
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            setEditingTemplate(template);
+                                                            setShowFormModal(true);
+                                                            if (propertyId && typeof window !== 'undefined') {
+                                                                sessionStorage.setItem(`sop_template_modal_open_${propertyId}`, 'true');
+                                                                sessionStorage.setItem(`sop_editing_template_id_${propertyId}`, template.id);
+                                                                try { localStorage.removeItem(`sop_template_modal_open_${propertyId}`); } catch {}
+                                                            }
+                                                        }}
                                                         className="p-1.5 text-slate-300 hover:text-primary hover:bg-primary/5 rounded-lg transition-all"
                                                         title="Edit Template"
                                                     >
@@ -774,7 +809,9 @@ const SOPTemplateManager: React.FC<SOPTemplateManagerProps> = ({ propertyId, pro
                                         setAiPrefill(null);
                                         setShowFormModal(true);
                                         if (propertyId && typeof window !== 'undefined') {
-                                            localStorage.setItem(`sop_template_modal_open_${propertyId}`, 'true');
+                                            sessionStorage.setItem(`sop_template_modal_open_${propertyId}`, 'true');
+                                            sessionStorage.removeItem(`sop_editing_template_id_${propertyId}`);
+                                            try { localStorage.removeItem(`sop_template_modal_open_${propertyId}`); } catch {}
                                         }
                                     }}
                                     className="flex items-center gap-2 px-5 md:px-6 py-3 md:py-4 bg-primary text-white rounded-xl md:rounded-2xl hover:opacity-90 transition-all shadow-xl shadow-primary/20 font-black uppercase tracking-widest text-[10px] md:text-xs"
@@ -796,7 +833,11 @@ const SOPTemplateManager: React.FC<SOPTemplateManagerProps> = ({ propertyId, pro
                     setEditingTemplate(null);
                     setAiPrefill(null);
                     if (propertyId && typeof window !== 'undefined') {
-                        localStorage.removeItem(`sop_template_modal_open_${propertyId}`);
+                        try {
+                            localStorage.removeItem(`sop_template_modal_open_${propertyId}`);
+                            sessionStorage.removeItem(`sop_template_modal_open_${propertyId}`);
+                            sessionStorage.removeItem(`sop_editing_template_id_${propertyId}`);
+                        } catch {}
                     }
                     checkDraft();
                 }}

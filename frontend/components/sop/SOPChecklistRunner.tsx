@@ -53,7 +53,7 @@ const SOPChecklistRunner: React.FC<SOPChecklistRunnerProps> = ({ templateId, com
     const [userNames, setUserNames] = useState<Record<string, string>>({});
     const [currentUser, setCurrentUser] = useState<any>(null);
 
-    const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+    const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
     const [liveNow, setLiveNow] = useState(() => new Date());
     const supabase = React.useMemo(() => createClient(), []);
     const hasInitialized = React.useRef(false);
@@ -209,12 +209,6 @@ const SOPChecklistRunner: React.FC<SOPChecklistRunnerProps> = ({ templateId, com
             try {
                 setIsLoading(true);
 
-                // Refresh session to prevent timeout
-                const { data: { session }, error: sessionError } = await supabase.auth.refreshSession();
-                if (sessionError) {
-                    console.warn('SOPChecklistRunner: Session refresh warning:', sessionError.message);
-                }
-
                 const { data: { user } } = await supabase.auth.getUser();
                 setCurrentUser(user);
                 console.log('SOPChecklistRunner: User fetched', user?.id);
@@ -313,23 +307,8 @@ const SOPChecklistRunner: React.FC<SOPChecklistRunnerProps> = ({ templateId, com
 
         initializeChecklist();
 
-        // Periodic session refresh every 5 minutes to prevent timeout on long checklists
-        const sessionRefreshInterval = setInterval(async () => {
-            try {
-                const { error: refreshError } = await supabase.auth.refreshSession();
-                if (refreshError) {
-                    console.warn('[SOPChecklistRunner] Periodic session refresh failed:', refreshError.message);
-                } else {
-                    console.log('[SOPChecklistRunner] Session refreshed successfully');
-                }
-            } catch (err) {
-                console.warn('[SOPChecklistRunner] Periodic session refresh error:', err);
-            }
-        }, 5 * 60 * 1000); // 5 minutes
-
         return () => {
             clearTimeout(timeoutId);
-            clearInterval(sessionRefreshInterval);
         };
     }, [templateId, completionId, propertyId, completionDate]);
 
@@ -389,8 +368,6 @@ const SOPChecklistRunner: React.FC<SOPChecklistRunnerProps> = ({ templateId, com
             setCompletion({ ...completion, items: optimisticItems });
             setItemValues({ ...itemValues, [itemId]: newValue });
 
-            // Refresh session before API call to prevent timeout
-            await supabase.auth.refreshSession();
 
             const validPropId = (!propertyId || propertyId === 'undefined' || propertyId === 'null' || propertyId === 'all') ? null : propertyId;
             const resolvedPropId = validPropId || completion?.property_id || template?.property_id;
@@ -514,44 +491,9 @@ const SOPChecklistRunner: React.FC<SOPChecklistRunnerProps> = ({ templateId, com
         }
     };
 
-    const stampTimestamp = (file: File): Promise<File> => new Promise((resolve) => {
-        const originalLastModified = file.lastModified; // Capture before any async work
-        const img = new Image();
-        img.onload = () => {
-            const canvas = document.createElement('canvas');
-            const maxSize = 1024;
-            let w = img.width, h = img.height;
-            if (w > h && w > maxSize) { h = (h * maxSize) / w; w = maxSize; }
-            else if (h > maxSize) { w = (w * maxSize) / h; h = maxSize; }
-            canvas.width = w; canvas.height = h;
-            const ctx = canvas.getContext('2d')!;
-            ctx.drawImage(img, 0, 0, w, h);
-            // Use the file's own lastModified time (= actual capture time)
-            const capturedAt = new Date(originalLastModified);
-            const ts = capturedAt.toLocaleString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).replace(',', '');
-            const fontSize = Math.max(14, Math.round(w * 0.028));
-            ctx.font = `bold ${fontSize}px monospace`;
-            const pad = Math.round(fontSize * 0.5);
-            const tw = ctx.measureText(ts).width;
-            const x = w - tw - pad * 2;
-            const y = h - fontSize - pad * 2;
-            ctx.fillStyle = 'rgba(0,0,0,0.55)';
-            ctx.beginPath();
-            ctx.roundRect(x, y, tw + pad * 2, fontSize + pad * 2, 4);
-            ctx.fill();
-            ctx.fillStyle = '#ffffff';
-            ctx.fillText(ts, x + pad, y + fontSize + pad * 0.6);
-            canvas.toBlob(blob => {
-                // Preserve original lastModified so subsequent reads still get the correct capture time
-                resolve(blob ? new File([blob], file.name.replace(/\.\w+$/, '.webp'), { type: 'image/webp', lastModified: originalLastModified }) : file);
-            }, 'image/webp', 0.88);
-        };
-        img.src = URL.createObjectURL(file);
-    });
-
     const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>, itemId: string) => {
         const file = e.target.files?.[0];
-        // Pass original file directly — handlePhotoCapture will stamp the timestamp
+        // Pass original file directly — gallery uploads preserve original capture metadata
         if (file) handlePhotoCapture(file, itemId);
     };
 
@@ -576,10 +518,28 @@ const SOPChecklistRunner: React.FC<SOPChecklistRunnerProps> = ({ templateId, com
                         ...prev,
                         items: prev.items.map((i: any) =>
                             i.id === completionItemId
-                                ? { ...i, ai_cleanliness_score: data.score, ai_cleanliness_reason: data.reason, ai_reference_used: data.referenceUsed, ai_analyzed_at: new Date().toISOString() }
+                                ? {
+                                    ...i,
+                                    ai_cleanliness_score: data.score,
+                                    ai_cleanliness_reason: data.reason,
+                                    ai_parameter_scores: data.parameters || data.parameterScores || [],
+                                    ai_reference_used: data.referenceUsed,
+                                    ai_analyzed_at: new Date().toISOString()
+                                }
                                 : i
                         ),
                     } : prev);
+
+                    if (data.pass === false || (typeof data.score === 'number' && data.score < 70)) {
+                        setToast({
+                            message: data.is_stale_image
+                                ? (data.timestamp_detected
+                                    ? `Old photo / Gallery upload detected (${data.timestamp_detected}). Please tap Retake to capture a live photo.`
+                                    : 'Old photo detected: Please tap Retake to capture a fresh live photo.')
+                                : 'Action needed: Please review AI feedback and tap Retake.',
+                            type: 'error'
+                        });
+                    }
                 } else {
                     console.warn('[AI Score] Scoring skipped:', data.error);
                 }
@@ -614,8 +574,9 @@ const SOPChecklistRunner: React.FC<SOPChecklistRunnerProps> = ({ templateId, com
 
         try {
             // STEP 2: Process (compress) in background - user sees original during this time
-            const stamped = await stampTimestamp(file);
-            const compressedFile = await compressImage(stamped);
+            // Option B: Live camera captures already have the live verification watermark stamped.
+            // Gallery uploads are NOT fake-watermarked so their actual gallery origin is preserved.
+            const compressedFile = await compressImage(file);
 
             // Store file for retry functionality
             pendingFiles.current[uploadKey] = { file: compressedFile, type: 'photo', itemId: targetItemId };
@@ -648,15 +609,17 @@ const SOPChecklistRunner: React.FC<SOPChecklistRunnerProps> = ({ templateId, com
                         {
                             completionId: completion.id,
                             completionItemId: String(item.id),
+                            originalFileName: file.name,
+                            fileLastModified: String(file.lastModified),
                         },
                         (progress) => setUploadProgress(prev => ({ ...prev, [uploadKey]: { progress, retrying: attempt > 0 } }))
                     );
 
-                    // Success - save photo URL to database
+                    // Success - save photo URL and checked_at timestamp to database
                     const photoRes = await fetch(`/api/properties/${resolvedPropId}/sop/completions/${completion.id}`, {
                         method: 'PUT',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ item: { completionItemId: item.id, photo_url: data.url } }),
+                        body: JSON.stringify({ item: { completionItemId: item.id, photo_url: data.url, checked_at: photoTakenAt } }),
                     });
                     if (!photoRes.ok) throw new Error('Failed to save photo URL');
 
@@ -1312,40 +1275,103 @@ const SOPChecklistRunner: React.FC<SOPChecklistRunnerProps> = ({ templateId, com
                                 </div>
                             )}
 
-                            {/* AI Cleanliness Score */}
+                            {/* AI Cleanliness & Timestamp Audit Card */}
                             {completionItem?.photo_url && !completionItem?._isLocalPreview && (() => {
                                 const isScoring = aiScoring[completionItem.id];
                                 const score = completionItem.ai_cleanliness_score;
+                                const reason = completionItem.ai_cleanliness_reason;
                                 if (!isScoring && (score === null || score === undefined)) return null;
 
-                                const scoreColor = score >= 80
-                                    ? { bg: 'bg-emerald-50', border: 'border-emerald-200', text: 'text-emerald-600', badge: 'bg-emerald-500' }
-                                    : score >= 50
-                                        ? { bg: 'bg-amber-50', border: 'border-amber-200', text: 'text-amber-600', badge: 'bg-amber-500' }
-                                        : { bg: 'bg-rose-50', border: 'border-rose-200', text: 'text-rose-600', badge: 'bg-rose-500' };
+                                const isPass = typeof score === 'number' && score >= 70;
+                                const isNeedsAttention = typeof score === 'number' && score >= 40 && score < 70;
+
+                                const cardTheme = isPass
+                                    ? { bg: 'bg-emerald-50/70', border: 'border-emerald-200', text: 'text-emerald-700', badge: 'bg-emerald-500', title: 'Audit Passed · Cleanliness Verified' }
+                                    : isNeedsAttention
+                                        ? { bg: 'bg-amber-50/70', border: 'border-amber-200', text: 'text-amber-700', badge: 'bg-amber-500', title: 'Needs Attention · Minor Issues' }
+                                        : { bg: 'bg-rose-50/70', border: 'border-rose-200', text: 'text-rose-700', badge: 'bg-rose-500', title: 'Action Required · Audit Failed' };
+
+                                // Parse sub-parameters if present
+                                const paramScores: any[] = Array.isArray(completionItem.ai_parameter_scores)
+                                    ? completionItem.ai_parameter_scores
+                                    : typeof completionItem.ai_parameter_scores === 'string'
+                                        ? (() => { try { return JSON.parse(completionItem.ai_parameter_scores); } catch { return []; } })()
+                                        : [];
 
                                 return (
-                                    <div className={`mx-4 mb-3 px-3 py-2.5 rounded-2xl border ${isScoring ? 'bg-slate-50 border-slate-200' : `${scoreColor.bg} ${scoreColor.border}`} flex items-center gap-2.5`}>
+                                    <div className={`mx-4 mb-3 rounded-2xl border ${isScoring ? 'bg-slate-50 border-slate-200 p-3' : `${cardTheme.bg} ${cardTheme.border} p-3.5`} transition-all shadow-xs`}>
                                         {isScoring ? (
-                                            <>
-                                                <Loader2 size={14} className="text-primary animate-spin flex-shrink-0" />
-                                                <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">AI analyzing cleanliness...</span>
-                                            </>
-                                        ) : (
-                                            <>
-                                                <div className={`w-8 h-8 rounded-xl ${scoreColor.badge} flex items-center justify-center flex-shrink-0`}>
-                                                    <span className="text-xs font-black text-white">{score}</span>
+                                            <div className="flex items-center gap-2.5">
+                                                <Loader2 size={16} className="text-primary animate-spin flex-shrink-0" />
+                                                <div className="min-w-0">
+                                                    <p className="text-[10px] font-black text-slate-700 uppercase tracking-widest">AI verifying cleanliness & timestamp...</p>
+                                                    <p className="text-[9px] text-slate-500">Checking clutter, surface hygiene, and live timestamp watermark</p>
                                                 </div>
-                                                <div className="flex-1 min-w-0">
-                                                    <p className={`text-[10px] font-black uppercase tracking-widest ${scoreColor.text}`}>
-                                                        AI Cleanliness Score
-                                                        {completionItem.ai_reference_used === 'cad' ? ' · vs CAD' : ' · vs Reference'}
-                                                    </p>
-                                                    {completionItem.ai_cleanliness_reason && (
-                                                        <p className="text-[10px] text-slate-500 font-medium leading-snug mt-0.5">{completionItem.ai_cleanliness_reason}</p>
+                                            </div>
+                                        ) : (
+                                            <div className="space-y-2.5">
+                                                {/* Header with Score Badge, Status Title, and Retake Shortcut */}
+                                                <div className="flex items-center justify-between gap-2.5">
+                                                    <div className="flex items-center gap-2 min-w-0">
+                                                        <div className={`w-8 h-8 rounded-xl ${cardTheme.badge} flex items-center justify-center flex-shrink-0 shadow-xs`}>
+                                                            <span className="text-xs font-black text-white">{score}</span>
+                                                        </div>
+                                                        <div className="min-w-0">
+                                                            <span className={`text-[10px] font-black uppercase tracking-wider block ${cardTheme.text}`}>
+                                                                {cardTheme.title}
+                                                            </span>
+                                                            <span className="text-[9px] text-slate-400 font-medium">
+                                                                {completionItem.ai_reference_used === 'cad' ? 'CAD Blueprint Match' : 'Reference Standard Match'}
+                                                            </span>
+                                                        </div>
+                                                    </div>
+
+                                                    {/* Retake shortcut if failed */}
+                                                    {!isPass && (
+                                                        <button
+                                                            onClick={() => { setActiveCameraItemId(item.id); setShowCameraModal(true); }}
+                                                            className="px-2.5 py-1 text-[9px] font-black uppercase tracking-wider bg-white hover:bg-rose-50 text-rose-600 border border-rose-200 rounded-lg flex items-center gap-1 shadow-2xs transition-all flex-shrink-0"
+                                                        >
+                                                            <RefreshCw size={11} />
+                                                            <span>Retake</span>
+                                                        </button>
                                                     )}
                                                 </div>
-                                            </>
+
+                                                {/* Plain Language Explanation: What was detected */}
+                                                {reason && (
+                                                    <div className="bg-white/80 rounded-xl p-2.5 border border-slate-200/60">
+                                                        <p className="text-[11px] text-slate-700 font-medium leading-relaxed">
+                                                            {reason}
+                                                        </p>
+                                                    </div>
+                                                )}
+
+                                                {/* Parameter Breakdown Chips */}
+                                                {paramScores.length > 0 && (
+                                                    <div className="pt-0.5 flex flex-wrap gap-1.5">
+                                                        {paramScores.map((p: any, idx: number) => {
+                                                            const pPass = p.status === 'pass';
+                                                            const pFail = p.status === 'fail';
+                                                            return (
+                                                                <span
+                                                                    key={idx}
+                                                                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[9px] font-bold border ${
+                                                                        pPass
+                                                                            ? 'bg-emerald-100/60 text-emerald-800 border-emerald-200'
+                                                                            : pFail
+                                                                                ? 'bg-rose-100/70 text-rose-800 border-rose-200'
+                                                                                : 'bg-slate-100 text-slate-600 border-slate-200'
+                                                                    }`}
+                                                                >
+                                                                    <span className={`w-1.5 h-1.5 rounded-full ${pPass ? 'bg-emerald-500' : pFail ? 'bg-rose-500' : 'bg-slate-400'}`} />
+                                                                    {p.name}: {pPass ? 'OK' : pFail ? 'Issue' : 'N/A'}
+                                                                </span>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                )}
+                                            </div>
                                         )}
                                     </div>
                                 );

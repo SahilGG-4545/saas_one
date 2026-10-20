@@ -68,7 +68,7 @@ const SOPCompletionDetail: React.FC<SOPCompletionDetailProps> = ({ completionId,
                                     ...it, 
                                     ai_cleanliness_score: data.score, 
                                     ai_cleanliness_reason: data.reason, 
-                                    ai_parameter_scores: data.parameterScores || it.ai_parameter_scores, 
+                                    ai_parameter_scores: data.parameters || data.parameterScores || it.ai_parameter_scores, 
                                     ai_reference_used: data.referenceUsed, 
                                     ai_analyzed_at: new Date().toISOString() 
                                 }
@@ -868,17 +868,26 @@ const SOPCompletionDetail: React.FC<SOPCompletionDetailProps> = ({ completionId,
                                     )}
 
                                     {/* Parameter by Parameter Cleanliness Breakdown */}
-                                    {Array.isArray(item.ai_parameter_scores) && item.ai_parameter_scores.length > 0 && (
-                                        <div className="mt-2.5 bg-white/90 rounded-xl border border-slate-200/90 p-3 shadow-2xs">
-                                            <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-2 flex items-center justify-between">
-                                                <span>Parameter Inspection Breakdown ({item.ai_parameter_scores.length})</span>
-                                                <span className="text-slate-400 font-semibold lowercase">qwen-vision verified</span>
-                                            </p>
-                                            <div className="space-y-1.5">
-                                                {item.ai_parameter_scores.map((param: any, pIdx: number) => {
-                                                    const isPass = param.status === 'pass';
-                                                    const isFail = param.status === 'fail';
-                                                    const isNA = !param.is_assessable || param.status === 'unassessable';
+                                    {(() => {
+                                        const paramScores: any[] = Array.isArray(item.ai_parameter_scores)
+                                            ? item.ai_parameter_scores
+                                            : typeof item.ai_parameter_scores === 'string'
+                                                ? (() => { try { return JSON.parse(item.ai_parameter_scores); } catch { return []; } })()
+                                                : [];
+
+                                        if (paramScores.length === 0) return null;
+
+                                        return (
+                                            <div className="mt-2.5 bg-white/90 rounded-xl border border-slate-200/90 p-3 shadow-2xs">
+                                                <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-2 flex items-center justify-between">
+                                                    <span>Parameter Inspection Breakdown ({paramScores.length})</span>
+                                                    <span className="text-slate-400 font-semibold lowercase">qwen-vision verified</span>
+                                                </p>
+                                                <div className="space-y-1.5">
+                                                    {paramScores.map((param: any, pIdx: number) => {
+                                                        const isPass = param.status === 'pass';
+                                                        const isFail = param.status === 'fail';
+                                                        const isNA = !param.is_assessable || param.status === 'unassessable';
 
                                                     return (
                                                         <div key={pIdx} className="p-2 rounded-lg bg-slate-50 border border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
@@ -912,7 +921,8 @@ const SOPCompletionDetail: React.FC<SOPCompletionDetailProps> = ({ completionId,
                                                 })}
                                             </div>
                                         </div>
-                                    )}
+                                    );
+                                })()}
 
                                     {/* ── Satisfaction Rating ── */}
                                     {isCompleted && (
