@@ -39,7 +39,10 @@ export async function buildBrainContext(emp: Employee, phone: string, opts: { pe
         sender: person(emp),
         people: [...people.values()],
         assignableIds: (isSuper ? pool : permitted).map(e => e.id).filter(id => id !== emp.id),
-        tasks: rows.map(t => ({ n: t.listNumber, id: t.id, title: t.title, status: t.status, ...(t.isCarriedForward ? { from: t.assigned_date } : {}) })),
+        tasks: rows.map(t => ({ n: t.listNumber, id: t.id, title: t.title, status: t.status, ...(t.isCarriedForward ? { from: t.assigned_date } : {}),
+            // Owner 2026-10-20: lock state, the same rule as the Tasks tab (own active fixed template = locked; no owner = team fixed).
+            ...(t.template && t.template.owner_id === emp.id && t.template.is_active ? { locked: true } : {}),
+            ...(t.template && !t.template.owner_id && t.template.task_type === 'fixed' ? { teamFixed: true } : {}) })),
         departments: departments.map(d => d.name),
         noteTargets: given.map(t => ({ id: t.id, title: t.title, ownerId: t.employee_id, ownerName: pool.find(e => e.id === t.employee_id)?.name ?? 'Unknown', date: t.assigned_date })),
         pending: opts.pending,

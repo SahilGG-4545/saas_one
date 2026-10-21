@@ -153,6 +153,15 @@ const shortDay = (d: string) => `${Number(d.slice(8, 10))} ${MONTHS_SHORT[Number
 
 const HANDOVER_NOTE_PREFIX = 'Given by ';
 
+/** Owner 2026-10-21: an optional note given with a task (Give to / assign). One line, at most 300 characters. */
+function cleanNote(note: unknown): string {
+    const n = String(note ?? '').replace(/\s+/g, ' ').trim();
+    if (n.length > 300) throw new WorkspaceError(400, 'The note is too long (300 characters at most).');
+    return n;
+}
+/** How a task reads in the WhatsApp alert and the bell when it carries a note (the approved templates have no Note line). */
+export const withNoteLabel = (title: string, note: string | null | undefined) => (note ? `${title} (Note: ${note})` : title);
+
 /** The person named in the LAST "Given by <name> on <day>" line, or null. */
 export function handedOverByOf(description: string | null | undefined): string | null {
     const lines = String(description || '').split('\n').map(l => l.trim()).filter(l => l.startsWith(HANDOVER_NOTE_PREFIX));
@@ -433,10 +442,12 @@ export class WorkspaceService {
         await sendTaskAssigned(target.phone_number, { titles, fromLabel: personLabel(actor.name, actor.department_name), date, departmentId: target.department_id || undefined });
     }
 
-    static async assign(actorUserId: string, input: { targetUserId?: string; title?: string; description?: string; date?: string; notify?: boolean }): Promise<TaskAssignment> {
+    static async assign(actorUserId: string, input: { targetUserId?: string; title?: string; description?: string; date?: string; notify?: boolean; note?: string }): Promise<TaskAssignment> {
         const title = (input.title || '').trim();
         if (title.length < 1 || title.length > 200) throw new WorkspaceError(400, 'Task title must be 1 to 200 characters.');
-        const description = (input.description || '').trim();
+        // Owner 2026-10-21: an optional note is saved as a "Remark:" line and shown in the alert.
+        const note = cleanNote(input.note);
+        const description = [(input.description || '').trim(), note ? `Remark: ${note}` : ''].filter(Boolean).join('\n');
         if (description.length > 1000) throw new WorkspaceError(400, 'Details can be at most 1000 characters.');
         if (!input.targetUserId) throw new WorkspaceError(400, 'Choose who the task is for.');
         const date = isDate(input.date) ? input.date : todayIST();
@@ -470,8 +481,8 @@ export class WorkspaceService {
         // Tell the assignee (never for your own list) with the approved template. Goes through the safety gate, so nothing is
         // sent in Pretend Mode. notify:false = the caller sends ONE grouped alert for several tasks (alertAssigned).
         if (input.notify !== false && target.id !== actor.id) {
-            void taskBell({ userId: target.id, kind: 'TASK_ASSIGNED', title: `New task from ${actor.name}`, message: `${actor.name} gave you: ${task.title}`, departmentName: target.department_name });
-            void sendTaskAssigned(target.phone_number, { titles: [task.title], fromLabel: personLabel(actor.name, actor.department_name), date: task.assigned_date, departmentId: target.department_id || undefined });
+            void taskBell({ userId: target.id, kind: 'TASK_ASSIGNED', title: `New task from ${actor.name}`, message: `${actor.name} gave you: ${withNoteLabel(task.title, note)}`, departmentName: target.department_name });
+            void sendTaskAssigned(target.phone_number, { titles: [withNoteLabel(task.title, note)], fromLabel: personLabel(actor.name, actor.department_name), date: task.assigned_date, departmentId: target.department_id || undefined });
         }
 
         return task;
@@ -485,9 +496,10 @@ export class WorkspaceService {
      * (the shared PermissionService rule) and be unlocked for the Task Manager · the move is one conditional
      * update, so two clicks at the same moment cannot both win.
      */
-    static async handOver(actorUserId: string, input: { taskId?: string; targetUserId?: string }): Promise<{ task: TaskAssignment; toName: string }> {
+    static async handOver(actorUserId: string, input: { taskId?: string; targetUserId?: string; note?: string }): Promise<{ task: TaskAssignment; toName: string }> {
         if (!input.taskId) throw new WorkspaceError(400, 'Missing task.');
         if (!input.targetUserId) throw new WorkspaceError(400, 'Choose who to give the task to.');
+        const giveNote = cleanNote(input.note);       // owner 2026-10-21: optional note for the new holder
 
         const actor = await this.requireUnlockedActor(actorUserId);
         if (input.targetUserId === actor.id) throw new WorkspaceError(400, 'That task is already yours. Choose a teammate.', 'SAME_PERSON');
@@ -513,7 +525,7 @@ export class WorkspaceService {
         // The new holder has not started it, so "in progress" goes back to "to do". Keep a short trail on the card.
         const newStatus: TaskStatus = row.status === 'in_progress' ? 'pending' : (row.status as TaskStatus);
         const note = `${HANDOVER_NOTE_PREFIX}${actor.name} on ${shortDay(todayIST())}`;
-        const base = ((row.description as string) || '').trim();
+        const base = [((row.description as string) || '').trim(), giveNote ? `Remark: ${giveNote}` : ''].filter(Boolean).join('\n');
         const joined = base ? `${base}\n${note}` : note;
         const description = joined.length <= 1000 ? joined : base || null;
 
@@ -542,14 +554,14 @@ export class WorkspaceService {
             actorId: actor.id,
             targetEmployeeId: target.id,
             taskId: row.id,
-            details: { title: row.title, assignedDate: row.assigned_date, fromUserId: actor.id, toUserId: target.id, fromStatus: row.status, toStatus: newStatus, via: 'web_tasks_tab' },
+            details: { title: row.title, assignedDate: row.assigned_date, fromUserId: actor.id, toUserId: target.id, fromStatus: row.status, toStatus: newStatus, via: 'web_tasks_tab', ...(giveNote ? { note: giveNote } : {}) },
         });
 
         // Tell the receiver who gave it (names only; gated, so nothing is sent in Pretend Mode). Never blocks the hand-over.
         // Approved template, so it reaches people outside WhatsApp's 24-hour window too.
-        void taskBell({ userId: target.id, kind: 'TASK_HANDOVER', title: `Task handed over by ${actor.name}`, message: `${actor.name} handed over: ${row.title}`, departmentName: target.department_name });
+        void taskBell({ userId: target.id, kind: 'TASK_HANDOVER', title: `Task handed over by ${actor.name}`, message: `${actor.name} handed over: ${withNoteLabel(row.title, giveNote)}`, departmentName: target.department_name });
         void sendTaskHandover(target.phone_number, {
-            recipientName: target.name, fromLabel: personLabel(actor.name, actor.department_name), titles: [row.title], date: row.assigned_date,
+            recipientName: target.name, fromLabel: personLabel(actor.name, actor.department_name), titles: [withNoteLabel(row.title as string, giveNote)], date: row.assigned_date,
             departmentId: target.department_id || undefined,
         });
 

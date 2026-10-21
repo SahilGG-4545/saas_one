@@ -37,8 +37,15 @@ async function run() {
     const mkI = (intent: string, slots: any, summary: string) => ({ intent, slots, summary });
     const note = (hints: string[], person: string | null, text: string | null, numbers: number[] = []) =>
         mkI('add_note', { which: { all: false, numbers, hints }, person, note: text }, 'Add a note to a task');
-    const interps = (msg: string): any => {
+    const interps = (msg: string, pending = ''): any => {
         const m = msg.toLowerCase(), has = (s: string) => m.includes(s);
+        // Owner 2026-10-21: a note when giving or assigning
+        const draft = pending.startsWith('UNFINISHED REQUEST');
+        if (draft && has('call the vendor first')) return mkI('hand_over_task', { which: { all: false, numbers: [2], hints: [] }, to: 'Vidya', note: 'call the vendor first' }, 'Give task 2 to Vidya with a note');
+        if (draft && has('align with accounts')) return mkI('create_tasks', { assignee: 'Vidya', tasks: [{ title: 'Vendor follow-up', details: 'align with accounts' }], date: null }, 'Add a task for Vidya with a note');
+        if (has('give task 2 to vidya, note:')) return mkI('hand_over_task', { which: { all: false, numbers: [2], hints: [] }, to: 'Vidya', note: 'call the vendor first' }, 'Give task 2 to Vidya with a note');
+        if (has('give task 2 to vidya, add note')) return mkI('hand_over_task', { which: { all: false, numbers: [2], hints: [] }, to: 'Vidya', note: null, wants_note: true }, 'Give task 2 to Vidya');
+        if (has('assign vidya vendor follow-up, add note')) return mkI('create_tasks', { assignee: 'Vidya', tasks: [{ title: 'Vendor follow-up', details: null }], date: null, wants_note: true }, 'Add a task for Vidya');
         const remindI = (hints: string[], person: string | null, overdueOnly = false) => mkI('remind_tasks', { which: { all: false, numbers: [], hints }, person, overdue_only: overdueOnly }, 'Remind');
         if (has('remind vidya about onboarding')) return remindI(['onboarding'], 'Vidya');
         if (has('remind about onboarding')) return remindI(['onboarding'], null);
@@ -77,7 +84,7 @@ async function run() {
             const u = JSON.parse(req.user);
             if (/Reply with JSON only: \{"text"/.test(req.system)) return { text: JSON.stringify({ text: replyFor(u) }), tokensIn: 5, tokensOut: 5 };
             w.prompts.push(u);
-            return { text: JSON.stringify({ confidence: 0.95, language: 'en', ambiguities: [], clarify_question: null, ...interps(u.message) }), tokensIn: 10, tokensOut: 8 };
+            return { text: JSON.stringify({ confidence: 0.95, language: 'en', ambiguities: [], clarify_question: null, ...interps(u.message, String(u.context?.pending || '')) }), tokensIn: 10, tokensOut: 8 };
         } };
         w.io = {
             getSmartChatDepartments: async () => new Set(['d1']), getConfig: async () => ({ enabled: false, employees: [] }), getEmployee: async () => emp, checkAccess: async () => ({ allowed: true }),
@@ -89,8 +96,8 @@ async function run() {
             brain: { llm },
             exec: {
                 setStatus: async () => undefined,
-                assign: async (a: string, i: any) => { w.exec.push(['assign', a, i.targetUserId, i.title, i.description]); },
-                handOver: async () => { w.exec.push(['handover']); return { toName: 'x' }; },
+                assign: async (a: string, i: any) => { w.exec.push(['assign', a, i.targetUserId, i.title, i.description ?? (i.note ? `Remark: ${i.note}` : undefined)]); },
+                handOver: async (a: string, id: string, to: string, note?: string) => { w.exec.push(['handover', a, id, to, note ?? null]); return { toName: 'Vidya Nair' }; },
                 addNote: async (a: string, taskId: string, text: string) => { w.exec.push(['note', a, taskId, text]); },
                 remindTasks: async (a: string, ids: string[]) => { w.exec.push(['remind', a, ids]); return { reminded: [{ name: 'Vidya Nair', count: ids.length }], skipped: [] }; },
                 readPerson: async () => '', readInsight: async () => '',
@@ -201,6 +208,30 @@ async function run() {
     w = mk();
     await turn(w, 'remind harsh');
     check('nothing given to Harsh → says so, nothing sent', !w.state?.data.action && w.exec.length === 0 && w.state?.data.lastOutcome === 'REFUSE', w.state?.data);
+
+    console.log('\n8. A note when giving a task (2026-10-21)');
+    w = mk();
+    await turn(w, 'give task 2 to vidya, note: call the vendor first');
+    check('the preview shows the note, nothing moved yet', /Note: call the vendor first/.test(last(w)) && w.state?.data.action?.note === 'call the vendor first' && w.exec.length === 0, { sent: last(w), action: w.state?.data.action });
+    await turn(w, 'yes');
+    check('yes → handed over WITH the note (the alert and the task carry it)', JSON.stringify(w.exec) === JSON.stringify([['handover', 'u1', 't2', 'u2', 'call the vendor first']]), w.exec);
+    check('the reply shows the note', /Note: call the vendor first/.test(last(w)), last(w));
+    w = mk();
+    await turn(w, 'give task 2 to vidya, add note');
+    check('only "add note" → the bot asks what the note should say, nothing moved', w.state?.data.lastOutcome === 'CLARIFY' && w.exec.length === 0 && w.state?.data.pending?.kind === 'draft', { sent: last(w), state: w.state?.data });
+    const facts: any = (await import('../brain/tasksDomain')).tasksDomain.replyFacts({ outcome: 'CLARIFY', reason: 'note_missing', options: [], detail: 'Vidya Nair' } as any, world('default') as any);
+    check('its question: "What note should I add for Vidya?"', facts?.fallback === 'What note should I add for Vidya?', facts?.fallback);
+    await turn(w, 'call the vendor first');
+    check('the answer finishes the request → preview with the note', /Note: call the vendor first/.test(last(w)) && w.state?.data.action?.type === 'hand_over_task', { sent: last(w), action: w.state?.data.action });
+
+    console.log('\n9. A note when assigning a new task');
+    w = mk();
+    await turn(w, 'assign vidya vendor follow-up, add note');
+    check('only "add note" → asks what the note should say, nothing saved', w.state?.data.lastOutcome === 'CLARIFY' && w.state?.data.pending?.kind === 'draft' && w.exec.length === 0, w.state?.data);
+    await turn(w, 'align with accounts');
+    check('→ preview with the note', /Vendor follow-up \(note: align with accounts\)/.test(last(w)), last(w));
+    await turn(w, 'yes');
+    check('yes → saved for Vidya with the note', JSON.stringify(w.exec) === JSON.stringify([['assign', 'u1', 'u2', 'Vendor follow-up', 'Remark: align with accounts']]), w.exec);
 
     check('\nnothing in this test touched the network', net.length === 0, net);
     console.log(failures === 0 ? '\n🎉 NOTES (SMART CHAT) TESTS PASSED\n' : `\n❌ ${failures} FAILED\n`);

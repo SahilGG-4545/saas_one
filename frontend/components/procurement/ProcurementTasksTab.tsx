@@ -94,7 +94,7 @@ export default function ProcurementTasksTab({ departmentName = 'Procurement' }: 
     const [filter, setFilter] = useState<Filter>('all');
     const [dialog, setDialog] = useState<{ open: boolean; target: string | null }>({ open: false, target: null });
 
-    const { ws, ok, loading, refreshing, error, toasts, dismissToast, reload, moveTask, addTask, giveTask, deleteTask, setLocked, flagDependency, editTask } = useWorkspace(range.from, departmentName, range.to);
+    const { ws, ok, loading, refreshing, error, toasts, dismissToast, reload, moveTask, addTask, giveTask, deleteTask, setLocked, flagDependency, editTask, giveMany, addNote } = useWorkspace(range.from, departmentName, range.to);
 
     // The board shows only MY tasks; the Team tab is where other people's tasks live.
     const mine: WTask[] = useMemo(() => (ok ? ok.tasks.filter(t => t.ownerId === ok.actor.userId) : []), [ok]);
@@ -141,7 +141,7 @@ export default function ProcurementTasksTab({ departmentName = 'Procurement' }: 
     const openDialog = (target: string | null) => setDialog({ open: true, target });
     const quickAdd = (title: string) => addTask({ targetUserId: meId, title, date });
     // "Give to…": the teammates the server says I may give work to (never myself)
-    const give = { people: ok.assignable.filter(a => !a.isMe), onGive: giveTask };
+    const give = { people: ok.assignable.filter(a => !a.isMe), onGive: giveTask, onGiveMany: giveMany, onAddNote: addNote };
     // Owner 2026-10-19: "Pending on…" a colleague (they are told; they still cannot see my board).
     const pending = { people: ok.dependencyPeople || [], onFlag: flagDependency };
 
