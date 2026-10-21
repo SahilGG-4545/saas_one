@@ -7,13 +7,20 @@ import {
     type CollisionDetection, type DragEndEvent, type DragStartEvent,
 } from '@dnd-kit/core';
 import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from 'framer-motion';
-import { ArrowRightLeft, Check, Clock, GripVertical, Loader2, Lock, MoveRight, Plus, Trash2, Unlock, UserCheck } from 'lucide-react';
+import { ArrowRightLeft, Check, Clock, Eye, GripVertical, Loader2, Lock, MoveRight, Plus, Trash2, Unlock, UserCheck } from 'lucide-react';
 import { COLUMNS, ColumnDef, EASE, Status, WAssignable, WTask, avatarGradient, initials, shortDate, shortDateTime } from './types';
-import GiveTo from './GiveTo';
+import TaskView from './TaskView';
 import PendingOn from './PendingOn';
 
-/** What the card needs to offer "Give to…": the teammates I may give work to, and the action. */
-interface GiveProps { people: WAssignable[]; onGive: (taskId: string, userId: string, name: string) => Promise<boolean> }
+/** What the task window needs to offer "Give to…": the teammates I may give work to, and the actions. */
+interface GiveProps {
+    people: WAssignable[];
+    onGive: (taskId: string, userId: string, name: string) => Promise<boolean>;
+    /** Owner 2026-10-21: give to one or more people with an optional note. */
+    onGiveMany?: (taskId: string, people: WAssignable[], note: string) => Promise<boolean>;
+    /** Owner 2026-10-21: add a note to a task. */
+    onAddNote?: (taskId: string, note: string) => Promise<boolean>;
+}
 
 /** "Pending on…" (owner 2026-10-19): colleagues I can tell that one of my tasks is waiting on them. */
 export interface PendingProps { people: Array<{ userId: string; name: string }>; onFlag: (taskId: string, userId: string, name: string) => Promise<boolean> }
@@ -36,13 +43,13 @@ const collision: CollisionDetection = args => {
 };
 
 /* ── The card's look. Used for the real card AND the ghost that follows the cursor. ─────────────── */
-function CardBody({ task, meId, floating = false, give, pending, onDelete, onLock }: { task: WTask; meId: string; floating?: boolean; give?: GiveProps; pending?: PendingProps; onDelete?: (id: string) => void; onLock?: (id: string, locked: boolean) => void }) {
+function CardBody({ task, meId, floating = false, pending, onDelete, onLock, onView }: { task: WTask; meId: string; floating?: boolean; pending?: PendingProps; onDelete?: (id: string) => void; onLock?: (id: string, locked: boolean) => void; onView?: (id: string) => void }) {
     const done = task.status === 'completed';
     const carried = task.isCarriedForward;
     const mine = task.ownerId === meId;
     const tone = cardTone(task);
     const canDelete = task.canDelete !== false;
-    const showGive = !!(!floating && give && task.canHandOver && give.people.length > 0);
+    const showView = !floating && !!onView;
     const showPending = !floating && !!pending && mine && !done && pending.people.length > 0;
 
     return (
@@ -128,20 +135,24 @@ function CardBody({ task, meId, floating = false, give, pending, onDelete, onLoc
                 </p>
             )}
 
-            {showGive && (
-                <GiveTo
-                    taskTitle={task.title}
-                    people={give!.people}
-                    onGive={(userId, name) => give!.onGive(task.id, userId, name)}
-                />
-            )}
-            {showPending && (
-                <div className={`flex flex-wrap ${showGive ? 'mt-1' : 'mt-3 border-t border-zinc-100 pt-2.5 dark:border-zinc-800'}`}>
+            {(showView || showPending) && (
+                <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t border-zinc-100 pt-2.5 dark:border-zinc-800">
+                    {/* Owner 2026-10-21: only this button opens the task window; the card itself still drags. */}
+                    {showView && (
+                        <button
+                            type="button" aria-label={`View or assign ${task.title}`}
+                            onClick={e => { e.stopPropagation(); onView!(task.id); }}
+                            onMouseDown={e => e.stopPropagation()} onTouchStart={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()}
+                            className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-[11px] font-black text-indigo-700 transition-colors hover:bg-indigo-100 dark:border-indigo-900/60 dark:bg-indigo-950/40 dark:text-indigo-300 dark:hover:bg-indigo-950/70"
+                        ><Eye className="h-3.5 w-3.5" aria-hidden="true" /> View / Assign</button>
+                    )}
+                    {showPending && (
                     <PendingOn
                         taskTitle={task.title}
                         people={pending!.people}
                         onFlag={(userId, name) => pending!.onFlag(task.id, userId, name)}
                     />
+                    )}
                 </div>
             )}
         </div>
@@ -149,7 +160,7 @@ function CardBody({ task, meId, floating = false, give, pending, onDelete, onLoc
 }
 
 /* ── One draggable card ──────────────────────────────────────────────────────────────────────── */
-function TaskCard({ task, meId, onMove, reduce, give, pending, onDelete, onLock }: { task: WTask; meId: string; onMove: (id: string, s: Status) => void; reduce: boolean; give?: GiveProps; pending?: PendingProps; onDelete: (id: string) => void; onLock?: (id: string, locked: boolean) => void }) {
+function TaskCard({ task, meId, onMove, reduce, pending, onDelete, onLock, onView }: { task: WTask; meId: string; onMove: (id: string, s: Status) => void; reduce: boolean; pending?: PendingProps; onDelete: (id: string) => void; onLock?: (id: string, locked: boolean) => void; onView?: (id: string) => void }) {
     const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: task.id, disabled: !task.canChange });
     const index = COLUMNS.findIndex(c => c.id === task.status);
 
@@ -177,7 +188,7 @@ function TaskCard({ task, meId, onMove, reduce, give, pending, onDelete, onLock 
             aria-label={`${task.title}. ${COLUMNS[index]?.label}. ${task.canChange ? 'Drag, or press the left and right arrow keys, to move it.' : 'You cannot move this task.'}`}
             className="rounded-2xl outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-50 dark:focus-visible:ring-offset-zinc-950 touch-manipulation"
         >
-            <CardBody task={task} meId={meId} give={give} pending={pending} onDelete={onDelete} onLock={onLock} />
+            <CardBody task={task} meId={meId} pending={pending} onDelete={onDelete} onLock={onLock} onView={onView} />
         </motion.div>
     );
 }
@@ -215,9 +226,9 @@ function QuickAdd({ onAdd }: { onAdd: (title: string) => Promise<boolean> }) {
 }
 
 /* ── One column (a drop target) ──────────────────────────────────────────────────────────────── */
-function Column({ def, tasks, meId, onMove, onQuickAdd, onDelete, onLock, reduce, dragging, give, pending }: {
+function Column({ def, tasks, meId, onMove, onQuickAdd, onDelete, onLock, reduce, dragging, pending, onView }: {
     def: ColumnDef; tasks: WTask[]; meId: string; onMove: (id: string, s: Status) => void;
-    onQuickAdd?: (title: string) => Promise<boolean>; onDelete: (id: string) => void; onLock?: (id: string, locked: boolean) => void; reduce: boolean; dragging: boolean; give?: GiveProps; pending?: PendingProps;
+    onQuickAdd?: (title: string) => Promise<boolean>; onDelete: (id: string) => void; onLock?: (id: string, locked: boolean) => void; reduce: boolean; dragging: boolean; pending?: PendingProps; onView?: (id: string) => void;
 }) {
     const { setNodeRef, isOver } = useDroppable({ id: def.id });
 
@@ -237,7 +248,7 @@ function Column({ def, tasks, meId, onMove, onQuickAdd, onDelete, onLock, reduce
                 className={`min-h-0 flex-1 space-y-2.5 overflow-y-auto rounded-2xl p-1 transition-all duration-200 ${isOver ? `ring-2 ring-offset-0 ${def.glow}` : dragging ? 'ring-1 ring-dashed ring-zinc-300 dark:ring-zinc-700' : ''}`}
             >
                 <AnimatePresence initial={false}>
-                    {tasks.map(t => <TaskCard key={t.id} task={t} meId={meId} onMove={onMove} reduce={reduce} give={give} pending={pending} onDelete={onDelete} onLock={onLock} />)}
+                    {tasks.map(t => <TaskCard key={t.id} task={t} meId={meId} onMove={onMove} reduce={reduce} pending={pending} onDelete={onDelete} onLock={onLock} onView={onView} />)}
                 </AnimatePresence>
 
                 {tasks.length === 0 && (
@@ -261,6 +272,10 @@ export default function Board({ tasks, meId, onMove, onQuickAdd, onDelete, onLoc
 }) {
     const reduce = !!useReducedMotion() || instant;
     const [activeId, setActiveId] = useState<string | null>(null);
+    // Owner 2026-10-21: the task window, opened only by a card's "View / Assign" button.
+    const [viewId, setViewId] = useState<string | null>(null);
+    const viewing = viewId ? tasks.find(t => t.id === viewId) || null : null;   // gone (given away, deleted) → closes
+    const giveMany = give && (give.onGiveMany ?? (async (taskId: string, people: WAssignable[]) => people.length === 1 && give.onGive(taskId, people[0].userId, people[0].name)));
 
     const sensors = useSensors(
         useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),   // a click is not a drag
@@ -306,7 +321,7 @@ export default function Board({ tasks, meId, onMove, onQuickAdd, onDelete, onLoc
                             key={def.id}
                             variants={{ hidden: { opacity: 0, y: 18 }, show: { opacity: 1, y: 0, transition: { duration: 0.7, ease: EASE } } }}
                         >
-                            <Column def={def} tasks={byStatus[def.id]} meId={meId} onMove={onMove} onQuickAdd={onQuickAdd} onDelete={onDelete} onLock={onLock} reduce={reduce} dragging={!!active} give={give} pending={pending} />
+                            <Column def={def} tasks={byStatus[def.id]} meId={meId} onMove={onMove} onQuickAdd={onQuickAdd} onDelete={onDelete} onLock={onLock} reduce={reduce} dragging={!!active} pending={pending} onView={setViewId} />
                         </motion.div>
                     ))}
                 </motion.div>
@@ -315,6 +330,14 @@ export default function Board({ tasks, meId, onMove, onQuickAdd, onDelete, onLoc
             <DragOverlay dropAnimation={{ duration: 240, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' }}>
                 {active ? <div className="rotate-[1.5deg] scale-[1.03]"><CardBody task={active} meId={meId} floating /></div> : null}
             </DragOverlay>
+
+            <TaskView
+                task={viewing}
+                meId={meId}
+                onClose={() => setViewId(null)}
+                onMove={onMove}
+                actions={give ? { people: give.people, onGive: giveMany, onAddNote: give.onAddNote } : undefined}
+            />
         </DndContext>
     );
 }

@@ -189,6 +189,27 @@ Live model: **not yet measured**.
 **10. Laws knowingly violated, and why:** **L2**: scripted model only; list splitting and remind-vs-new-task must be
 checked on the live model with real HR messages.
 
+### Changes 2026-10-20 (c): lock / unlock tasks from WhatsApp
+
+**1. Workflow or agent?** `[BAA p.115]` Still a **workflow**. One new intent, `lock_task` (lock / unlock / list).
+
+**2. Context** `[BAA p.112]` Each of the person's own tasks now carries `locked` / `teamFixed` (from its template, the same
+rule as the Tasks tab). No new data is sent to the model.
+
+**3. Cost of a false positive** `[BAA p.112]` **low to medium** (a task repeats daily, or stops). Always previewed, done only
+after a yes; own tasks only; team fixed tasks refused; already locked / not locked said so. The server re-checks
+(`WorkspaceService.setLocked`, holder only).
+
+**4. Tools** `[BAA pp.93–94, 107]` N/A, no tool added. New `ExecIO.setLocked` calls the existing checked function.
+
+**5–7.** New intent spec only; no memory; single workflow (also works inside a `batch` preview).
+
+**8. Evaluation** `[BAA pp.118–119]` Offline: `task-manager/tests/test_brain_lock.ts` (7 checks). Live model: **not yet measured**.
+
+**9. Trace** `[BAA pp.119–120]` Existing audit rows `task_locked` / `task_unlocked`.
+
+**10. Laws knowingly violated, and why:** **L2**: scripted model only.
+
 ## Agent Spec — Task Brain Prompt Auto-Tuner
 
 **1. Workflow or agent?** **workflow** — load new labelled cases → draft tunable sections once → validate in code →
@@ -224,3 +245,52 @@ rejection reason, activation actor and alert audits are persisted. Offline fake-
 **10. Laws knowingly violated, and why:** L6's independent-family rubric grader is not used; the safety gate is the
 hand-written answer key plus deterministic scorer and required human activation. No paid auto-tune run has been made,
 so real cost and improvement quality remain unmeasured until the owner explicitly approves provider use.
+
+### Changes 2026-10-20: small edits and its own nightly slot
+
+Every draft since 16 Oct was rejected: the draft step ran inside the 60-second housekeeping job, so the model (asked to
+rewrite every step and example) was always cut off, and the one that finished went over the size limit. Now:
+
+- **Small edits** `[BAA pp.105, 114]`: the model returns at most 4 line edits (`replace` / `insert_after` / `delete`);
+  code applies them to a copy (`applyPromptEdits`, bounded: existing line numbers, one line of at most 600 characters).
+  The same `validatePromptSections` size and shape checks then run. Rejections leave the current text untouched.
+- **Own slot** `[BAA p.115]`: writing a version runs in `/api/cron/bot-autotune` (once a night, 02:15 India time, 5-minute
+  limit, model timeout 4 minutes, `CRON_SECRET`). The 15-minute housekeeping only continues testing (`draft: false`).
+- Unchanged: the cost cap, the eval gate before any version is used, owner approval, rollback.
+- **Evaluation**: `task-manager/tests/test_autotune_edits.ts` (13 checks); `test_phase5_learning_loop.ts` passes.
+
+### Changes 2026-10-21: suggest the task when unsure; a clear answer saves it with undo
+
+Sanil wrote "Task. / Add Sailee rest FNF": the model read "Sailee" as the person, found no one, and the bot kept asking.
+
+- **When** `[BAA p.112]`: only when the bot did not understand (`unknown_intent`, `low_confidence`, `not_grounded`) or a name
+  matched nobody (`person_not_found`), the message looks like adding a task ("add", "task", …), and the person did not say
+  who it is for ("assign", "give", "ko de"). Never when the model has a specific question of its own.
+- **What**: code takes the task from the person's own words (command words removed, one line, never a question) and asks
+  once: "Did you want to add this task to your list? Reply yes, or tell me who it's for." (`CLARIFY suggest_add`).
+- **Clear answer → saved without a second yes** (owner decision): "yes" / "add task" / "for me" → their own list;
+  "assign it to Neeti" → Neeti, only when every task is the suggested one and every person resolved and allowed.
+  Only while "One front door" is ON (it provides undo: "Reply undo within 10 minutes"); otherwise the normal preview.
+  Undo deletes the task; the holder gets the existing "deleted your task" bell (WhatsApp would need a new template).
+- **Cost of a false positive**: low (one task, undoable for 10 minutes, permission re-checked by `WorkspaceService.assign`).
+- **Evaluation**: `task-manager/tests/test_brain_suggest.ts` (Sanil's exact messages, 14 checks); all brain tests pass.
+  **L2** knowingly open: scripted model only.
+
+
+### Changes 2026-10-21 (b): a note when giving or assigning, and the task window on the website
+
+Neeti wanted to say why when she gives a task ("share the final headcount by Friday").
+
+- **WhatsApp** `[BAA p.112]`: "give task 2 to Srushti, note: ..." puts the note on the hand-over (`hand_over_task.note`);
+  the yes/no preview and the "Done" reply both show it. "add note" with no text → `CLARIFY note_missing`
+  ("What note should I add for Srushti?"), kept as an unfinished request so the next message fills it.
+- **Server** `[BAA p.105]`: `assign` and `handOver` take an optional `note` (300 characters at most, code-checked). It is
+  saved as a "Remark:" line, and the WhatsApp alert and the bell show it on the task line, for example
+  "Navratri budget and count update (Note: ...)". No new template (owner chose option A).
+- **Website**: each card has a "View / Assign" button (the only way to open the window; the card still drags). The window
+  shows every note, the holder, who gave it, dates, the two status moves for its column, "Add note", and "Give to"
+  (several people; one = hand over, several = each gets a copy, then the task moves to the first person).
+  The server re-checks every action; the window only offers what the board already allows.
+- **Evaluation**: `test_brain_notes.ts` sections 8 and 9; `test_handover_phase1.ts` checks the moved "Give to" rule.
+  Related brain tests pass. **L2** knowingly open: scripted model only; the window is type checked and linted, not
+  covered by an automated browser test.

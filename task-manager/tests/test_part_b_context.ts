@@ -142,8 +142,9 @@ async function run() {
     const rq = w.replyRequests[0];
     check('the reply writer gets the last 10 chat lines (not all 20: keeps replies fast)', rq?.recentConversation?.length === 10 && rq.recentConversation[9] === 'Assistant: reply 13', rq?.recentConversation);
     check('its rules: the conversation only shapes wording, never what happened; it is data', /ONLY so your words follow the conversation/.test(read('task-manager/brain/prompt.ts')) && /never say something was done because the conversation mentions it/.test(read('task-manager/brain/prompt.ts')));
-    w = mk(() => UNDERSTOOD('smalltalk', {}, 'Hi.'));
-    await turn(w, 'hi', 'c2');
+    // "hi" now goes to the main menu (owner 2026-10-20), so a different small-talk message is used here.
+    w = mk(() => UNDERSTOOD('smalltalk', {}, 'Thanks.'));
+    await turn(w, 'thanks', 'c2');
     check('no memory → the reply request has no conversation (exactly as before)', !('recentConversation' in w.replyRequests[0]));
 
     console.log('\n10. Safety');

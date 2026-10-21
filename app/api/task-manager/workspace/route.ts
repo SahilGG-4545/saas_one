@@ -10,7 +10,7 @@ export const dynamic = 'force-dynamic';
  *   GET  /api/task-manager/workspace?date=YYYY-MM-DD[&department=Procurement]
  *   GET  /api/task-manager/workspace?scope=console   (superusers: my tasks + tasks I gave, all departments)
  *   GET  /api/task-manager/workspace?scope=assigned&from=&to=   ("Assigned by me")
- *   POST /api/task-manager/workspace   { action: 'assign' | 'set_status' | 'hand_over' | 'delete_task' | 'set_locked' | 'edit_task' | 'flag_dependency' | 'remind_tasks', ... }
+ *   POST /api/task-manager/workspace   { action: 'assign' | 'set_status' | 'hand_over' | 'delete_task' | 'set_locked' | 'edit_task' | 'flag_dependency' | 'remind_tasks' | 'add_note', ... }
  *
  * WHO is acting always comes from the signed-in session. The request body can never name the actor,
  * so nobody can act as someone else (unlike the older /tasks route that trusts an actorId).
@@ -78,12 +78,13 @@ export async function POST(request: NextRequest) {
                 title: body.title,
                 description: body.description,
                 date: body.date,
+                note: body.note,
             });
             return NextResponse.json({ success: true, task });
         }
 
         if (body.action === 'hand_over') {
-            const result = await WorkspaceService.handOver(userId, { taskId: body.taskId, targetUserId: body.targetUserId });
+            const result = await WorkspaceService.handOver(userId, { taskId: body.taskId, targetUserId: body.targetUserId, note: body.note });
             return NextResponse.json({ success: true, task: result.task, toName: result.toName });
         }
 
@@ -105,6 +106,11 @@ export async function POST(request: NextRequest) {
         if (body.action === 'flag_dependency') {
             const result = await WorkspaceService.flagDependency(userId, { taskId: body.taskId, targetUserId: body.targetUserId });
             return NextResponse.json({ success: true, toName: result.toName });
+        }
+
+        if (body.action === 'add_note') {
+            const result = await WorkspaceService.addNote(userId, { taskId: body.taskId, note: body.note });
+            return NextResponse.json({ success: true, id: result.id });
         }
 
         if (body.action === 'remind_tasks') {

@@ -5,7 +5,7 @@ import type { ExecutionResult } from './domain';
 import { ExecIO, executeAction, needsExecution } from './execute';
 import { BrainDeps, BrainResult, composeBrainReply, runBrain } from './index';
 import { shadowDetails } from './shadow';
-import { addDays, clip } from './text';
+import { addDays, clip, isGrounded } from './text';
 import { FIND_MAX_ROWS, type FoundTask } from './findTasks';
 import { DEFAULT_CONFIRM_POLICY, DRAFT_TTL_MIN, type Action, type BrainContext, type ClarifyReason, type PendingState } from './types';
 import { AI_DOWN_HELP, ExactPlan, LastChange, UNDO_HINT, UndoIO, changeFromAction, normalizeChange, parseExactCommand, planExact, runUndo } from './frontDoor';
@@ -72,8 +72,43 @@ function liveDraft(p: Record<string, unknown>): boolean {
  */
 const DRAFT_REASONS: ReadonlySet<ClarifyReason> = new Set<ClarifyReason>([
     'ai_flagged_ambiguity', 'low_confidence', 'add_or_assign', 'no_recipient', 'person_not_found', 'no_task_content', 'unknown_intent',
+    'note_missing',   // owner 2026-10-21: "add note" without the text → the reply is the note
 ]);
 const MAX_DRAFT_CHARS = 1500;
+
+/**
+ * Owner 2026-10-21 (Sanil: "Add Sailee rest FNF" → "couldn't find anyone named Sailee"): when the bot is unsure but the
+ * message looks like adding a task, it SUGGESTS the task in the person's own words and asks once. A clear answer then saves
+ * it straight away (undo for 10 minutes): "yes" / "add task" → their own list; "assign it to Neeti" → Neeti.
+ */
+// Only when the bot did not understand, or a name matched nobody. Never when the AI has a specific question of its own
+// ("both Vidya and Dipti, or one?"), and never when they clearly said who it is for ("assign … to …", "give it to …").
+const SUGGEST_REASONS: ReadonlySet<ClarifyReason> = new Set<ClarifyReason>(['person_not_found', 'unknown_intent', 'low_confidence', 'not_grounded']);
+const ASSIGN_WORDS = /\b(?:assign|assigned|give|hand|de do|dedo|ko do|ko de)\b/i;
+const ADD_WORDS = /\b(?:add|task|tasks|todo|to-do|remind me|kaam|jod|daal|likh)\b/i;
+const COMMAND_WORDS = /^(?:(?:please|pls|plz|kindly)\s+)?(?:(?:i\s+)?(?:need|want|have)\s+to\s+)?(?:add|create|make|put|new)?\s*(?:a\s+|an\s+|new\s+|one\s+)?(?:tasks?|todo|to-do)?\s*(?:for\s+me|for\s+myself)?\s*[:.\-–]?\s*/i;
+const QUESTION_START = /^(?:what|which|how|why|when|who|whose|where|is|are|do|does|can|show|list|tell|kya|kab|kaun|kitne|kaise)\b/i;
+export const SUGGEST_QUESTION = "Did you want to add this task to your list? Reply yes, or tell me who it's for.";
+
+/** The task in the person's own words: their lines without "add / task / need to add …". Only ONE clear line, never a question. */
+export function suggestedTitle(text: string): string | null {
+    const lines = text.split(/\n+/)
+        .map(l => {
+            // "Task. Add Sailee rest FNF" (lines can arrive joined): drop command words until none are left at the start.
+            let out = l.trim();
+            for (let i = 0; i < 4; i++) { const next = out.replace(COMMAND_WORDS, '').replace(/^[\s:.\-–,]+/, '').trim(); if (next === out) break; out = next; }
+            return out.replace(/[\s:.\-–,!]+$/g, '').trim();
+        })
+        .filter(l => /[a-z]/i.test(l) && !/^(?:tasks?|add|please|pls|need|to|ok|okay|hi|hello)$/i.test(l));
+    if (lines.length !== 1) return null;
+    const title = lines[0];
+    if (title.length > 120 || /\?/.test(title) || QUESTION_START.test(title)) return null;
+    return title;
+}
+
+/** A plain "yes, add it to my list" answer to a suggestion. */
+const YES_TO_SUGGESTION = /^(?:yes|y|yeah|yep|haan|ha|han|ok|okay|sure|done|add|add it|add this|add task|add tasks|add the task|need to add (?:a |the )?task|for me|mine|my list|mera|mere liye|haan add karo|ha add karo|add karo|kar do|yes add|yes add it|ok add|go ahead|theek hai|thik hai)[\s!.👍]*$/i;
+export const isYesToSuggestion = (text: string): boolean => YES_TO_SUGGESTION.test(text.trim());
 
 /** The person's words so far: the earlier unfinished request (if any) plus this message. */
 export function draftRequest(previous: PendingState | null, text: string): string {
@@ -483,7 +518,7 @@ const GENERIC_LOST = 'Sorry, I lost track of what we were doing. What would you 
 async function handle(t: Turn): Promise<void> {
     const { io, employee, phone, ctx } = t;
     const interp = t.result.interpretation!;
-    const decision = t.result.decision!;
+    let decision = t.result.decision!;
 
     const say = async (result: BrainResult, exec: ExecutionResult | null, next: LiveState | 'clear', extra: Record<string, unknown> = {}) => {
         const r0 = Date.now();
@@ -517,6 +552,37 @@ async function handle(t: Turn): Promise<void> {
         const { actMs: _actMs, ...rest } = extra; void _actMs;
         await io.audit({ ...shadowDetails({ phone, messageId: t.messageId, messageChars: t.text.length, result: { ...result, reply: (reply && finalReplyText) ? { ...reply, text: finalReplyText } : reply }, ms: Date.now() - t.started }), steps, live: true, executed: exec?.summary ?? null, ...(t.opts?.via ? { via: t.opts.via } : {}), ...rest }, employee);
     };
+
+    // ── Owner 2026-10-21: the answer to a suggested task ("Did you want to add this task?") ────────────────
+    const suggested = t.depth === 0 && t.state.pending?.kind === 'draft' ? t.state.pending.suggested : undefined;
+    const saveNow = async (action: Action) => {
+        const change = t.frontDoor ? changeFromAction(action, ctx) : null;     // read BEFORE it changes (for undo)
+        const a0 = Date.now();
+        const exec = await executeAction(action, ctx, io.exec, { relay: false, titles: {} });
+        return say({ ...t.result, decision: { outcome: 'ACT', action } }, exec, { ...EMPTY, recent: t.state.recent, ...(t.frontDoor ? carry(t.state, change) : {}) }, { suggestedSaved: true, actMs: Date.now() - a0 });
+    };
+    if (suggested && t.frontDoor && isYesToSuggestion(t.text)) {
+        // "yes" / "add task" / "for me" → their own list, straight away (undo for 10 minutes).
+        return saveNow({ type: 'create_tasks', assigneeId: ctx.sender.id, tasks: [{ title: suggested, details: null }], date: ctx.today });
+    }
+    if (suggested && t.frontDoor && decision.outcome === 'CONFIRM') {
+        // "assign it to Neeti" → the brain read the whole request; when it is clear (every task is the suggested one, every
+        // person resolved and allowed), it is saved straight away instead of asking again.
+        const a = decision.action;
+        const creates = a.type === 'create_tasks' ? [a] : a.type === 'batch' && !a.unclear.length && a.actions.every(x => x.type === 'create_tasks') ? a.actions as Array<Extract<Action, { type: 'create_tasks' }>> : [];
+        const fromSuggestion = creates.length > 0 && creates.every(c => c.tasks.length > 0 && c.tasks.every(x => isGrounded(x.title, suggested)));
+        if (fromSuggestion) return saveNow(a);
+    }
+    if (t.depth === 0 && decision.outcome === 'CLARIFY' && SUGGEST_REASONS.has(decision.reason)) {
+        const words = draftRequest(t.state.pending, t.text);
+        const title = suggested ?? (ADD_WORDS.test(words) && !ASSIGN_WORDS.test(words) ? suggestedTitle(words) : null);
+        if (title) {
+            decision = { outcome: 'CLARIFY', reason: 'suggest_add', options: [], detail: title };
+            const next: LiveState = { ...EMPTY, recent: t.state.recent, ...(t.frontDoor ? carry(t.state, null) : {}),
+                pending: { kind: 'draft', request: `Add task: ${title}`, question: SUGGEST_QUESTION, at: new Date().toISOString(), suggested: title } };
+            return say({ ...t.result, decision }, null, next);
+        }
+    }
 
     // ── an answer to a question the bot asked ───────────────────────────────
     if (decision.outcome === 'ACT' && decision.action.type === 'answer_pending') {
@@ -582,7 +648,9 @@ async function handle(t: Turn): Promise<void> {
     } else if (decision.outcome === 'CLARIFY' && DRAFT_REASONS.has(decision.reason) && t.depth === 0
         && (decision.reason !== 'unknown_intent' || t.state.pending?.kind === 'draft' || t.text.trim().split(/\s+/).length >= 3)) {
         // Owner 2026-10-19: the bot asked a question about this request → keep the request, so the answer can finish it.
-        next.pending = { kind: 'draft', request: draftRequest(t.state.pending, t.text), question: null, at: new Date().toISOString() };
+        next.pending = { kind: 'draft', request: draftRequest(t.state.pending, t.text), question: null, at: new Date().toISOString(),
+            // Owner 2026-10-21: a suggested task stays suggested while the bot asks about its person ("which Neeti?").
+            ...(t.state.pending?.kind === 'draft' && t.state.pending.suggested ? { suggested: t.state.pending.suggested } : {}) };
         next.relay = false; next.titles = {};
     } else if (t.state.pending && ((decision.outcome === 'CLARIFY' && (decision.reason === 'unsure_answer' || decision.reason === 'bad_pick'))
         || (decision.outcome === 'ACT' && decision.action.type === 'chat')
@@ -625,13 +693,14 @@ export async function defaultLiveIO(): Promise<LiveIO> {
     const exec: ExecIO = {
         async setStatus(actorId, taskId, status, opts) { await WorkspaceService.setStatus(actorId, { taskId, status, notifyGiver: opts?.notifyGiver }); },
         async notifyCompleted(_actorId, taskIds) { await WorkspaceService.notifyCompleted(taskIds); },
-        async assign(actorId, i) { await WorkspaceService.assign(actorId, { targetUserId: i.targetUserId, title: i.title, description: i.description, date: i.date, notify: i.notify }); },
+        async assign(actorId, i) { await WorkspaceService.assign(actorId, { targetUserId: i.targetUserId, title: i.title, description: i.description, date: i.date, notify: i.notify, note: i.note }); },
         async alertAssigned(actorId, targetUserId, titles, date) { await WorkspaceService.alertAssigned(actorId, targetUserId, titles, date); },
-        async handOver(actorId, taskId, toId) { const r = await WorkspaceService.handOver(actorId, { taskId, targetUserId: toId }); return { toName: r.toName }; },
+        async handOver(actorId, taskId, toId, note) { const r = await WorkspaceService.handOver(actorId, { taskId, targetUserId: toId, note }); return { toName: r.toName }; },
         async deleteTask(actorId, taskId) { await WorkspaceService.deleteTask(actorId, { taskId, via: 'whatsapp' }); },
         async renameTask(actorId, taskId, title) { await WorkspaceService.renameTask(actorId, { taskId, title, via: 'whatsapp' }); },
         async addNote(actorId, taskId, note) { await WorkspaceService.addNote(actorId, { taskId, note, via: 'whatsapp' }); },
         remindTasks: (actorId, taskIds) => WorkspaceService.remindTasks(actorId, { taskIds, via: 'whatsapp' }),
+        async setLocked(actorId, taskId, locked) { await WorkspaceService.setLocked(actorId, { taskId, locked }); },
         async readPerson(actorId, personId) {
             const [actor, target] = await Promise.all([TaskDatabaseService.getEmployeeById(actorId), TaskDatabaseService.getEmployeeById(personId)]);
             if (!actor || !target) return null;
